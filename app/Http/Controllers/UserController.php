@@ -335,12 +335,25 @@ class UserController extends Controller
 
             \Log::info('✅ Usuario autenticado:', ['user' => $user->email]);
 
-            // Obtener configuración de Microsoft
-            $clientId = config('services.microsoft.client_id');
-            $clientSecret = config('services.microsoft.client_secret');
-            $tenantId = config('services.microsoft.tenant');
+            // Obtener el tenant solicitado (medilaser o jersalud)
+            $tenantType = $request->query('tenant', 'medilaser');
+            
+            // Obtener configuración de Microsoft según el tenant
+            if ($tenantType === 'jersalud') {
+                $clientId = env('MICROSOFT_JERSALUD_CLIENT_ID');
+                $clientSecret = env('MICROSOFT_JERSALUD_CLIENT_SECRET');
+                $tenantId = env('MICROSOFT_JERSALUD_TENANT_ID');
+                $tenantName = 'Jersalud';
+            } else {
+                $clientId = config('services.microsoft.client_id');
+                $clientSecret = config('services.microsoft.client_secret');
+                $tenantId = config('services.microsoft.tenant');
+                $tenantName = 'Medilaser';
+            }
 
             \Log::info('🔧 Configuración Microsoft:', [
+                'tenant_type' => $tenantType,
+                'tenant_name' => $tenantName,
                 'client_id' => $clientId ? 'Configurado' : 'No configurado',
                 'client_secret' => $clientSecret ? 'Configurado' : 'No configurado',
                 'tenant_id' => $tenantId
@@ -459,7 +472,9 @@ class UserController extends Controller
                 'total_tenant_users' => count($tenantUsers),
                 'available_users' => $usuariosDisponibles,
                 'total_available' => count($usuariosDisponibles),
-                'tenant_id' => $tenantId
+                'tenant_id' => $tenantId,
+                'tenant_name' => $tenantName,
+                'tenant_type' => $tenantType
             ]);
 
         } catch (\Exception $e) {
