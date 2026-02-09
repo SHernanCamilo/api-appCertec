@@ -339,15 +339,16 @@ class UserController extends Controller
             $tenantType = $request->query('tenant', 'medilaser');
             
             // Obtener configuración de Microsoft según el tenant
+            // IMPORTANTE: Usamos las mismas credenciales pero diferentes tenant IDs
+            $clientId = config('services.microsoft.client_id');
+            $clientSecret = config('services.microsoft.client_secret');
+            
             if ($tenantType === 'jersalud') {
-                $clientId = env('MICROSOFT_JERSALUD_CLIENT_ID');
-                $clientSecret = env('MICROSOFT_JERSALUD_CLIENT_SECRET');
                 $tenantId = env('MICROSOFT_JERSALUD_TENANT_ID');
                 $tenantName = 'Jersalud';
             } else {
-                $clientId = config('services.microsoft.client_id');
-                $clientSecret = config('services.microsoft.client_secret');
-                $tenantId = config('services.microsoft.tenant');
+                // Para Medilaser usamos el tenant específico, NO 'common'
+                $tenantId = env('MICROSOFT_MEDILASER_TENANT_ID');
                 $tenantName = 'Medilaser';
             }
 
