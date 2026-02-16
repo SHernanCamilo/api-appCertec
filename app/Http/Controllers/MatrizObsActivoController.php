@@ -429,4 +429,84 @@ class MatrizObsActivoController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Actualizar campos editables de un activo
+     */
+    public function update(Request $request, string $id): JsonResponse
+    {
+        try {
+            // Validar datos
+            $validated = $request->validate([
+                'ubicacion' => 'nullable|string|max:255',
+                'detalle' => 'nullable|array',
+                'detalle.tipo_unidad' => 'nullable|string|max:255',
+                'detalle.fecha_compra' => 'nullable|date',
+                'detalle.modalidad' => 'nullable|string|max:255',
+                'detalle.proveedor' => 'nullable|string|max:255'
+            ]);
+
+            // Buscar el activo
+            $activo = MatrizObsActivoC::findOrFail($id);
+
+            // Actualizar campos del activo principal
+            if (isset($validated['ubicacion'])) {
+                $activo->ubicacion = $validated['ubicacion'];
+            }
+
+            $activo->save();
+
+            // Actualizar campos del detalle si existen
+            if (isset($validated['detalle']) && $activo->detalle) {
+                $detalle = $activo->detalle;
+                
+                if (isset($validated['detalle']['tipo_unidad'])) {
+                    $detalle->tipo_unidad = $validated['detalle']['tipo_unidad'];
+                }
+                
+                if (isset($validated['detalle']['fecha_compra'])) {
+                    $detalle->fecha_compra = $validated['detalle']['fecha_compra'];
+                }
+                
+                if (isset($validated['detalle']['modalidad'])) {
+                    $detalle->modalidad = $validated['detalle']['modalidad'];
+                }
+                
+                if (isset($validated['detalle']['proveedor'])) {
+                    $detalle->proveedor = $validated['detalle']['proveedor'];
+                }
+                
+                $detalle->save();
+            }
+
+            // Recargar el activo con sus relaciones
+            $activo->load(['detalle', 'empresa', 'sucursal', 'sede']);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Activo actualizado correctamente',
+                'data' => $activo
+            ], 200);
+
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error de validación',
+                'errors' => $e->errors()
+            ], 422);
+
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Activo no encontrado'
+            ], 404);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al actualizar el activo',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

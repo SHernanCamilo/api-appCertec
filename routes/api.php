@@ -185,6 +185,7 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obs-activos
     // CRUD básico
     Route::get('/', [App\Http\Controllers\MatrizObsActivoController::class, 'index']);
     Route::get('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'show']);
+    Route::put('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'update']);
 });
 
 // Rutas de GLPI API Integration
