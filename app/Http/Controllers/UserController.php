@@ -392,7 +392,7 @@ class UserController extends Controller
 
             // Obtener TODOS los usuarios del tenant usando paginación
             $allTenantUsers = [];
-            $usersUrl = 'https://graph.microsoft.com/v1.0/users?$select=id,displayName,mail,userPrincipalName,jobTitle,department,accountEnabled&$top=999';
+            $usersUrl = 'https://graph.microsoft.com/v1.0/users?$select=id,displayName,mail,userPrincipalName,jobTitle,department,accountEnabled,officeLocation,postalCode,streetAddress,businessPhones&$top=999';
             
             $headers = [
                 'Authorization: Bearer ' . $accessToken,
@@ -456,6 +456,11 @@ class UserController extends Controller
                         'job_title' => $tenantUser['jobTitle'] ?? '',
                         'department' => $tenantUser['department'] ?? '',
                         'account_enabled' => $tenantUser['accountEnabled'] ?? true,
+                        'office_location' => $tenantUser['officeLocation'] ?? '',
+                        'postal_address' => $tenantUser['streetAddress'] ?? $tenantUser['postalCode'] ?? '',
+                        'business_phone' => isset($tenantUser['businessPhones']) && count($tenantUser['businessPhones']) > 0 
+                            ? $tenantUser['businessPhones'][0] 
+                            : '',
                         'exists_in_app' => false
                     ];
                 } else {
@@ -513,7 +518,10 @@ class UserController extends Controller
                 'usuarios.*.name' => 'required|string|max:255',
                 'usuarios.*.email' => 'required|email|unique:users,email',
                 'usuarios.*.job_title' => 'nullable|string|max:255',
-                'usuarios.*.department' => 'nullable|string|max:255'
+                'usuarios.*.department' => 'nullable|string|max:255',
+                'usuarios.*.office_location' => 'nullable|string|max:50',
+                'usuarios.*.postal_address' => 'nullable|string|max:255',
+                'usuarios.*.business_phone' => 'nullable|string|max:20'
             ]);
 
             if ($validator->fails()) {
@@ -538,6 +546,9 @@ class UserController extends Controller
                         'microsoft_id' => $userData['microsoft_id'],
                         'auth_type' => 'microsoft',
                         'cargo' => $userData['job_title'] ?? 'Usuario',
+                        'numero_identificacion' => $userData['office_location'] ?? null,
+                        'direccion' => $userData['postal_address'] ?? null,
+                        'telefono' => $userData['business_phone'] ?? null,
                         'estado' => true,
                         'email_verified_at' => now()
                     ]);
