@@ -163,6 +163,24 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obsolescenc
     // Parámetro de sincronización
     Route::get('/sincronizacion-parametro', [App\Http\Controllers\MatrizObsAgenteController::class, 'getSincronizacionParametro']);
     Route::put('/sincronizacion-parametro', [App\Http\Controllers\MatrizObsAgenteController::class, 'updateSincronizacionParametro']);
+    
+    // Procesadores
+    Route::get('/procesadores', [App\Http\Controllers\MatrizObsolescencia\ProcesadorController::class, 'index']);
+    Route::post('/procesadores', [App\Http\Controllers\MatrizObsolescencia\ProcesadorController::class, 'store']);
+    Route::get('/procesadores/{id}', [App\Http\Controllers\MatrizObsolescencia\ProcesadorController::class, 'show']);
+    Route::put('/procesadores/{id}', [App\Http\Controllers\MatrizObsolescencia\ProcesadorController::class, 'update']);
+    Route::delete('/procesadores/{id}', [App\Http\Controllers\MatrizObsolescencia\ProcesadorController::class, 'destroy']);
+    Route::get('/procesadores-desde-activos', [App\Http\Controllers\MatrizObsolescencia\ProcesadorController::class, 'getProcesadoresDesdeActivos']);
+    Route::post('/procesadores-importar', [App\Http\Controllers\MatrizObsolescencia\ProcesadorController::class, 'importarProcesadoresDesdeActivos']);
+    
+    // Tipos de RAM
+    Route::get('/tipos-ram', [App\Http\Controllers\MatrizObsolescencia\TipoRamController::class, 'index']);
+    Route::post('/tipos-ram', [App\Http\Controllers\MatrizObsolescencia\TipoRamController::class, 'store']);
+    Route::get('/tipos-ram/{id}', [App\Http\Controllers\MatrizObsolescencia\TipoRamController::class, 'show']);
+    Route::put('/tipos-ram/{id}', [App\Http\Controllers\MatrizObsolescencia\TipoRamController::class, 'update']);
+    Route::delete('/tipos-ram/{id}', [App\Http\Controllers\MatrizObsolescencia\TipoRamController::class, 'destroy']);
+    Route::get('/tipos-ram-desde-activos', [App\Http\Controllers\MatrizObsolescencia\TipoRamController::class, 'getTiposRamDesdeActivos']);
+    Route::post('/tipos-ram-importar', [App\Http\Controllers\MatrizObsolescencia\TipoRamController::class, 'importarTiposRamDesdeActivos']);
 });
 
 // Rutas de Matriz de Obsolescencia - Activos
@@ -186,6 +204,21 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obs-activos
     Route::get('/', [App\Http\Controllers\MatrizObsActivoController::class, 'index']);
     Route::get('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'show']);
     Route::put('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'update']);
+});
+
+// Rutas de Plantillas de Documentos
+Route::middleware(['auth:api', 'check.user.active'])->prefix('templates')->group(function () {
+    Route::get('/', [App\Http\Controllers\TemplateController::class, 'index']);
+    Route::get('/category/{category}', [App\Http\Controllers\TemplateController::class, 'byCategory']);
+    Route::get('/{id}', [App\Http\Controllers\TemplateController::class, 'show']);
+    Route::post('/', [App\Http\Controllers\TemplateController::class, 'store']);
+    Route::put('/{id}', [App\Http\Controllers\TemplateController::class, 'update']);
+    Route::delete('/{id}', [App\Http\Controllers\TemplateController::class, 'destroy']);
+});
+
+// Rutas de Variables de Plantillas
+Route::middleware(['auth:api', 'check.user.active'])->prefix('variables')->group(function () {
+    Route::get('/', [App\Http\Controllers\VariableController::class, 'index']);
 });
 
 // Rutas de GLPI API Integration

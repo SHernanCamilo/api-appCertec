@@ -443,7 +443,8 @@ class MatrizObsActivoController extends Controller
                 'detalle.tipo_unidad' => 'nullable|string|max:255',
                 'detalle.fecha_compra' => 'nullable|date',
                 'detalle.modalidad' => 'nullable|string|max:255',
-                'detalle.proveedor' => 'nullable|string|max:255'
+                'detalle.proveedor' => 'nullable|string|max:255',
+                'detalle.max_ram' => 'nullable|numeric|min:0'
             ]);
 
             // Buscar el activo
@@ -474,6 +475,10 @@ class MatrizObsActivoController extends Controller
                 
                 if (isset($validated['detalle']['proveedor'])) {
                     $detalle->proveedor = $validated['detalle']['proveedor'];
+                }
+                
+                if (isset($validated['detalle']['max_ram'])) {
+                    $detalle->max_ram = $validated['detalle']['max_ram'];
                 }
                 
                 $detalle->save();

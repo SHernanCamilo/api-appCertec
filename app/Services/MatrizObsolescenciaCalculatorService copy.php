@@ -39,17 +39,9 @@ class MatrizObsolescenciaCalculatorService
             $activo->detalles->refresh();
             
             $this->calcularValoracionEdad($activo->detalles);
-            
-            // Refrescar después de calcular valoración de edad (crítico para validación de obsolescencia)
-            $activo->detalles->refresh();
-            
-            $this->calcularMaxRam($activo->detalles);
             $this->calcularValoracionRam($activo->detalles);
             $this->calcularValoracionProcesador($activo->detalles);
             $this->calcularValoracionDisco($activo->detalles);
-            
-            // Refrescar antes de calcular puntaje general
-            $activo->refresh();
             $this->calcularPuntajeGeneral($activo);
             
             Log::info("Valores calculados para activo", [
@@ -206,10 +198,9 @@ class MatrizObsolescenciaCalculatorService
     }
     
     /**
-     * Calcular valoración de edad basada en rangos definidos
-     * - Edad < 5 años: valor = 100
-     * - Edad entre 5 y 8 años: valor = 50
-     * - Edad > 8 años: valor = 0 (obsoleto)
+     * Calcular valoración de edad basada en rangos de parámetros
+     * Busca en matzobs_parametros con id_grupo = 1 (RANGOS EDAD)
+     * Compara la EDAD (en años) con los rangos
      */
     protected function calcularValoracionEdad($detalle)
     {
@@ -225,26 +216,37 @@ class MatrizObsolescenciaCalculatorService
             return;
         }
         
-        $valoracion = 0;
+        // Obtener rangos de edad desde parámetros (id_grupo = 1)
+        $rangos = MatrizObsParametro::where('id_grupo', 1)
+            ->orderBy('rango_i', 'asc')
+            ->get();
         
-        // Aplicar lógica de valoración por edad
-        if ($detalle->edad < 5) {
-            $valoracion = 100;
-            Log::debug("Valoración edad: Equipo nuevo (< 5 años)", [
-                'activo_id' => $detalle->activo_c_id,
-                'edad' => $detalle->edad,
-                'valoracion' => $valoracion
-            ]);
-        } elseif ($detalle->edad >= 5 && $detalle->edad <= 8) {
-            $valoracion = 50;
-            Log::debug("Valoración edad: Equipo medio (5-8 años)", [
-                'activo_id' => $detalle->activo_c_id,
-                'edad' => $detalle->edad,
-                'valoracion' => $valoracion
-            ]);
-        } else {
-            $valoracion = 0;
-            Log::debug("Valoración edad: Equipo obsoleto (> 8 años)", [
+        $valoracion = null;
+        
+        // Buscar en qué rango cae la edad
+        foreach ($rangos as $rango) {
+            if ($detalle->edad >= $rango->rango_i && $detalle->edad <= $rango->rango_f) {
+                $valoracion = $rango->valor;
+                
+                Log::debug("Valoración edad encontrada en rango", [
+                    'activo_id' => $detalle->activo_c_id,
+                    'edad' => $detalle->edad,
+                    'rango_nombre' => $rango->nombre,
+                    'rango_i' => $rango->rango_i,
+                    'rango_f' => $rango->rango_f,
+                    'valoracion' => $valoracion
+                ]);
+                
+                break;
+            }
+        }
+        
+        // Si no se encuentra en ningún rango, usar el último rango (peor valoración)
+        if ($valoracion === null && $rangos->isNotEmpty()) {
+            $ultimoRango = $rangos->last();
+            $valoracion = $ultimoRango->valor;
+            
+            Log::debug("Valoración edad usando último rango (fuera de rangos)", [
                 'activo_id' => $detalle->activo_c_id,
                 'edad' => $detalle->edad,
                 'valoracion' => $valoracion
@@ -252,44 +254,6 @@ class MatrizObsolescenciaCalculatorService
         }
         
         $detalle->update(['valoracion_edad' => $valoracion]);
-    }
-    
-    /**
-     * Calcular MaxRAM del equipo
-     * Si no está definido manualmente, se calcula como RAM actual × 2
-     */
-    protected function calcularMaxRam($detalle)
-    {
-        // Si max_ram ya tiene un valor (fue ingresado manualmente), no lo sobrescribimos
-        if ($detalle->max_ram !== null && $detalle->max_ram > 0) {
-            Log::debug("MaxRAM ya definido manualmente", [
-                'activo_id' => $detalle->activo_c_id,
-                'max_ram' => $detalle->max_ram
-            ]);
-            return;
-        }
-        
-        // Si no hay RAM actual, establecer max_ram como NULL
-        if (!$detalle->tamano_ram || $detalle->tamano_ram <= 0) {
-            $detalle->update(['max_ram' => null]);
-            
-            Log::debug("MaxRAM establecido como NULL - sin RAM actual", [
-                'activo_id' => $detalle->activo_c_id,
-                'tamano_ram' => $detalle->tamano_ram
-            ]);
-            return;
-        }
-        
-        // Calcular MaxRAM como el doble de la RAM actual
-        $maxRam = $detalle->tamano_ram * 2;
-        
-        $detalle->update(['max_ram' => $maxRam]);
-        
-        Log::debug("MaxRAM calculado automáticamente", [
-            'activo_id' => $detalle->activo_c_id,
-            'tamano_ram' => $detalle->tamano_ram,
-            'max_ram' => $maxRam
-        ]);
     }
     
     /**
@@ -332,76 +296,74 @@ class MatrizObsolescenciaCalculatorService
     }
     
     /**
-     * Calcular valoración del procesador basado en año de lanzamiento
-     * - Si año < (año actual - 7): valoración = 0
-     * - Si año >= (año actual - 7): valoración = 100
+     * Calcular valoración del procesador
      */
     protected function calcularValoracionProcesador($detalle)
     {
         if (!$detalle->procesador) {
-            $detalle->update(['valoracion_procesador' => null]);
-            
-            Log::debug("Valoración procesador establecida como NULL - sin procesador", [
-                'activo_id' => $detalle->activo_c_id
-            ]);
             return;
         }
         
-        try {
-            // Buscar el procesador en la tabla matzobs_procesadores
-            $procesadorDB = \DB::table('matzobs_procesadores')
-                ->where('nombre', $detalle->procesador)
-                ->first();
-            
-            if (!$procesadorDB || !$procesadorDB->anio_lanzamiento) {
-                // Si no se encuentra o no tiene año, establecer valoración como NULL
-                $detalle->update(['valoracion_procesador' => null]);
-                
-                Log::debug("Valoración procesador establecida como NULL - no encontrado en BD o sin año", [
-                    'activo_id' => $detalle->activo_c_id,
-                    'procesador' => $detalle->procesador,
-                    'encontrado' => $procesadorDB ? 'sí' : 'no',
-                    'tiene_anio' => $procesadorDB ? ($procesadorDB->anio_lanzamiento ? 'sí' : 'no') : 'N/A'
-                ]);
-                return;
-            }
-            
-            // Calcular el año mínimo aceptable (año actual - 7)
-            $anioActual = now()->year;
-            $anioMinimo = $anioActual - 7;
-            $anioLanzamiento = (int) $procesadorDB->anio_lanzamiento;
-            
-            // Determinar valoración según el año
-            if ($anioLanzamiento < $anioMinimo) {
-                $valoracion = 0; // Procesador obsoleto
-                $estado = 'obsoleto';
-            } else {
-                $valoracion = 100; // Procesador actual
-                $estado = 'actual';
-            }
-            
-            $detalle->update(['valoracion_procesador' => $valoracion]);
-            
-            Log::debug("Valoración procesador calculada por año", [
-                'activo_id' => $detalle->activo_c_id,
-                'procesador' => $detalle->procesador,
-                'anio_lanzamiento' => $anioLanzamiento,
-                'anio_actual' => $anioActual,
-                'anio_minimo' => $anioMinimo,
-                'estado' => $estado,
-                'valoracion' => $valoracion
-            ]);
-            
-        } catch (\Exception $e) {
-            Log::error("Error calculando valoración de procesador", [
-                'activo_id' => $detalle->activo_c_id,
-                'procesador' => $detalle->procesador,
-                'error' => $e->getMessage()
-            ]);
-            
-            // En caso de error, establecer como NULL
-            $detalle->update(['valoracion_procesador' => null]);
+        $valoracion = 50; // Valor base
+        
+        // Analizar el procesador por generación y características
+        $procesador = strtolower($detalle->procesador);
+        
+        // Intel Core i7/i9 recientes
+        if (preg_match('/i[79]-1[0-9]/', $procesador)) {
+            $valoracion = 95;
         }
+        // Intel Core i5 recientes
+        elseif (preg_match('/i5-1[0-9]/', $procesador)) {
+            $valoracion = 85;
+        }
+        // Intel Core i3 recientes
+        elseif (preg_match('/i3-1[0-9]/', $procesador)) {
+            $valoracion = 70;
+        }
+        // AMD Ryzen 7/9
+        elseif (preg_match('/ryzen [79]/', $procesador)) {
+            $valoracion = 90;
+        }
+        // AMD Ryzen 5
+        elseif (preg_match('/ryzen 5/', $procesador)) {
+            $valoracion = 80;
+        }
+        // AMD Ryzen 3
+        elseif (preg_match('/ryzen 3/', $procesador)) {
+            $valoracion = 65;
+        }
+        // Procesadores más antiguos
+        elseif (preg_match('/i[579]-[6-9]/', $procesador)) {
+            $valoracion = 60;
+        }
+        elseif (preg_match('/i[579]-[3-5]/', $procesador)) {
+            $valoracion = 40;
+        }
+        // Procesadores muy antiguos
+        elseif (preg_match('/pentium|celeron|atom/', $procesador)) {
+            $valoracion = 25;
+        }
+        
+        // Ajustar por número de núcleos
+        if ($detalle->numero_procesador) {
+            if ($detalle->numero_procesador >= 8) {
+                $valoracion = min(100, $valoracion + 10);
+            } elseif ($detalle->numero_procesador >= 4) {
+                $valoracion = min(100, $valoracion + 5);
+            } elseif ($detalle->numero_procesador <= 2) {
+                $valoracion = max(20, $valoracion - 10);
+            }
+        }
+        
+        $detalle->update(['valoracion_procesador' => $valoracion]);
+        
+        Log::debug("Valoración procesador calculada", [
+            'activo_id' => $detalle->activo_c_id,
+            'procesador' => $detalle->procesador,
+            'numero_procesador' => $detalle->numero_procesador,
+            'valoracion' => $valoracion
+        ]);
     }
     
     /**
@@ -451,27 +413,12 @@ class MatrizObsolescenciaCalculatorService
     
     /**
      * Calcular puntaje general del activo
-     * Si la edad > 8 años (valoracion_edad = 0), el equipo es obsoleto y puntaje = 0
      */
     protected function calcularPuntajeGeneral($activo)
     {
         $detalle = $activo->detalles;
         
         if (!$detalle) {
-            return;
-        }
-        
-        // Si la valoración de edad es 0 (edad > 8 años), el equipo es obsoleto
-        // Usar comparación flexible para manejar tanto int como float
-        if ($detalle->valoracion_edad !== null && (int)$detalle->valoracion_edad === 0) {
-            $activo->update(['puntaje' => 0]);
-            
-            Log::debug("Puntaje general = 0 - Equipo obsoleto por edad", [
-                'activo_id' => $activo->id,
-                'edad' => $detalle->edad,
-                'valoracion_edad' => $detalle->valoracion_edad,
-                'puntaje' => 0
-            ]);
             return;
         }
         

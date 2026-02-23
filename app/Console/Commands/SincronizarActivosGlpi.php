@@ -20,7 +20,7 @@ class SincronizarActivosGlpi extends Command
     protected $signature = 'glpi:sync-activos 
                            {--batch=10 : Número de activos a procesar por lote}
                            {--offset=0 : Desde qué registro comenzar}
-                           {--limit=1500 : Límite total de registros a procesar}
+                           {--limit=2500 : Límite total de registros a procesar}
                            {--force : Forzar actualización de registros existentes}
                            {--check-deleted : Verificar activos eliminados en GLPI}
                            {--sync-days=7 : Días para considerar si un activo necesita sincronización}
@@ -51,9 +51,9 @@ class SincronizarActivosGlpi extends Command
     protected $lastApiCallTime = null;
     
     // Configuración de throttling
-    protected $maxApiCallsPerSecond = 5;
-    protected $pauseBetweenBatches = 3; // segundos
-    protected $pauseBetweenApiCalls = 200000; // microsegundos (0.2 segundos)
+    protected $maxApiCallsPerSecond = 15;
+    protected $pauseBetweenBatches = 1; // segundos
+    protected $pauseBetweenApiCalls = 100000; // microsegundos (0.2 segundos)
     protected $maxMemoryUsagePercent = 80; // Porcentaje máximo de memoria antes de limpiar caches
 
     public function __construct(GLPIService $glpiService, GLPIComputerService $glpiComputerService, MatrizObsolescenciaCalculatorService $calculatorService)
@@ -193,13 +193,20 @@ class SincronizarActivosGlpi extends Command
                     $totalStats[$key] += $value;
                 }
 
-                // Actualizar progreso
+                // Actualizar progreso con el número real de procesados
                 $processedCount += $result['processed'];
                 $this->updateProgress($processedCount, $limit, $totalStats);
 
-                if ($result['processed'] < $currentBatchSize) {
-                    $this->warn("⚠️  Se obtuvieron menos registros de los esperados. Finalizando.");
+                // Si no se procesó ningún registro, probablemente llegamos al final
+                if ($result['processed'] === 0) {
+                    $this->info("✅ No hay más registros para procesar.");
                     break;
+                }
+                
+                // Si se procesaron menos registros de los esperados, podría ser el último lote
+                if ($result['processed'] < $currentBatchSize) {
+                    $this->info("ℹ️  Último lote procesado (se obtuvieron {$result['processed']} de {$currentBatchSize} esperados).");
+                    // No hacer break aquí, continuar hasta alcanzar el límite
                 }
 
             } catch (\Exception $e) {
@@ -221,7 +228,7 @@ class SincronizarActivosGlpi extends Command
                 }
             }
 
-            $processedCount += $currentBatchSize;
+            // Actualizar offset para el siguiente lote
             $currentOffset += $currentBatchSize;
 
             // Pausa entre lotes para no sobrecargar la API
@@ -1033,7 +1040,47 @@ class SincronizarActivosGlpi extends Command
 
     private function extractType($computer)
     {
-        return $computer['computertypes_id'] ?? $computer['computertypes_id_name'] ?? null;
+        $rawType = $computer['computertypes_id'] ?? $computer['computertypes_id_name'] ?? null;
+        return $this->mapComputerType($rawType);
+    }
+
+    /**
+     * Mapea los tipos de equipos de GLPI a los nombres personalizados
+     * 
+     * @param string|null $glpiType Tipo de equipo desde GLPI
+     * @return string|null Tipo mapeado
+     */
+    private function mapComputerType($glpiType)
+    {
+        if (empty($glpiType)) {
+            return null;
+        }
+
+        // Mapeo de tipos de GLPI a nombres personalizados
+        $typeMapping = [
+            'All in One' => 'All in One',
+            'Desktop' => 'Escritorio',
+            'Notebook' => 'Laptop',
+            'Mini Pc' => 'Tiny',
+            'Tower' => 'Workstation'
+        ];
+
+        // Buscar coincidencia exacta (case-insensitive)
+        foreach ($typeMapping as $glpiName => $customName) {
+            if (strcasecmp($glpiType, $glpiName) === 0) {
+                Log::channel('glpi_sync')->debug("Tipo de equipo mapeado", [
+                    'glpi_type' => $glpiType,
+                    'mapped_type' => $customName
+                ]);
+                return $customName;
+            }
+        }
+
+        // Si no hay coincidencia, retornar el tipo original
+        Log::channel('glpi_sync')->debug("Tipo de equipo sin mapeo, usando original", [
+            'glpi_type' => $glpiType
+        ]);
+        return $glpiType;
     }
 
     private function extractModel($computer)
@@ -1343,19 +1390,43 @@ class SincronizarActivosGlpi extends Command
                 $diskData = json_decode($diskInfoResponse->getContent(), true);
                 
                 if ($diskData['success'] && !empty($diskData['data']['total_capacity_mb'])) {
-                    // Retornar capacidad total en MB
-                    return (int) $diskData['data']['total_capacity_mb'];
+                    // El valor viene en Mebibytes (MiB)
+                    // Convertir de MiB a GB (decimal): MiB / 1000
+                    $capacidadMiB = (int) $diskData['data']['total_capacity_mb'];
+                    $capacidadGB = round($capacidadMiB / 1000, 2);
+                    
+                    Log::channel('glpi_sync')->debug("Conversión disco MiB a GB", [
+                        'computer_id' => $computer['id'],
+                        'capacidad_mib' => $capacidadMiB,
+                        'capacidad_gb' => $capacidadGB
+                    ]);
+                    
+                    return $capacidadGB;
                 }
             }
             
             // Método 2: Fallback - usar el método original si el nuevo falla
             if (isset($computer['devices']['Item_DeviceHardDrive'])) {
-                $totalDisk = 0;
+                $totalDiskMiB = 0;
                 foreach ($computer['devices']['Item_DeviceHardDrive'] as $disk) {
                     $capacity = $disk['capacity'] ?? $disk['capacity_default'] ?? 0;
-                    $totalDisk += (int) $capacity;
+                    $totalDiskMiB += (int) $capacity;
                 }
-                return $totalDisk > 0 ? $totalDisk : null;
+                
+                if ($totalDiskMiB > 0) {
+                    // Convertir de MiB a GB (decimal)
+                    $totalDiskGB = round($totalDiskMiB / 1000, 2);
+                    
+                    Log::channel('glpi_sync')->debug("Conversión disco MiB a GB (fallback)", [
+                        'computer_id' => $computer['id'],
+                        'capacidad_mib' => $totalDiskMiB,
+                        'capacidad_gb' => $totalDiskGB
+                    ]);
+                    
+                    return $totalDiskGB;
+                }
+                
+                return null;
             }
             
             return null;
@@ -1368,12 +1439,19 @@ class SincronizarActivosGlpi extends Command
             
             // Fallback al método original en caso de error
             if (isset($computer['devices']['Item_DeviceHardDrive'])) {
-                $totalDisk = 0;
+                $totalDiskMiB = 0;
                 foreach ($computer['devices']['Item_DeviceHardDrive'] as $disk) {
                     $capacity = $disk['capacity'] ?? $disk['capacity_default'] ?? 0;
-                    $totalDisk += (int) $capacity;
+                    $totalDiskMiB += (int) $capacity;
                 }
-                return $totalDisk > 0 ? $totalDisk : null;
+                
+                if ($totalDiskMiB > 0) {
+                    // Convertir de MiB a GB (decimal)
+                    $totalDiskGB = round($totalDiskMiB / 1000, 2);
+                    return $totalDiskGB;
+                }
+                
+                return null;
             }
             
             return null;
@@ -1453,8 +1531,7 @@ class SincronizarActivosGlpi extends Command
         $deletedCount = 0;
         
         try {
-            // Como no hay campo 'estado' en la tabla real, vamos a marcar como eliminados
-            // actualizando el campo usuario_modificacion para indicar que fueron eliminados
+            // Obtener todos los activos locales que no están marcados como eliminados
             $localAssets = MatzobsActivosC::whereNotNull('id_activo_glpi')
                 ->where('usuario_modificacion', '!=', 'ELIMINADO_GLPI')
                 ->pluck('id_activo_glpi')
@@ -1464,28 +1541,45 @@ class SincronizarActivosGlpi extends Command
                 'total_local_assets' => count($localAssets)
             ]);
 
-            foreach (array_chunk($localAssets, 50) as $chunk) {
+            // Procesar en chunks más pequeños para evitar problemas con la API
+            foreach (array_chunk($localAssets, 10) as $chunkIndex => $chunk) {
                 try {
-                    // Verificar si estos IDs aún existen en GLPI usando el servicio existente
-                    $searchCriteria = [
-                        'criteria' => [
-                            [
-                                'field' => 2, // ID
-                                'searchtype' => 'equals', 
-                                'value' => implode('|', $chunk)
-                            ]
-                        ]
-                    ];
-                    
-                    $glpiAssets = $this->apiCallWithRetry(function() use ($searchCriteria) {
-                        return $this->glpiComputerService->searchComputers($searchCriteria);
-                    });
-                    
                     $existingIds = [];
-                    if (is_array($glpiAssets) && !empty($glpiAssets)) {
-                        $existingIds = collect($glpiAssets)->pluck('2')->toArray(); // Campo 2 es el ID
+                    
+                    // Verificar cada ID individualmente para mayor confiabilidad
+                    foreach ($chunk as $glpiId) {
+                        try {
+                            $computer = $this->apiCallWithRetry(function() use ($glpiId) {
+                                return $this->glpiComputerService->getComputer($glpiId);
+                            });
+                            
+                            // Si el activo existe y no está en papelera, agregarlo a existingIds
+                            if (!empty($computer) && isset($computer['id'])) {
+                                // Verificar si está en papelera (is_deleted = 1)
+                                $isDeleted = isset($computer['is_deleted']) && $computer['is_deleted'] == 1;
+                                
+                                if (!$isDeleted) {
+                                    $existingIds[] = $glpiId;
+                                }
+                            }
+                        } catch (\Exception $e) {
+                            // Si hay error 404, el activo no existe
+                            if (strpos($e->getMessage(), '404') !== false || strpos($e->getMessage(), 'not found') !== false) {
+                                Log::channel('glpi_sync')->debug("Activo no encontrado en GLPI", [
+                                    'glpi_id' => $glpiId
+                                ]);
+                            } else {
+                                // Otros errores, asumir que existe para no marcarlo incorrectamente
+                                Log::channel('glpi_sync')->warning("Error verificando activo, asumiendo que existe", [
+                                    'glpi_id' => $glpiId,
+                                    'error' => $e->getMessage()
+                                ]);
+                                $existingIds[] = $glpiId;
+                            }
+                        }
                     }
                     
+                    // Identificar IDs que fueron eliminados
                     $deletedIds = array_diff($chunk, $existingIds);
                     
                     if (!empty($deletedIds)) {
@@ -1504,7 +1598,10 @@ class SincronizarActivosGlpi extends Command
                     }
                     
                     // Pausa entre chunks
-                    sleep(1);
+                    if (($chunkIndex + 1) % 5 === 0) {
+                        $this->info("⏸️  Verificados " . (($chunkIndex + 1) * 10) . " activos...");
+                        sleep(2);
+                    }
                     
                 } catch (\Exception $e) {
                     Log::channel('glpi_sync')->error("Error verificando chunk de activos eliminados", [
