@@ -293,11 +293,19 @@ class MatrizObsolescenciaCalculatorService
     }
     
     /**
-     * Calcular valoración de RAM basada en características mínimas
+     * Calcular valoración de RAM basada en características mínimas y capacidad de expansión
+     * - Si tamano_ram < ram_minima → Puntaje = 0
+     * - Si tamano_ram >= ram_minima Y max_ram <= tamano_ram → Puntaje = 50
+     * - Si tamano_ram > ram_minima Y (max_ram > tamano_ram O max_ram es NULL) → Puntaje = 100
      */
     protected function calcularValoracionRam($detalle)
     {
         if (!$detalle->tamano_ram) {
+            $detalle->update(['valoracion_ram' => null]);
+            
+            Log::debug("Valoración RAM establecida como NULL - sin RAM", [
+                'activo_id' => $detalle->activo_c_id
+            ]);
             return;
         }
         
@@ -308,26 +316,37 @@ class MatrizObsolescenciaCalculatorService
             $ramMinima = 8; // Valor por defecto
         }
         
-        // Calcular valoración basada en múltiplos de la RAM mínima
-        if ($detalle->tamano_ram >= $ramMinima * 4) {
-            $valoracion = 100; // Excelente
-        } elseif ($detalle->tamano_ram >= $ramMinima * 2) {
-            $valoracion = 80; // Muy bueno
-        } elseif ($detalle->tamano_ram >= $ramMinima * 1.5) {
-            $valoracion = 60; // Bueno
-        } elseif ($detalle->tamano_ram >= $ramMinima) {
-            $valoracion = 40; // Mínimo aceptable
+        $tamanoRam = $detalle->tamano_ram;
+        $maxRam = $detalle->max_ram;
+        
+        // Determinar valoración según la lógica especificada
+        if ($tamanoRam < $ramMinima) {
+            // RAM insuficiente
+            $valoracion = 50;
+            $razon = "RAM insuficiente (menor a mínima requerida)";
+        } elseif ($tamanoRam == $ramMinima && ($maxRam !== null && $maxRam <= $tamanoRam)) {
+            // RAM igual al mínimo y sin capacidad de expansión
+            $valoracion = 50;
+            $razon = "RAM igual al mínimo sin capacidad de expansión";
+        } elseif ($tamanoRam > $ramMinima) {
+            // RAM mayor al mínimo
+            $valoracion = 100;
+            $razon = "RAM mayor al mínimo requerido";
         } else {
-            $valoracion = 20; // Insuficiente
+            // Caso por defecto (RAM >= mínimo con expansión o NULL)
+            $valoracion = 100;
+            $razon = "RAM cumple con capacidad de expansión";
         }
         
         $detalle->update(['valoracion_ram' => $valoracion]);
         
         Log::debug("Valoración RAM calculada", [
             'activo_id' => $detalle->activo_c_id,
-            'ram_actual' => $detalle->tamano_ram,
+            'tamano_ram' => $tamanoRam,
+            'max_ram' => $maxRam,
             'ram_minima' => $ramMinima,
-            'valoracion' => $valoracion
+            'valoracion' => $valoracion,
+            'razon' => $razon
         ]);
     }
     
@@ -451,7 +470,13 @@ class MatrizObsolescenciaCalculatorService
     
     /**
      * Calcular puntaje general del activo
-     * Si la edad > 8 años (valoracion_edad = 0), el equipo es obsoleto y puntaje = 0
+     * Lógica:
+     * - Si no hay 4 valores numéricos → puntaje = NULL
+     * - Si valoracion_edad = 0 → puntaje = 0
+     * - Si valoracion_edad = 100 → puntaje = 100
+     * - Si valoracion_edad = 50 Y valoracion_ram = 0 → puntaje = 0
+     * - Si valoracion_ram = 50 → puntaje = PROMEDIO - 1
+     * - En cualquier otro caso → puntaje = PROMEDIO
      */
     protected function calcularPuntajeGeneral($activo)
     {
@@ -461,71 +486,79 @@ class MatrizObsolescenciaCalculatorService
             return;
         }
         
-        // Si la valoración de edad es 0 (edad > 8 años), el equipo es obsoleto
-        // Usar comparación flexible para manejar tanto int como float
-        if ($detalle->valoracion_edad !== null && (int)$detalle->valoracion_edad === 0) {
-            $activo->update(['puntaje' => 0]);
+        // Obtener las 4 valoraciones
+        $valoracionEdad = $detalle->valoracion_edad;
+        $valoracionRam = $detalle->valoracion_ram;
+        $valoracionProcesador = $detalle->valoracion_procesador;
+        $valoracionDisco = $detalle->valoracion_disco;
+        
+        // Verificar si hay 4 valores numéricos
+        $valoresNumericos = 0;
+        if ($valoracionEdad !== null) $valoresNumericos++;
+        if ($valoracionRam !== null) $valoresNumericos++;
+        if ($valoracionProcesador !== null) $valoresNumericos++;
+        if ($valoracionDisco !== null) $valoresNumericos++;
+        
+        // Si no hay 4 valores numéricos, devolver NULL
+        if ($valoresNumericos < 4) {
+            $activo->update(['puntaje' => null]);
             
-            Log::debug("Puntaje general = 0 - Equipo obsoleto por edad", [
+            Log::debug("Puntaje general = NULL - No hay 4 valores numéricos", [
                 'activo_id' => $activo->id,
-                'edad' => $detalle->edad,
-                'valoracion_edad' => $detalle->valoracion_edad,
-                'puntaje' => 0
+                'valores_numericos' => $valoresNumericos,
+                'valoracion_edad' => $valoracionEdad,
+                'valoracion_ram' => $valoracionRam,
+                'valoracion_procesador' => $valoracionProcesador,
+                'valoracion_disco' => $valoracionDisco
             ]);
             return;
         }
         
-        // Pesos para cada componente
-        $pesos = [
-            'edad' => 0.30,        // 30% - La edad es muy importante
-            'ram' => 0.25,         // 25% - RAM es crítica
-            'procesador' => 0.25,  // 25% - Procesador es crítico
-            'disco' => 0.20        // 20% - Disco es importante pero menos crítico
-        ];
+        // Convertir a números para cálculos
+        $n15 = (float) $valoracionEdad;
+        $r15 = (float) $valoracionRam;
+        $u15 = (float) $valoracionProcesador;
+        $y15 = (float) $valoracionDisco;
         
-        $puntajeTotal = 0;
-        $pesoTotal = 0;
+        $puntaje = null;
+        $razon = '';
         
-        // Sumar valoraciones ponderadas solo de componentes válidos
-        if ($detalle->valoracion_edad !== null) {
-            $puntajeTotal += $detalle->valoracion_edad * $pesos['edad'];
-            $pesoTotal += $pesos['edad'];
-        }
-        
-        if ($detalle->valoracion_ram !== null) {
-            $puntajeTotal += $detalle->valoracion_ram * $pesos['ram'];
-            $pesoTotal += $pesos['ram'];
-        }
-        
-        if ($detalle->valoracion_procesador !== null) {
-            $puntajeTotal += $detalle->valoracion_procesador * $pesos['procesador'];
-            $pesoTotal += $pesos['procesador'];
-        }
-        
-        if ($detalle->valoracion_disco !== null) {
-            $puntajeTotal += $detalle->valoracion_disco * $pesos['disco'];
-            $pesoTotal += $pesos['disco'];
-        }
-        
-        // Solo calcular si tenemos al menos 2 componentes válidos y peso total > 0
-        if ($pesoTotal > 0 && ($detalle->valoracion_edad !== null || $detalle->valoracion_ram !== null)) {
-            // Normalizar el puntaje según los pesos disponibles
-            $puntajeFinal = $puntajeTotal / $pesoTotal;
-            
-            $activo->update(['puntaje' => round($puntajeFinal, 2)]);
-            
-            Log::debug("Puntaje general calculado", [
-                'activo_id' => $activo->id,
-                'peso_total' => $pesoTotal,
-                'puntaje_total' => $puntajeTotal,
-                'puntaje_final' => $puntajeFinal
-            ]);
+        // Aplicar lógica según las reglas especificadas
+        if ($n15 == 0) {
+            // Si valoracion_edad = 0 → puntaje = 0
+            $puntaje = 0;
+            $razon = 'Valoración edad = 0 (obsoleto)';
+        } elseif ($n15 == 100) {
+            // Si valoracion_edad = 100 → puntaje = 100
+            $puntaje = 100;
+            $razon = 'Valoración edad = 100 (nuevo)';
+        } elseif ($n15 == 50 && $r15 == 0) {
+            // Si valoracion_edad = 50 Y valoracion_ram = 0 → puntaje = 0
+            $puntaje = 0;
+            $razon = 'Valoración edad = 50 y RAM = 0';
+        } elseif ($r15 == 50) {
+            // Si valoracion_ram = 50 → puntaje = PROMEDIO - 1
+            $promedio = ($n15 + $r15 + $u15 + $y15) / 4;
+            $puntaje = $promedio - 1;
+            $razon = 'Valoración RAM = 50, promedio - 1';
         } else {
-            Log::debug("Puntaje general no calculado - componentes insuficientes", [
-                'activo_id' => $activo->id,
-                'peso_total' => $pesoTotal
-            ]);
+            // En cualquier otro caso → puntaje = PROMEDIO
+            $promedio = ($n15 + $r15 + $u15 + $y15) / 4;
+            $puntaje = $promedio;
+            $razon = 'Promedio de las 4 valoraciones';
         }
+        
+        $activo->update(['puntaje' => round($puntaje, 2)]);
+        
+        Log::debug("Puntaje general calculado", [
+            'activo_id' => $activo->id,
+            'valoracion_edad' => $n15,
+            'valoracion_ram' => $r15,
+            'valoracion_procesador' => $u15,
+            'valoracion_disco' => $y15,
+            'puntaje' => round($puntaje, 2),
+            'razon' => $razon
+        ]);
     }
     
     /**

@@ -788,6 +788,12 @@ class SincronizarActivosGlpi extends Command
         // Buscar parámetros del agente (empresa, sede, sucursal) en la tabla matzobs_agentes
         $agentParams = $this->getAgentParameters($agentTag, $stats);
         
+        // Extraer ubicación y convertir "0" a null
+        $ubicacion = $computer['locations_id'] ?? $computer['locations_id_name'] ?? $computer['location'] ?? null;
+        if ($ubicacion === '0' || $ubicacion === 0 || empty($ubicacion)) {
+            $ubicacion = null;
+        }
+        
         return [
             'id_activo_glpi' => $computer['id'],
             'nombre_equipo' => $computer['name'] ?? 'Sin nombre',
@@ -797,7 +803,7 @@ class SincronizarActivosGlpi extends Command
             'agente' => $agentTag,
             'placa' => $computer['comment'] ?? null,
             'serial' => $computer['serial'] ?? null,
-            'ubicacion' => $computer['locations_id_name'] ?? $computer['location'] ?? null,
+            'ubicacion' => $ubicacion,
             'puntaje' => 0.00, // Valor inicial
             'usuario_modificacion' => 'GLPI_SYNC', // Identificar que fue sincronizado
             'date_u_sincronizacion' => now()
@@ -1092,21 +1098,68 @@ class SincronizarActivosGlpi extends Command
     {
         // Buscar en dispositivos de memoria usando el servicio existente
         if (isset($computer['devices']['Item_DeviceMemory'])) {
-            $totalRam = 0;
+            $totalRamMiB = 0;
             foreach ($computer['devices']['Item_DeviceMemory'] as $memory) {
                 // Extraer capacidad de memoria (puede estar en diferentes campos)
+                // El valor viene en MiB (Mebibytes)
                 $capacity = $memory['capacity'] ?? $memory['size'] ?? $memory['size_default'] ?? 0;
-                $totalRam += (int) $capacity;
+                $totalRamMiB += (int) $capacity;
             }
-            return $totalRam > 0 ? $totalRam : null;
+            
+            if ($totalRamMiB > 0) {
+                // Convertir de MiB a GB sin redondear a valores estándar (valor exacto)
+                $totalRamGB = (int) round($totalRamMiB / 1000);
+                
+                Log::channel('glpi_sync')->debug("Conversión RAM MiB a GB (exacto)", [
+                    'computer_id' => $computer['id'],
+                    'ram_mib' => $totalRamMiB,
+                    'ram_gb' => $totalRamGB
+                ]);
+                
+                return $totalRamGB;
+            }
+            
+            return null;
         }
         
         // Fallback: buscar en otros campos posibles
         if (isset($computer['ram'])) {
-            return (int) $computer['ram'];
+            $ramMiB = (int) $computer['ram'];
+            // Convertir de MiB a GB sin redondear
+            $ramGB = (int) round($ramMiB / 1000);
+            return $ramGB;
         }
         
         return null;
+    }
+    
+    /**
+     * Redondear RAM a valores estándar (4, 8, 16, 32, 64, 128, etc.)
+     * NOTA: Este método se mantiene para MaxRAM si es necesario
+     */
+    private function redondearRamEstandar($ramGB)
+    {
+        // Valores estándar de RAM en GB
+        $valoresEstandar = [2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512];
+        
+        // Si la RAM es menor a 2 GB, redondear al entero más cercano
+        if ($ramGB < 2) {
+            return max(1, (int) round($ramGB));
+        }
+        
+        // Buscar el valor estándar más cercano
+        $diferenciaMenor = PHP_INT_MAX;
+        $valorMasCercano = $valoresEstandar[0];
+        
+        foreach ($valoresEstandar as $valorEstandar) {
+            $diferencia = abs($ramGB - $valorEstandar);
+            if ($diferencia < $diferenciaMenor) {
+                $diferenciaMenor = $diferencia;
+                $valorMasCercano = $valorEstandar;
+            }
+        }
+        
+        return $valorMasCercano;
     }
 
     private function extractRamGeneration($computer)
@@ -1392,8 +1445,9 @@ class SincronizarActivosGlpi extends Command
                 if ($diskData['success'] && !empty($diskData['data']['total_capacity_mb'])) {
                     // El valor viene en Mebibytes (MiB)
                     // Convertir de MiB a GB (decimal): MiB / 1000
+                    // Sin decimales (número entero)
                     $capacidadMiB = (int) $diskData['data']['total_capacity_mb'];
-                    $capacidadGB = round($capacidadMiB / 1000, 2);
+                    $capacidadGB = (int) round($capacidadMiB / 1000);
                     
                     Log::channel('glpi_sync')->debug("Conversión disco MiB a GB", [
                         'computer_id' => $computer['id'],
@@ -1414,8 +1468,8 @@ class SincronizarActivosGlpi extends Command
                 }
                 
                 if ($totalDiskMiB > 0) {
-                    // Convertir de MiB a GB (decimal)
-                    $totalDiskGB = round($totalDiskMiB / 1000, 2);
+                    // Convertir de MiB a GB (decimal) sin decimales
+                    $totalDiskGB = (int) round($totalDiskMiB / 1000);
                     
                     Log::channel('glpi_sync')->debug("Conversión disco MiB a GB (fallback)", [
                         'computer_id' => $computer['id'],
@@ -1446,8 +1500,8 @@ class SincronizarActivosGlpi extends Command
                 }
                 
                 if ($totalDiskMiB > 0) {
-                    // Convertir de MiB a GB (decimal)
-                    $totalDiskGB = round($totalDiskMiB / 1000, 2);
+                    // Convertir de MiB a GB (decimal) sin decimales
+                    $totalDiskGB = (int) round($totalDiskMiB / 1000);
                     return $totalDiskGB;
                 }
                 
