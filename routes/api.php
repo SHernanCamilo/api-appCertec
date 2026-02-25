@@ -15,9 +15,10 @@ use App\Http\Controllers\AuthController;
 |
 */
 
-Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
-    return $request->user();
-});
+// Ruta comentada - la aplicación usa JWT (auth:api), no Sanctum
+// Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
+//     return $request->user();
+// });
 
 Route::group([
     'prefix' => 'auth'
@@ -219,6 +220,26 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('templates')->group
 // Rutas de Variables de Plantillas
 Route::middleware(['auth:api', 'check.user.active'])->prefix('variables')->group(function () {
     Route::get('/', [App\Http\Controllers\VariableController::class, 'index']);
+});
+
+// Rutas de Anticipos - Conceptos
+Route::middleware(['auth:api', 'check.user.active'])->prefix('anticipos')->group(function () {
+    // Tipos de anticipos
+    Route::get('/tipos', [App\Http\Controllers\AnticipoConceptoController::class, 'getTipos']);
+    
+    // Clases por tipo
+    Route::get('/tipos/{tipoId}/clases', [App\Http\Controllers\AnticipoConceptoController::class, 'getClasesPorTipo']);
+    
+    // Modalidades por clase
+    Route::get('/clases/{claseId}/modalidades', [App\Http\Controllers\AnticipoConceptoController::class, 'getModalidadesPorClase']);
+    
+    // CRUD de conceptos
+    Route::get('/conceptos', [App\Http\Controllers\AnticipoConceptoController::class, 'index']);
+    Route::post('/conceptos', [App\Http\Controllers\AnticipoConceptoController::class, 'store']);
+    Route::get('/conceptos/{id}', [App\Http\Controllers\AnticipoConceptoController::class, 'show']);
+    Route::put('/conceptos/{id}', [App\Http\Controllers\AnticipoConceptoController::class, 'update']);
+    Route::delete('/conceptos/{id}', [App\Http\Controllers\AnticipoConceptoController::class, 'destroy']);
+    Route::patch('/conceptos/{id}/toggle-estado', [App\Http\Controllers\AnticipoConceptoController::class, 'toggleEstado']);
 });
 
 // Rutas de GLPI API Integration
