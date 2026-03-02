@@ -16,9 +16,14 @@ return [
     */
 
 
-   'paths' => ['api/*', 'auth/*'],
+   'paths' => ['api/*', 'auth/*', 'sanctum/csrf-cookie'],
    'allowed_methods' => ['*'],
-   'allowed_origins' => ['http://localhost:4200', 'http://127.0.0.1:4200', 'http://192.168.1.9:8000'],
+   'allowed_origins' => [
+       'http://localhost:4200', 
+       'http://127.0.0.1:4200', 
+       'http://192.168.1.9:8000',
+       'https://jade.medlisser.com.co'
+   ],
    'allowed_headers' => ['*'],
    'exposed_headers' => [],
    'max_age' => 0,
