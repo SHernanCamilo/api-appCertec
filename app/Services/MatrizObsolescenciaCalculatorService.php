@@ -294,9 +294,9 @@ class MatrizObsolescenciaCalculatorService
     
     /**
      * Calcular valoración de RAM basada en características mínimas y capacidad de expansión
-     * - Si tamano_ram < ram_minima → Puntaje = 0
-     * - Si tamano_ram >= ram_minima Y max_ram <= tamano_ram → Puntaje = 50
-     * - Si tamano_ram > ram_minima Y (max_ram > tamano_ram O max_ram es NULL) → Puntaje = 100
+     * - Si tamano_ram == max_ram (sin capacidad de expansión) → Puntaje = 0
+     * - Si tamano_ram < ram_minima → Puntaje = 50
+     * - Si tamano_ram >= ram_minima Y max_ram > tamano_ram → Puntaje = 100
      */
     protected function calcularValoracionRam($detalle)
     {
@@ -320,22 +320,25 @@ class MatrizObsolescenciaCalculatorService
         $maxRam = $detalle->max_ram;
         
         // Determinar valoración según la lógica especificada
-        if ($tamanoRam < $ramMinima) {
-            // RAM insuficiente
+        // PRIORIDAD 1: Si RAM actual == MaxRAM (sin capacidad de expansión) → 0
+        if ($maxRam !== null && $tamanoRam == $maxRam) {
+            $valoracion = 0;
+            $razon = "Sin capacidad de expansión (RAM actual = MaxRAM)";
+        }
+        // PRIORIDAD 2: Si RAM < mínima requerida → 50
+        elseif ($tamanoRam < $ramMinima) {
             $valoracion = 50;
             $razon = "RAM insuficiente (menor a mínima requerida)";
-        } elseif ($tamanoRam == $ramMinima && ($maxRam !== null && $maxRam <= $tamanoRam)) {
-            // RAM igual al mínimo y sin capacidad de expansión
+        }
+        // PRIORIDAD 3: Si RAM >= mínima Y tiene capacidad de expansión → 100
+        elseif ($tamanoRam >= $ramMinima && ($maxRam === null || $maxRam > $tamanoRam)) {
+            $valoracion = 100;
+            $razon = "RAM cumple con mínimo y tiene capacidad de expansión";
+        }
+        // Caso por defecto
+        else {
             $valoracion = 50;
-            $razon = "RAM igual al mínimo sin capacidad de expansión";
-        } elseif ($tamanoRam > $ramMinima) {
-            // RAM mayor al mínimo
-            $valoracion = 100;
-            $razon = "RAM mayor al mínimo requerido";
-        } else {
-            // Caso por defecto (RAM >= mínimo con expansión o NULL)
-            $valoracion = 100;
-            $razon = "RAM cumple con capacidad de expansión";
+            $razon = "Caso por defecto";
         }
         
         $detalle->update(['valoracion_ram' => $valoracion]);
@@ -455,6 +458,22 @@ class MatrizObsolescenciaCalculatorService
                 $valoracion = min(100, $valoracion + 5);
             } elseif ($capacidadGB < 250) { // Menos de 250GB
                 $valoracion = max(20, $valoracion - 15);
+            }
+        }
+        
+        // Nueva condición: Ajuste adicional por tamaño específico
+        if ($detalle->tamano_disco) {
+            $capacidadGB = $detalle->tamano_disco;
+            
+            if ($capacidadGB < 480) {
+                // Si es menor a 480GB, forzar a 50
+                $valoracion = 50;
+            } elseif ($capacidadGB >= 480 && $valoracion == 85) {
+                // Si es >= 480GB y el puntaje es exactamente 85, subir a 100
+                $valoracion = 100;
+            } elseif ($capacidadGB >= 480 && $valoracion > 85) {
+                // Si es >= 480GB y el puntaje es mayor a 85, mantener en 100
+                $valoracion = 100;
             }
         }
         

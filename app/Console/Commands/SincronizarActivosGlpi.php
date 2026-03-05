@@ -1377,6 +1377,16 @@ class SincronizarActivosGlpi extends Command
                         $interface = $disk['interface'] ?? '';
                         $designation = $disk['designation'] ?? '';
                         
+                        // Ignorar discos con interfaz SD o USB
+                        if (stripos($interface, 'SD') !== false || stripos($interface, 'USB') !== false) {
+                            Log::channel('glpi_sync')->debug("Disco ignorado (interfaz SD/USB)", [
+                                'computer_id' => $computer['id'],
+                                'interface' => $interface,
+                                'designation' => $designation
+                            ]);
+                            continue;
+                        }
+                        
                         // Determinar tipo basado en interfaz
                         if (stripos($interface, 'NVME') !== false || stripos($designation, 'NVME') !== false) {
                             $diskTypes[] = 'SSD NVMe';
@@ -1442,20 +1452,37 @@ class SincronizarActivosGlpi extends Command
             if ($diskInfoResponse->getStatusCode() === 200) {
                 $diskData = json_decode($diskInfoResponse->getContent(), true);
                 
-                if ($diskData['success'] && !empty($diskData['data']['total_capacity_mb'])) {
-                    // El valor viene en Mebibytes (MiB)
-                    // Convertir de MiB a GB (decimal): MiB / 1000
-                    // Sin decimales (número entero)
-                    $capacidadMiB = (int) $diskData['data']['total_capacity_mb'];
-                    $capacidadGB = (int) round($capacidadMiB / 1000);
+                if ($diskData['success'] && !empty($diskData['data']['disks'])) {
+                    // Calcular capacidad total excluyendo discos SD y USB
+                    $totalCapacidadMiB = 0;
+                    foreach ($diskData['data']['disks'] as $disk) {
+                        $interface = $disk['interface'] ?? '';
+                        
+                        // Ignorar discos con interfaz SD o USB
+                        if (stripos($interface, 'SD') !== false || stripos($interface, 'USB') !== false) {
+                            Log::channel('glpi_sync')->debug("Disco ignorado en cálculo de capacidad (interfaz SD/USB)", [
+                                'computer_id' => $computer['id'],
+                                'interface' => $interface,
+                                'capacity' => $disk['capacity'] ?? 0
+                            ]);
+                            continue;
+                        }
+                        
+                        $totalCapacidadMiB += (int) ($disk['capacity'] ?? 0);
+                    }
                     
-                    Log::channel('glpi_sync')->debug("Conversión disco MiB a GB", [
-                        'computer_id' => $computer['id'],
-                        'capacidad_mib' => $capacidadMiB,
-                        'capacidad_gb' => $capacidadGB
-                    ]);
-                    
-                    return $capacidadGB;
+                    if ($totalCapacidadMiB > 0) {
+                        // Convertir de MiB a GB (decimal) sin decimales
+                        $capacidadGB = (int) round($totalCapacidadMiB / 1000);
+                        
+                        Log::channel('glpi_sync')->debug("Conversión disco MiB a GB (excluyendo SD/USB)", [
+                            'computer_id' => $computer['id'],
+                            'capacidad_mib' => $totalCapacidadMiB,
+                            'capacidad_gb' => $capacidadGB
+                        ]);
+                        
+                        return $capacidadGB;
+                    }
                 }
             }
             
@@ -1526,8 +1553,19 @@ class SincronizarActivosGlpi extends Command
                     // Tomar la interfaz del primer disco (o combinar si hay múltiples)
                     $interfaces = [];
                     foreach ($diskData['data']['disks'] as $disk) {
-                        if (!empty($disk['interface'])) {
-                            $interfaces[] = $disk['interface'];
+                        $interface = $disk['interface'] ?? '';
+                        
+                        // Ignorar discos con interfaz SD o USB
+                        if (stripos($interface, 'SD') !== false || stripos($interface, 'USB') !== false) {
+                            Log::channel('glpi_sync')->debug("Interfaz de disco ignorada (SD/USB)", [
+                                'computer_id' => $computer['id'],
+                                'interface' => $interface
+                            ]);
+                            continue;
+                        }
+                        
+                        if (!empty($interface)) {
+                            $interfaces[] = $interface;
                         }
                     }
                     
