@@ -439,6 +439,133 @@ class MatrizObsParametroController extends Controller
     }
 
     /**
+     * Obtener equipos filtrados por tipo o ubicación
+     */
+    public function getEquiposPorFiltro(Request $request)
+    {
+        try {
+            $tipo = $request->input('tipo');
+            $ubicacion = $request->input('ubicacion');
+            $empresaId = $request->input('empresa_id');
+            $sucursalId = $request->input('sucursal_id');
+            $sedeId = $request->input('sede_id');
+            $page = $request->input('page', 1);
+            $perPage = $request->input('per_page', 10);
+
+            \Log::info('getEquiposPorFiltro - Parámetros recibidos:', [
+                'tipo' => $tipo,
+                'ubicacion' => $ubicacion,
+                'empresa_id' => $empresaId,
+                'sucursal_id' => $sucursalId,
+                'sede_id' => $sedeId
+            ]);
+
+            $query = \DB::table('matzobs_activos_c as ac')
+                ->leftJoin('matzobs_activos_d as ad', 'ac.id', '=', 'ad.activo_c_id')
+                ->leftJoin('ent_empresas as e', 'ac.id_empresa', '=', 'e.id')
+                ->leftJoin('config_ubi_sucursales as s', 'ac.id_sucursal', '=', 's.id')
+                ->leftJoin('config_ubi_sede as se', 'ac.id_sede', '=', 'se.id')
+                ->select(
+                    'ac.*',
+                    'ad.tipo',
+                    'ad.marca',
+                    'ad.referencia',
+                    'ad.tamano_ram',
+                    'ad.procesador',
+                    'ad.tipo_disco',
+                    'ad.tamano_disco',
+                    'e.nombre as empresa_nombre',
+                    's.nombre as sucursal_nombre',
+                    'se.nombre as sede_nombre'
+                );
+
+            // Aplicar filtros de permisos
+            $query = $this->aplicarFiltrosPermisos($query);
+
+            // Filtrar por tipo de equipo
+            if ($tipo) {
+                $query->where('ad.tipo', $tipo);
+            }
+
+            // Filtrar por ubicación (empresa/sucursal/sede)
+            // La ubicación puede venir como "Empresa - Sucursal" o solo "Empresa" o "Sucursal"
+            if ($ubicacion) {
+                // Separar la ubicación si contiene " - "
+                $partes = explode(' - ', $ubicacion);
+                
+                if (count($partes) >= 2) {
+                    // Si tiene formato "Empresa - Sucursal", buscar por ambas
+                    $empresaNombre = trim($partes[0]);
+                    $sucursalNombre = trim($partes[1]);
+                    
+                    $query->where(function($q) use ($empresaNombre, $sucursalNombre) {
+                        $q->where(function($subQ) use ($empresaNombre, $sucursalNombre) {
+                            $subQ->where('e.nombre', 'LIKE', '%' . $empresaNombre . '%')
+                                 ->where('s.nombre', 'LIKE', '%' . $sucursalNombre . '%');
+                        })
+                        ->orWhere(function($subQ) use ($empresaNombre, $sucursalNombre) {
+                            // También buscar si la sucursal contiene ambos nombres
+                            $subQ->where('s.nombre', 'LIKE', '%' . $empresaNombre . '%')
+                                 ->where('s.nombre', 'LIKE', '%' . $sucursalNombre . '%');
+                        });
+                    });
+                } else {
+                    // Si es un solo nombre, buscar en empresa, sucursal o sede
+                    $query->where(function($q) use ($ubicacion) {
+                        $q->where('e.nombre', 'LIKE', '%' . $ubicacion . '%')
+                          ->orWhere('s.nombre', 'LIKE', '%' . $ubicacion . '%')
+                          ->orWhere('se.nombre', 'LIKE', '%' . $ubicacion . '%');
+                    });
+                }
+            }
+
+            // Filtros adicionales
+            if ($empresaId) {
+                $query->where('ac.id_empresa', $empresaId);
+            }
+            if ($sucursalId) {
+                $query->where('ac.id_sucursal', $sucursalId);
+            }
+            if ($sedeId) {
+                $query->where('ac.id_sede', $sedeId);
+            }
+
+            // Paginación
+            $total = $query->count();
+            
+            \Log::info('getEquiposPorFiltro - Total encontrado:', ['total' => $total]);
+            
+            $equipos = $query->orderBy('ac.puntaje', 'desc')
+                ->skip(($page - 1) * $perPage)
+                ->take($perPage)
+                ->get();
+
+            \Log::info('getEquiposPorFiltro - Equipos recuperados:', ['count' => $equipos->count()]);
+
+            return response()->json([
+                'success' => true,
+                'data' => $equipos,
+                'total' => $total,
+                'per_page' => $perPage,
+                'current_page' => $page,
+                'last_page' => ceil($total / $perPage)
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Error en getEquiposPorFiltro:', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener equipos filtrados',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Ejecutar cálculos automáticos para la matriz de obsolescencia
      */
     public function ejecutarCalculos(Request $request, MatrizObsolescenciaCalculatorService $calculatorService)

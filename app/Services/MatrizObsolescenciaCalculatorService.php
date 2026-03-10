@@ -23,7 +23,6 @@ class MatrizObsolescenciaCalculatorService
             $activo = MatzobsActivosC::with('detalles')->find($activoId);
             
             if (!$activo || !$activo->detalles) {
-                Log::warning("Activo no encontrado o sin detalles para cálculo", ['activo_id' => $activoId]);
                 return false;
             }
             
@@ -51,11 +50,6 @@ class MatrizObsolescenciaCalculatorService
             // Refrescar antes de calcular puntaje general
             $activo->refresh();
             $this->calcularPuntajeGeneral($activo);
-            
-            Log::info("Valores calculados para activo", [
-                'activo_id' => $activoId,
-                'nombre_equipo' => $activo->nombre_equipo
-            ]);
             
             return true;
             
@@ -125,11 +119,6 @@ class MatrizObsolescenciaCalculatorService
         if (!$detalle->fecha_compra) {
             // Si no hay fecha de compra, establecer edad como NULL
             $detalle->update(['edad' => null]);
-            
-            Log::debug("Edad establecida como NULL - sin fecha de compra", [
-                'activo_id' => $detalle->activo_c_id,
-                'fecha_compra' => $detalle->fecha_compra
-            ]);
             return null;
         }
         
@@ -149,14 +138,6 @@ class MatrizObsolescenciaCalculatorService
         
         $detalle->update(['edad' => $edadDecimal]);
         
-        Log::debug("Edad calculada en decimal", [
-            'activo_id' => $detalle->activo_c_id,
-            'fecha_compra' => $detalle->fecha_compra,
-            'anios' => $anios,
-            'meses_adicionales' => $mesesAdicionales,
-            'edad_decimal' => $edadDecimal
-        ]);
-        
         return $edadDecimal;
     }
     
@@ -168,13 +149,6 @@ class MatrizObsolescenciaCalculatorService
         if ($detalle->edad === null || !$detalle->tipo) {
             // Si no hay edad o tipo, establecer edad_v_util como NULL
             $detalle->update(['edad_v_util' => null]);
-            
-            Log::debug("Vida útil establecida como NULL ✅✅✅", [
-                'activo_id' => $detalle->activo_c_id,
-                'edad' => $detalle->edad,
-                'tipo' => $detalle->tipo,
-                'razon' => $detalle->edad === null ? 'edad es NULL' : 'tipo no disponible'
-            ]);
             return;
         }
         
@@ -184,24 +158,10 @@ class MatrizObsolescenciaCalculatorService
         if ($vidaUtilAnios > 0) {
             // Calcular: edad / vida_util_años
             $valorVidaUtil = ($detalle->edad / $vidaUtilAnios)*100;
-            
             $detalle->update(['edad_v_util' => $valorVidaUtil]);
-            
-            Log::debug("✅ Vida útil calculada", [
-                'activo_id' => $detalle->activo_c_id,
-                'tipo' => $detalle->tipo,
-                'edad' => $detalle->edad,
-                'vida_util_anios' => $vidaUtilAnios,
-                'valor_calculado' => $valorVidaUtil 
-            ]);
         } else {
             // Si no se encuentra el tipo, asignar NULL
             $detalle->update(['edad_v_util' => null]);
-            
-            Log::debug("Vida útil establecida como NULL - tipo no encontrado", [
-                'activo_id' => $detalle->activo_c_id,
-                'tipo' => $detalle->tipo
-            ]);
         }
     }
     
@@ -216,12 +176,6 @@ class MatrizObsolescenciaCalculatorService
         if ($detalle->edad === null) {
             // Si edad es NULL, establecer valoración como NULL
             $detalle->update(['valoracion_edad' => null]);
-            
-            Log::debug("Valoración edad establecida como NULL", [
-                'activo_id' => $detalle->activo_c_id,
-                'edad' => $detalle->edad,
-                'razon' => 'edad es NULL'
-            ]);
             return;
         }
         
@@ -230,25 +184,10 @@ class MatrizObsolescenciaCalculatorService
         // Aplicar lógica de valoración por edad
         if ($detalle->edad < 5) {
             $valoracion = 100;
-            Log::debug("Valoración edad: Equipo nuevo (< 5 años)", [
-                'activo_id' => $detalle->activo_c_id,
-                'edad' => $detalle->edad,
-                'valoracion' => $valoracion
-            ]);
         } elseif ($detalle->edad >= 5 && $detalle->edad <= 8) {
             $valoracion = 50;
-            Log::debug("Valoración edad: Equipo medio (5-8 años)", [
-                'activo_id' => $detalle->activo_c_id,
-                'edad' => $detalle->edad,
-                'valoracion' => $valoracion
-            ]);
         } else {
             $valoracion = 0;
-            Log::debug("Valoración edad: Equipo obsoleto (> 8 años)", [
-                'activo_id' => $detalle->activo_c_id,
-                'edad' => $detalle->edad,
-                'valoracion' => $valoracion
-            ]);
         }
         
         $detalle->update(['valoracion_edad' => $valoracion]);
@@ -262,34 +201,18 @@ class MatrizObsolescenciaCalculatorService
     {
         // Si max_ram ya tiene un valor (fue ingresado manualmente), no lo sobrescribimos
         if ($detalle->max_ram !== null && $detalle->max_ram > 0) {
-            Log::debug("MaxRAM ya definido manualmente", [
-                'activo_id' => $detalle->activo_c_id,
-                'max_ram' => $detalle->max_ram
-            ]);
             return;
         }
         
         // Si no hay RAM actual, establecer max_ram como NULL
         if (!$detalle->tamano_ram || $detalle->tamano_ram <= 0) {
             $detalle->update(['max_ram' => null]);
-            
-            Log::debug("MaxRAM establecido como NULL - sin RAM actual", [
-                'activo_id' => $detalle->activo_c_id,
-                'tamano_ram' => $detalle->tamano_ram
-            ]);
             return;
         }
         
         // Calcular MaxRAM como el doble de la RAM actual
         $maxRam = $detalle->tamano_ram * 2;
-        
         $detalle->update(['max_ram' => $maxRam]);
-        
-        Log::debug("MaxRAM calculado automáticamente", [
-            'activo_id' => $detalle->activo_c_id,
-            'tamano_ram' => $detalle->tamano_ram,
-            'max_ram' => $maxRam
-        ]);
     }
     
     /**

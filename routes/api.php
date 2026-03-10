@@ -154,6 +154,9 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obsolescenc
     // Estadísticas por ubicación
     Route::get('/estadisticas-por-ubicacion', [App\Http\Controllers\MatrizObsParametroController::class, 'getEstadisticasPorUbicacion']);
     
+    // Equipos filtrados (para modales de gráficas)
+    Route::get('/equipos-por-filtro', [App\Http\Controllers\MatrizObsParametroController::class, 'getEquiposPorFiltro']);
+    
     // Agentes
     Route::get('/agentes', [App\Http\Controllers\MatrizObsAgenteController::class, 'index']);
     Route::post('/agentes', [App\Http\Controllers\MatrizObsAgenteController::class, 'store']);

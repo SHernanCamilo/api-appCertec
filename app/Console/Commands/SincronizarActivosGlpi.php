@@ -18,7 +18,7 @@ class SincronizarActivosGlpi extends Command
      * The name and signature of the console command.
      */
     protected $signature = 'glpi:sync-activos 
-                           {--batch=10 : Número de activos a procesar por lote}
+                           {--batch=50 : Número de activos a procesar por lote}
                            {--offset=0 : Desde qué registro comenzar}
                            {--limit=2500 : Límite total de registros a procesar}
                            {--force : Forzar actualización de registros existentes}
@@ -50,10 +50,10 @@ class SincronizarActivosGlpi extends Command
     protected $apiCallCount = 0;
     protected $lastApiCallTime = null;
     
-    // Configuración de throttling
-    protected $maxApiCallsPerSecond = 15;
-    protected $pauseBetweenBatches = 1; // segundos
-    protected $pauseBetweenApiCalls = 100000; // microsegundos (0.2 segundos)
+    // Configuración de throttling optimizada
+    protected $maxApiCallsPerSecond = 30;
+    protected $pauseBetweenBatches = 0.5; // segundos (reducido)
+    protected $pauseBetweenApiCalls = 50000; // microsegundos (0.05 segundos - reducido)
     protected $maxMemoryUsagePercent = 80; // Porcentaje máximo de memoria antes de limpiar caches
 
     public function __construct(GLPIService $glpiService, GLPIComputerService $glpiComputerService, MatrizObsolescenciaCalculatorService $calculatorService)
@@ -375,7 +375,7 @@ class SincronizarActivosGlpi extends Command
     {
         $this->apiCallCount++;
         
-        // Pausa entre cada llamada API
+        // Pausa entre cada llamada API (reducida)
         if ($this->lastApiCallTime !== null) {
             $timeSinceLastCall = microtime(true) - $this->lastApiCallTime;
             $minTimeBetweenCalls = $this->pauseBetweenApiCalls / 1000000;
@@ -388,10 +388,10 @@ class SincronizarActivosGlpi extends Command
         
         $this->lastApiCallTime = microtime(true);
         
-        // Pausa más larga cada cierto número de llamadas
-        if ($this->apiCallCount % 50 === 0) {
+        // Pausa más larga cada 100 llamadas (aumentado de 50)
+        if ($this->apiCallCount % 100 === 0) {
             $this->info("⏸️  Pausa de seguridad después de {$this->apiCallCount} llamadas API...");
-            sleep(2);
+            sleep(1); // Reducido de 2 a 1 segundo
         }
     }
     
