@@ -143,35 +143,83 @@ class MatrizObsActivoC extends Model
     }
 
     /**
-     * Obtener el estado del activo basado en el puntaje
+     * Obtener rangos funcionales desde parámetros (id_grupo = 3)
      */
-    public function getEstadoAttribute(): string
+    public static function getRangosFuncionales()
     {
-        if ($this->puntaje >= 80) {
-            return 'Óptimo';
-        } elseif ($this->puntaje >= 60) {
-            return 'Funcional';
-        } elseif ($this->puntaje >= 40) {
-            return 'Potencialmente Obsoleto';
-        } else {
-            return 'Obsoleto';
+        static $rangos = null;
+        
+        if ($rangos === null) {
+            $rangos = MatrizObsParametro::where('id_grupo', 3)
+                ->orderBy('rango_i', 'asc')
+                ->get()
+                ->map(function($param) {
+                    return [
+                        'nombre' => $param->nombre,
+                        'min' => (float) $param->rango_i,
+                        'max' => (float) $param->rango_f,
+                        'color' => self::getColorPorNombre($param->nombre)
+                    ];
+                })
+                ->toArray();
         }
+        
+        return $rangos;
     }
 
     /**
-     * Obtener el color del estado
+     * Obtener color según el nombre del estado
+     */
+    private static function getColorPorNombre($nombre)
+    {
+        $colores = [
+            'OBSOLETO' => '#dc3545',      // Rojo
+            'POTENCIALMENTE' => '#ffc107', // Amarillo
+            'FUNCIONAL' => '#ffff00',      // Amarillo claro
+            'ÓPTIMO' => '#198754'          // Verde
+        ];
+        
+        return $colores[$nombre] ?? '#6c757d'; // Gris por defecto
+    }
+
+    /**
+     * Obtener el estado del activo basado en el puntaje (dinámico desde parámetros)
+     */
+    public function getEstadoAttribute(): string
+    {
+        if ($this->puntaje === null) {
+            return 'Sin clasificar';
+        }
+
+        $rangos = self::getRangosFuncionales();
+        
+        foreach ($rangos as $rango) {
+            if ($this->puntaje >= $rango['min'] && $this->puntaje <= $rango['max']) {
+                return $rango['nombre'];
+            }
+        }
+        
+        return 'Sin clasificar';
+    }
+
+    /**
+     * Obtener el color del estado (dinámico desde parámetros)
      */
     public function getColorEstadoAttribute(): string
     {
-        if ($this->puntaje >= 80) {
-            return '#198754'; // Verde
-        } elseif ($this->puntaje >= 60) {
-            return '#0dcaf0'; // Azul
-        } elseif ($this->puntaje >= 40) {
-            return '#ffc107'; // Amarillo
-        } else {
-            return '#dc3545'; // Rojo
+        if ($this->puntaje === null) {
+            return '#6c757d'; // Gris
         }
+
+        $rangos = self::getRangosFuncionales();
+        
+        foreach ($rangos as $rango) {
+            if ($this->puntaje >= $rango['min'] && $this->puntaje <= $rango['max']) {
+                return $rango['color'];
+            }
+        }
+        
+        return '#6c757d'; // Gris por defecto
     }
 
     /**

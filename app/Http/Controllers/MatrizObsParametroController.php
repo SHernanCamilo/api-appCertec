@@ -266,6 +266,18 @@ class MatrizObsParametroController extends Controller
     public function getEstadisticasPorTipo()
     {
         try {
+            // Obtener rangos dinámicos desde parámetros (id_grupo = 3)
+            $rangos = MatrizObsParametro::where('id_grupo', 3)
+                ->orderBy('rango_i', 'asc')
+                ->get();
+
+            // Construir las condiciones SQL dinámicamente
+            $casesSQL = [];
+            foreach ($rangos as $rango) {
+                $nombre = strtolower(str_replace(' ', '_', $rango->nombre));
+                $casesSQL[$nombre] = "SUM(CASE WHEN ac.puntaje >= {$rango->rango_i} AND ac.puntaje <= {$rango->rango_f} THEN 1 ELSE 0 END) as {$nombre}";
+            }
+
             // Obtener estadísticas agrupadas por tipo de equipo
             $query = \DB::table('matzobs_activos_c as ac')
                 ->join('matzobs_activos_d as ad', 'ac.id', '=', 'ad.activo_c_id')
@@ -273,10 +285,10 @@ class MatrizObsParametroController extends Controller
                     'ad.tipo',
                     \DB::raw('COUNT(*) as total'),
                     \DB::raw('AVG(ac.puntaje) as promedio_puntaje'),
-                    \DB::raw('SUM(CASE WHEN ac.puntaje >= 80 THEN 1 ELSE 0 END) as optimo'),
-                    \DB::raw('SUM(CASE WHEN ac.puntaje >= 60 AND ac.puntaje < 80 THEN 1 ELSE 0 END) as funcional'),
-                    \DB::raw('SUM(CASE WHEN ac.puntaje >= 40 AND ac.puntaje < 60 THEN 1 ELSE 0 END) as potencial'),
-                    \DB::raw('SUM(CASE WHEN ac.puntaje < 40 THEN 1 ELSE 0 END) as obsoleto')
+                    \DB::raw($casesSQL['obsoleto'] ?? 'SUM(CASE WHEN ac.puntaje = 0 THEN 1 ELSE 0 END) as obsoleto'),
+                    \DB::raw($casesSQL['potencialmente'] ?? 'SUM(CASE WHEN ac.puntaje > 0 AND ac.puntaje < 60 THEN 1 ELSE 0 END) as potencialmente'),
+                    \DB::raw($casesSQL['funcional'] ?? 'SUM(CASE WHEN ac.puntaje >= 60 AND ac.puntaje < 100 THEN 1 ELSE 0 END) as funcional'),
+                    \DB::raw($casesSQL['óptimo'] ?? 'SUM(CASE WHEN ac.puntaje = 100 THEN 1 ELSE 0 END) as optimo')
                 )
                 ->whereNotNull('ad.tipo');
 
@@ -299,10 +311,10 @@ class MatrizObsParametroController extends Controller
                     'porcentaje' => $totalGeneral > 0 ? round(($item->total / $totalGeneral) * 100, 2) : 0,
                     'promedio_puntaje' => round($item->promedio_puntaje, 2),
                     'distribucion' => [
-                        'optimo' => $item->optimo,
-                        'funcional' => $item->funcional,
-                        'potencial' => $item->potencial,
-                        'obsoleto' => $item->obsoleto
+                        'optimo' => $item->optimo ?? 0,
+                        'funcional' => $item->funcional ?? 0,
+                        'potencialmente' => $item->potencialmente ?? 0,
+                        'obsoleto' => $item->obsoleto ?? 0
                     ]
                 ];
             });
@@ -334,6 +346,18 @@ class MatrizObsParametroController extends Controller
     public function getEstadisticasPorUbicacion()
     {
         try {
+            // Obtener rangos dinámicos desde parámetros (id_grupo = 3)
+            $rangos = MatrizObsParametro::where('id_grupo', 3)
+                ->orderBy('rango_i', 'asc')
+                ->get();
+
+            // Construir las condiciones SQL dinámicamente
+            $casesSQL = [];
+            foreach ($rangos as $rango) {
+                $nombre = strtolower(str_replace(' ', '_', $rango->nombre));
+                $casesSQL[$nombre] = "SUM(CASE WHEN ac.puntaje >= {$rango->rango_i} AND ac.puntaje <= {$rango->rango_f} THEN 1 ELSE 0 END) as {$nombre}";
+            }
+
             // Obtener estadísticas agrupadas por empresa, sucursal y sede
             $query = \DB::table('matzobs_activos_c as ac')
                 ->leftJoin('ent_empresas as e', 'ac.id_empresa', '=', 'e.id')
@@ -347,10 +371,10 @@ class MatrizObsParametroController extends Controller
                     'ac.id_sucursal',
                     'ac.id_sede',
                     \DB::raw('COUNT(*) as total'),
-                    \DB::raw('SUM(CASE WHEN ac.puntaje >= 80 THEN 1 ELSE 0 END) as optimo'),
-                    \DB::raw('SUM(CASE WHEN ac.puntaje >= 60 AND ac.puntaje < 80 THEN 1 ELSE 0 END) as funcional'),
-                    \DB::raw('SUM(CASE WHEN ac.puntaje >= 40 AND ac.puntaje < 60 THEN 1 ELSE 0 END) as potencial'),
-                    \DB::raw('SUM(CASE WHEN ac.puntaje < 40 THEN 1 ELSE 0 END) as obsoleto'),
+                    \DB::raw($casesSQL['obsoleto'] ?? 'SUM(CASE WHEN ac.puntaje = 0 THEN 1 ELSE 0 END) as obsoleto'),
+                    \DB::raw($casesSQL['potencialmente'] ?? 'SUM(CASE WHEN ac.puntaje > 0 AND ac.puntaje < 60 THEN 1 ELSE 0 END) as potencialmente'),
+                    \DB::raw($casesSQL['funcional'] ?? 'SUM(CASE WHEN ac.puntaje >= 60 AND ac.puntaje < 100 THEN 1 ELSE 0 END) as funcional'),
+                    \DB::raw($casesSQL['óptimo'] ?? 'SUM(CASE WHEN ac.puntaje = 100 THEN 1 ELSE 0 END) as optimo'),
                     \DB::raw('AVG(ac.puntaje) as promedio_puntaje')
                 )
                 ->whereNotNull('ac.puntaje'); // Asegurar que tenga puntaje calculado
@@ -389,16 +413,16 @@ class MatrizObsParametroController extends Controller
                     'total' => (int)$item->total,
                     'promedio_puntaje' => round($item->promedio_puntaje, 2),
                     'distribucion' => [
-                        'optimo' => (int)$item->optimo,
-                        'funcional' => (int)$item->funcional,
-                        'potencial' => (int)$item->potencial,
-                        'obsoleto' => (int)$item->obsoleto
+                        'optimo' => (int)($item->optimo ?? 0),
+                        'funcional' => (int)($item->funcional ?? 0),
+                        'potencialmente' => (int)($item->potencialmente ?? 0),
+                        'obsoleto' => (int)($item->obsoleto ?? 0)
                     ],
                     'porcentajes' => [
-                        'optimo' => $item->total > 0 ? round(($item->optimo / $item->total) * 100, 1) : 0,
-                        'funcional' => $item->total > 0 ? round(($item->funcional / $item->total) * 100, 1) : 0,
-                        'potencial' => $item->total > 0 ? round(($item->potencial / $item->total) * 100, 1) : 0,
-                        'obsoleto' => $item->total > 0 ? round(($item->obsoleto / $item->total) * 100, 1) : 0
+                        'optimo' => $item->total > 0 ? round((($item->optimo ?? 0) / $item->total) * 100, 1) : 0,
+                        'funcional' => $item->total > 0 ? round((($item->funcional ?? 0) / $item->total) * 100, 1) : 0,
+                        'potencialmente' => $item->total > 0 ? round((($item->potencialmente ?? 0) / $item->total) * 100, 1) : 0,
+                        'obsoleto' => $item->total > 0 ? round((($item->obsoleto ?? 0) / $item->total) * 100, 1) : 0
                     ]
                 ];
             });
