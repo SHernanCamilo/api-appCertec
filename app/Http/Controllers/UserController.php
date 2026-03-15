@@ -446,7 +446,7 @@ class UserController extends Controller
             // Procesar usuarios del tenant
             $usuariosDisponibles = [];
             foreach ($tenantUsers as $tenantUser) {
-                $email = $tenantUser['mail'] ?? $tenantUser['userPrincipalName'] ?? null;
+                $email = $tenantUser['userPrincipalName'] ?? $tenantUser['mail'] ?? null;
                 
                 if ($email && !in_array($email, $existingUsers)) {
                     $usuariosDisponibles[] = [
