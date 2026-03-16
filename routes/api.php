@@ -3,6 +3,7 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\EmpleadoController;
 
 /*
 |--------------------------------------------------------------------------
@@ -68,6 +69,11 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     
     Route::apiResource('users', App\Http\Controllers\UserController::class);
     Route::patch('users/{id}/cambiar-estado', [App\Http\Controllers\UserController::class, 'cambiarEstado']);
+
+    Route::get('empleados', [EmpleadoController::class, 'index']);
+    Route::post('empleados', [EmpleadoController::class, 'store']);
+    Route::put('empleados/{id}', [EmpleadoController::class, 'update']);
+    Route::delete('empleados/{id}', [EmpleadoController::class, 'destroy']);
     
     // Rutas de empresas
     Route::get('empresas-activas', [App\Http\Controllers\EmpresaController::class, 'activas']);

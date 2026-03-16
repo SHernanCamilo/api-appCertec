@@ -7,6 +7,130 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## API Empleados
+
+### Headers
+
+```
+Authorization: Bearer {token}
+Content-Type: application/json
+```
+
+### Listar empleados
+
+```
+GET /api/empleados?buscar=ana&id_empresa=1&id_cargo=2&estado=true
+```
+
+Response 200
+
+```
+[
+  {
+    "id": 1,
+    "id_empresa": 1,
+    "id_cargo": 2,
+    "numero_identificacion": "1079174991",
+    "nombre": "ROBINSON POLANIA GALINDO",
+    "email": null,
+    "tipo_identificacion": "CC",
+    "cargo": "REGENTE DE FARMACIA TIPO I",
+    "estado": true,
+    "empresa": {
+      "id": 1,
+      "nombre": "Farmaquirurgicos JM S.A.S"
+    },
+    "cargo_relacion": {
+      "id_cargo": 2,
+      "nombre_cargo": "REGENTE DE FARMACIA TIPO I"
+    }
+  }
+]
+```
+
+### Crear empleado
+
+```
+POST /api/empleados
+```
+
+Request
+
+```
+{
+  "id_empresa": 1,
+  "id_cargo": 2,
+  "numero_identificacion": "100200300",
+  "nombre": "Empleado Nuevo",
+  "email": "empleado@empresa.com",
+  "tipo_identificacion": "CC",
+  "cargo": "Analista",
+  "direccion": "Calle 123",
+  "telefono": "3001234567",
+  "estado": true
+}
+```
+
+Response 201
+
+```
+{
+  "message": "Empleado creado exitosamente",
+  "data": {
+    "id": 10,
+    "id_empresa": 1,
+    "id_cargo": 2,
+    "numero_identificacion": "100200300",
+    "nombre": "Empleado Nuevo",
+    "email": "empleado@empresa.com",
+    "tipo_identificacion": "CC",
+    "cargo": "Analista",
+    "estado": true
+  }
+}
+```
+
+### Actualizar empleado
+
+```
+PUT /api/empleados/10
+```
+
+Request
+
+```
+{
+  "nombre": "Empleado Actualizado",
+  "telefono": "3009998888"
+}
+```
+
+Response 200
+
+```
+{
+  "message": "Empleado actualizado exitosamente",
+  "data": {
+    "id": 10,
+    "nombre": "Empleado Actualizado"
+  }
+}
+```
+
+### Eliminar empleado
+
+```
+DELETE /api/empleados/10
+```
+
+Response 200
+
+```
+{
+  "message": "Empleado eliminado exitosamente"
+}
+```
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
