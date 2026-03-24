@@ -74,6 +74,9 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     Route::post('empleados', [EmpleadoController::class, 'store']);
     Route::put('empleados/{id}', [EmpleadoController::class, 'update']);
     Route::delete('empleados/{id}', [EmpleadoController::class, 'destroy']);
+
+    // Buscar si el usuario autenticado existe como tercero (por numero_identificacion)
+    Route::get('personas/empleado-actual', [EmpleadoController::class, 'buscarPorDocumentoActual']);
     
     // Rutas de empresas
     Route::get('empresas-activas', [App\Http\Controllers\EmpresaController::class, 'activas']);

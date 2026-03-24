@@ -4,33 +4,37 @@ namespace App\Services;
 
 use App\Models\Modulo;
 use App\Models\User;
-use App\Models\Perfil;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 class SidebarService
 {
-    /**
-     * Obtiene los módulos del sidebar para un usuario
-     * Incluye jerarquía completa y permisos básicos CRUD
-     *
-     * @param User $user
-     * @return array
-     */
+    // TTL del cache del sidebar por usuario (10 minutos)
+    private const CACHE_TTL = 600;
+
     public function getSidebarModules(User $user): array
     {
-        \Log::info('🔍 Iniciando getSidebarModules para usuario:', ['user_id' => $user->id, 'name' => $user->name]);
-        
-        // Cargar relaciones necesarias (incluyendo permisos extras)
-        $user->load(['rolesCustom.perfiles.modulo', 'rolesCustom.perfiles.permisos', 'empresas']);
-        
-        \Log::info('📋 Roles del usuario:', ['roles' => $user->rolesCustom->pluck('nombre')->toArray()]);
-        \Log::info('🏢 Empresas del usuario:', ['empresas' => $user->empresas->pluck('nombre')->toArray()]);
-        \Log::info('📊 Perfiles del usuario:', [
-            'total' => $user->rolesCustom->flatMap->perfiles->count(),
-            'modulos' => $user->rolesCustom->flatMap->perfiles->pluck('modulo.nombre')->unique()->toArray()
-        ]);
+        $cacheKey = "sidebar_user_{$user->id}";
 
-        // Obtener todos los módulos activos con jerarquía
+        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($user) {
+            return $this->buildSidebar($user);
+        });
+    }
+
+    /**
+     * Invalida el cache del sidebar de un usuario (llamar al cambiar roles/permisos)
+     */
+    public function clearCache(User $user): void
+    {
+        Cache::forget("sidebar_user_{$user->id}");
+    }
+
+    private function buildSidebar(User $user): array
+    {
+        // Una sola query con todas las relaciones necesarias
+        $user->loadMissing(['rolesCustom.perfiles.modulo', 'rolesCustom.perfiles.permisos']);
+
+        // Obtener todos los módulos activos con sus hijos en una sola query
         $modulos = Modulo::activos()
             ->with(['hijos' => function ($query) {
                 $query->activos()->orderBy('orden');
@@ -38,59 +42,92 @@ class SidebarService
             ->raiz()
             ->orderBy('orden')
             ->get();
-        
-        \Log::info('📦 Módulos raíz encontrados:', ['total' => $modulos->count(), 'nombres' => $modulos->pluck('nombre')->toArray()]);
 
-        // Construir jerarquía con permisos
-        $sidebar = $this->construirJerarquia($modulos, $user, 0);
-        
-        \Log::info('✅ Sidebar construido:', ['total_items' => count($sidebar)]);
+        // Pre-calcular permisos del usuario indexados por id_modulo (evita loops anidados)
+        $permisosPorModulo = $this->indexarPermisosPorModulo($user);
 
-        return $sidebar;
+        return $this->construirJerarquia($modulos, $permisosPorModulo, 0);
     }
 
     /**
-     * Construye la jerarquía de módulos recursivamente
-     *
-     * @param Collection $modulos
-     * @param User $user
-     * @param int $nivel
-     * @return array
+     * Indexa todos los permisos del usuario por id_modulo en una sola pasada.
+     * Evita el triple loop anidado original.
      */
-    private function construirJerarquia(Collection $modulos, User $user, int $nivel): array
+    private function indexarPermisosPorModulo(User $user): array
+    {
+        $index = []; // [modulo_id => ['tiene_acceso' => bool, 'crud' => [...], 'permisos_ids' => [...]]]
+
+        foreach ($user->rolesCustom as $rol) {
+            foreach ($rol->perfiles as $perfil) {
+                $moduloId = $perfil->id_modulo;
+
+                if (!isset($index[$moduloId])) {
+                    $index[$moduloId] = [
+                        'puede_leer'     => false,
+                        'puede_crear'    => false,
+                        'puede_editar'   => false,
+                        'puede_eliminar' => false,
+                        'permisos'       => [], // [modulo_id => [orden => bool]]
+                    ];
+                }
+
+                // Acumular CRUD
+                $index[$moduloId]['puede_leer']     = $index[$moduloId]['puede_leer']     || $perfil->puede_leer;
+                $index[$moduloId]['puede_crear']    = $index[$moduloId]['puede_crear']    || $perfil->puede_crear;
+                $index[$moduloId]['puede_editar']   = $index[$moduloId]['puede_editar']   || $perfil->puede_editar;
+                $index[$moduloId]['puede_eliminar'] = $index[$moduloId]['puede_eliminar'] || $perfil->puede_eliminar;
+
+                // Indexar permisos extras por módulo destino
+                foreach ($perfil->permisos as $permiso) {
+                    if (!$permiso->estado) continue;
+                    $pid = $permiso->id_modulo;
+                    if (!isset($index[$pid])) {
+                        $index[$pid] = [
+                            'puede_leer' => false, 'puede_crear' => false,
+                            'puede_editar' => false, 'puede_eliminar' => false,
+                            'permisos' => [],
+                        ];
+                    }
+                    $index[$pid]['permisos'][$permiso->orden] = true;
+                }
+            }
+        }
+
+        return $index;
+    }
+
+    private function construirJerarquia(Collection $modulos, array $permisosPorModulo, int $nivel): array
     {
         $resultado = [];
 
         foreach ($modulos as $modulo) {
-            // Verificar si el usuario tiene acceso al módulo
-            $tieneAcceso = $this->usuarioTieneAccesoModulo($user, $modulo);
-
-            // Obtener permisos básicos del usuario para este módulo
-            $permisosBasicos = $this->getPermisosBasicos($user, $modulo);
-
-            // Construir hijos recursivamente
             $hijos = [];
             if ($modulo->hijos && $modulo->hijos->count() > 0) {
-                $hijos = $this->construirJerarquia($modulo->hijos, $user, $nivel + 1);
+                $hijos = $this->construirJerarquia($modulo->hijos, $permisosPorModulo, $nivel + 1);
             }
 
-            // Si tiene hijos con acceso, el padre también debe tener acceso
+            $tieneAcceso = $this->tieneAcceso($modulo->id, $permisosPorModulo);
             $tieneAccesoFinal = $tieneAcceso || count($hijos) > 0;
 
-            // Solo incluir si tiene acceso o tiene hijos con acceso
             if ($tieneAccesoFinal) {
+                $crud = $permisosPorModulo[$modulo->id] ?? null;
                 $resultado[] = [
-                    'id' => $modulo->id,
-                    'nombre' => $modulo->nombre,
-                    'codigo' => $modulo->codigo,
-                    'icono' => $modulo->icono ?? 'bi-circle',
-                    'ruta' => $modulo->ruta,
-                    'orden' => $modulo->orden,
-                    'nivel' => $nivel,
+                    'id'              => $modulo->id,
+                    'nombre'          => $modulo->nombre,
+                    'codigo'          => $modulo->codigo,
+                    'icono'           => $modulo->icono ?? 'bi-circle',
+                    'ruta'            => $modulo->ruta,
+                    'orden'           => $modulo->orden,
+                    'nivel'           => $nivel,
                     'id_modulo_padre' => $modulo->id_modulo_padre,
-                    'tiene_acceso' => $tieneAccesoFinal, // Usar el acceso final
-                    'permisos_basicos' => $permisosBasicos,
-                    'hijos' => $hijos
+                    'tiene_acceso'    => $tieneAccesoFinal,
+                    'permisos_basicos' => [
+                        'puede_leer'     => $crud['puede_leer']     ?? false,
+                        'puede_crear'    => $crud['puede_crear']    ?? false,
+                        'puede_editar'   => $crud['puede_editar']   ?? false,
+                        'puede_eliminar' => $crud['puede_eliminar'] ?? false,
+                    ],
+                    'hijos' => $hijos,
                 ];
             }
         }
@@ -98,120 +135,33 @@ class SidebarService
         return $resultado;
     }
 
-    /**
-     * Verifica si el usuario tiene acceso a un módulo
-     *
-     * @param User $user
-     * @param Modulo $modulo
-     * @return bool
-     */
-    private function usuarioTieneAccesoModulo(User $user, Modulo $modulo): bool
+    private function tieneAcceso(int $moduloId, array $permisosPorModulo): bool
     {
-        // Verificar si el usuario tiene algún perfil para este módulo
-        foreach ($user->rolesCustom as $rol) {
-            foreach ($rol->perfiles as $perfil) {
-                // Verificar permisos extras del perfil (cualquier módulo)
-                if ($perfil->permisos && $perfil->permisos->count() > 0) {
-                    // Buscar permiso con orden = 0 (permiso -visible) para este módulo
-                    $tienePermisoVisible = $perfil->permisos
-                        ->where('id_modulo', $modulo->id)
-                        ->where('orden', 0)
-                        ->where('estado', true)
-                        ->count() > 0;
-                    
-                    if ($tienePermisoVisible) {
-                        \Log::debug("✅ Usuario tiene acceso a módulo '{$modulo->nombre}' via permiso orden=0 (-visible)");
-                        return true;
-                    }
-                }
-                
-                // Si el perfil es específico de este módulo, verificar permisos CRUD
-                if ($perfil->id_modulo == $modulo->id) {
-                    \Log::debug("🔍 Verificando perfil '{$perfil->nombre}' para módulo '{$modulo->nombre}'", [
-                        'puede_leer' => $perfil->puede_leer,
-                        'permisos_count' => $perfil->permisos ? $perfil->permisos->count() : 0
-                    ]);
-                    
-                    // Verificar que tenga al menos permiso de lectura
-                    if ($perfil->puede_leer) {
-                        \Log::debug("✅ Usuario tiene acceso a módulo '{$modulo->nombre}' via permiso CRUD");
-                        return true;
-                    }
-                    
-                    // Verificar si tiene otros permisos activos del módulo
-                    if ($perfil->permisos && $perfil->permisos->count() > 0) {
-                        $tienePermisoActivo = $perfil->permisos
-                            ->where('id_modulo', $modulo->id)
-                            ->where('estado', true)
-                            ->count() > 0;
-                        
-                        if ($tienePermisoActivo) {
-                            \Log::debug("✅ Usuario tiene acceso a módulo '{$modulo->nombre}' via permisos extras");
-                            return true;
-                        }
-                    }
-                }
-            }
+        if (!isset($permisosPorModulo[$moduloId])) {
+            return false;
         }
+        $data = $permisosPorModulo[$moduloId];
 
-        \Log::debug("❌ Usuario NO tiene acceso a módulo '{$modulo->nombre}'");
-        return false;
+        // Tiene permiso visible (orden=0) o permiso CRUD de lectura
+        return isset($data['permisos'][0]) || $data['puede_leer'];
     }
 
-    /**
-     * Obtiene los permisos básicos CRUD del usuario para un módulo
-     *
-     * @param User $user
-     * @param Modulo $modulo
-     * @return array
-     */
-    private function getPermisosBasicos(User $user, Modulo $modulo): array
-    {
-        $permisos = [
-            'puede_leer' => false,
-            'puede_crear' => false,
-            'puede_editar' => false,
-            'puede_eliminar' => false
-        ];
-
-        // Recorrer roles y perfiles del usuario
-        foreach ($user->rolesCustom as $rol) {
-            foreach ($rol->perfiles as $perfil) {
-                if ($perfil->id_modulo == $modulo->id) {
-                    // Acumular permisos (si tiene en algún perfil, lo tiene)
-                    $permisos['puede_leer'] = $permisos['puede_leer'] || $perfil->puede_leer;
-                    $permisos['puede_crear'] = $permisos['puede_crear'] || $perfil->puede_crear;
-                    $permisos['puede_editar'] = $permisos['puede_editar'] || $perfil->puede_editar;
-                    $permisos['puede_eliminar'] = $permisos['puede_eliminar'] || $perfil->puede_eliminar;
-                }
-            }
-        }
-
-        return $permisos;
-    }
-
-    /**
-     * Obtiene los módulos en formato plano (sin jerarquía)
-     * Útil para verificaciones rápidas
-     *
-     * @param User $user
-     * @return Collection
-     */
     public function getModulosPlanos(User $user): Collection
     {
         $modulos = collect();
+        $user->loadMissing(['rolesCustom.perfiles.modulo']);
 
         foreach ($user->rolesCustom as $rol) {
             foreach ($rol->perfiles as $perfil) {
                 if ($perfil->modulo && $perfil->puede_leer) {
                     $modulos->push([
-                        'id' => $perfil->modulo->id,
-                        'codigo' => $perfil->modulo->codigo,
-                        'nombre' => $perfil->modulo->nombre,
-                        'puede_leer' => $perfil->puede_leer,
-                        'puede_crear' => $perfil->puede_crear,
-                        'puede_editar' => $perfil->puede_editar,
-                        'puede_eliminar' => $perfil->puede_eliminar
+                        'id'              => $perfil->modulo->id,
+                        'codigo'          => $perfil->modulo->codigo,
+                        'nombre'          => $perfil->modulo->nombre,
+                        'puede_leer'      => $perfil->puede_leer,
+                        'puede_crear'     => $perfil->puede_crear,
+                        'puede_editar'    => $perfil->puede_editar,
+                        'puede_eliminar'  => $perfil->puede_eliminar,
                     ]);
                 }
             }

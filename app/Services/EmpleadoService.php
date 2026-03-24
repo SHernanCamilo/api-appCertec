@@ -25,15 +25,30 @@ class EmpleadoService
             $query->where('estado', filter_var($filters['estado'], FILTER_VALIDATE_BOOLEAN));
         }
 
-        if (!empty($filters['buscar'])) {
-            $query->where(function ($q) use ($filters) {
-                $q->where('nombre', 'like', '%' . $filters['buscar'] . '%')
-                    ->orWhere('numero_identificacion', 'like', '%' . $filters['buscar'] . '%')
-                    ->orWhere('email', 'like', '%' . $filters['buscar'] . '%');
+        $buscar = trim($filters['buscar'] ?? '');
+        $usaFulltext = false;
+
+        if (strlen($buscar) >= 3) {
+            // Usar FULLTEXT en nombre si está disponible (mucho más rápido que LIKE %...%)
+            // Fallback a LIKE solo para número de identificación y email
+            $query->where(function ($q) use ($buscar, &$usaFulltext) {
+                $q->whereRaw('MATCH(nombre) AGAINST(? IN BOOLEAN MODE)', ['"' . $buscar . '"'])
+                  ->orWhere('numero_identificacion', 'like', $buscar . '%')  // sin % al inicio = usa índice
+                  ->orWhere('email', 'like', $buscar . '%');
             });
+            $usaFulltext = true;
         }
 
-        return $query->orderBy('created_at', 'desc')->get();
+        $perPage = (int) ($filters['per_page'] ?? 20);
+        $perPage = min(max($perPage, 5), 100);
+
+        // simplePaginate evita el COUNT(*) costoso cuando hay búsqueda fulltext
+        // paginate normal cuando no hay búsqueda (el COUNT es rápido con índice)
+        if ($usaFulltext) {
+            return $query->orderBy('created_at', 'desc')->simplePaginate($perPage);
+        }
+
+        return $query->orderBy('created_at', 'desc')->paginate($perPage);
     }
 
     public function crear(array $data): Empleado
