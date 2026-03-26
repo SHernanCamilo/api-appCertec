@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services;
+namespace App\Services\Accounting;
 
 use App\Models\Empleado;
 use Illuminate\Support\Facades\DB;
@@ -13,11 +13,11 @@ class EmpleadoService
     {
         $query = Empleado::with(['empresa', 'cargoRelacion']);
 
-        if (!empty($filters['id_empresa'])) {
+        if (! empty($filters['id_empresa'])) {
             $query->where('id_empresa', $filters['id_empresa']);
         }
 
-        if (!empty($filters['id_cargo'])) {
+        if (! empty($filters['id_cargo'])) {
             $query->where('id_cargo', $filters['id_cargo']);
         }
 
@@ -32,9 +32,9 @@ class EmpleadoService
             // Usar FULLTEXT en nombre si está disponible (mucho más rápido que LIKE %...%)
             // Fallback a LIKE solo para número de identificación y email
             $query->where(function ($q) use ($buscar, &$usaFulltext) {
-                $q->whereRaw('MATCH(nombre) AGAINST(? IN BOOLEAN MODE)', ['"' . $buscar . '"'])
-                  ->orWhere('numero_identificacion', 'like', $buscar . '%')  // sin % al inicio = usa índice
-                  ->orWhere('email', 'like', $buscar . '%');
+                $q->whereRaw('MATCH(nombre) AGAINST(? IN BOOLEAN MODE)', ['"'.$buscar.'"'])
+                    ->orWhere('numero_identificacion', 'like', $buscar.'%')  // sin % al inicio = usa índice
+                    ->orWhere('email', 'like', $buscar.'%');
             });
             $usaFulltext = true;
         }
@@ -66,7 +66,7 @@ class EmpleadoService
             'estado' => 'nullable|boolean',
             'caso_glpi' => 'nullable|string|max:100',
             'usuario_crea_id' => 'nullable|exists:users,id',
-            'usuario_actualiza_id' => 'nullable|exists:users,id'
+            'usuario_actualiza_id' => 'nullable|exists:users,id',
         ]);
 
         if ($validator->fails()) {
@@ -90,9 +90,9 @@ class EmpleadoService
         $validator = Validator::make($data, [
             'id_empresa' => 'sometimes|required|exists:ent_empresas,id',
             'id_cargo' => 'sometimes|required|exists:config_cargo,id_cargo',
-            'numero_identificacion' => 'sometimes|required|string|max:50|unique:config_person_tercero,numero_identificacion,' . $id,
+            'numero_identificacion' => 'sometimes|required|string|max:50|unique:config_person_tercero,numero_identificacion,'.$id,
             'nombre' => 'sometimes|required|string|max:255',
-            'email' => 'nullable|email|max:255|unique:config_person_tercero,email,' . $id,
+            'email' => 'nullable|email|max:255|unique:config_person_tercero,email,'.$id,
             'tipo_identificacion' => 'sometimes|required|in:CC,CE,NIT,TI,PP,PEP',
             'unidad' => 'nullable|string|max:100',
             'direccion' => 'nullable|string|max:255',
@@ -100,7 +100,7 @@ class EmpleadoService
             'estado' => 'nullable|boolean',
             'caso_glpi' => 'nullable|string|max:100',
             'usuario_crea_id' => 'nullable|exists:users,id',
-            'usuario_actualiza_id' => 'nullable|exists:users,id'
+            'usuario_actualiza_id' => 'nullable|exists:users,id',
         ]);
 
         if ($validator->fails()) {

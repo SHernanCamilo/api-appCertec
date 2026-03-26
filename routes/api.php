@@ -3,7 +3,7 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
-use App\Http\Controllers\EmpleadoController;
+use App\Http\Controllers\Accounting\EmpleadoController;
 
 /*
 |--------------------------------------------------------------------------
@@ -70,14 +70,8 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     Route::apiResource('users', App\Http\Controllers\UserController::class);
     Route::patch('users/{id}/cambiar-estado', [App\Http\Controllers\UserController::class, 'cambiarEstado']);
 
-    Route::get('empleados', [EmpleadoController::class, 'index']);
-    Route::post('empleados', [EmpleadoController::class, 'store']);
-    Route::put('empleados/{id}', [EmpleadoController::class, 'update']);
-    Route::delete('empleados/{id}', [EmpleadoController::class, 'destroy']);
+    // Rutas de empleados → routes/Accounting/EmpleadosRouter.php // Rutas de empleados → routes/Accounting/EmpleadosRouter.php
 
-    // Buscar si el usuario autenticado existe como tercero (por numero_identificacion)
-    Route::get('personas/empleado-actual', [EmpleadoController::class, 'buscarPorDocumentoActual']);
-    
     // Rutas de empresas
     Route::get('empresas-activas', [App\Http\Controllers\EmpresaController::class, 'activas']);
     Route::apiResource('empresas', App\Http\Controllers\EmpresaController::class);
@@ -140,6 +134,8 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     });
 });
 
+// Rutas de Accounting (Empleados) → routes/Accounting/EmpleadosRouter.php
+require __DIR__ . '/Accounting/EmpleadosRouter.php';
 
 // Rutas de Matriz de Obsolescencia - Parámetros
 Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obsolescencia')->group(function () {
@@ -234,25 +230,8 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('variables')->group
     Route::get('/', [App\Http\Controllers\VariableController::class, 'index']);
 });
 
-// Rutas de Anticipos - Conceptos
-Route::middleware(['auth:api', 'check.user.active'])->prefix('anticipos')->group(function () {
-    // Tipos de anticipos
-    Route::get('/tipos', [App\Http\Controllers\AnticipoConceptoController::class, 'getTipos']);
-    
-    // Clases por tipo
-    Route::get('/tipos/{tipoId}/clases', [App\Http\Controllers\AnticipoConceptoController::class, 'getClasesPorTipo']);
-    
-    // Modalidades por clase
-    Route::get('/clases/{claseId}/modalidades', [App\Http\Controllers\AnticipoConceptoController::class, 'getModalidadesPorClase']);
-    
-    // CRUD de conceptos
-    Route::get('/conceptos', [App\Http\Controllers\AnticipoConceptoController::class, 'index']);
-    Route::post('/conceptos', [App\Http\Controllers\AnticipoConceptoController::class, 'store']);
-    Route::get('/conceptos/{id}', [App\Http\Controllers\AnticipoConceptoController::class, 'show']);
-    Route::put('/conceptos/{id}', [App\Http\Controllers\AnticipoConceptoController::class, 'update']);
-    Route::delete('/conceptos/{id}', [App\Http\Controllers\AnticipoConceptoController::class, 'destroy']);
-    Route::patch('/conceptos/{id}/toggle-estado', [App\Http\Controllers\AnticipoConceptoController::class, 'toggleEstado']);
-});
+// Rutas de Anticipos → routes/Finance/AnticiposRouter.php
+require __DIR__ . '/Finance/AnticiposRouter.php';
 
 // Rutas de GLPI API Integration
 Route::middleware(['auth:api', 'check.user.active'])->prefix('glpi')->group(function () {

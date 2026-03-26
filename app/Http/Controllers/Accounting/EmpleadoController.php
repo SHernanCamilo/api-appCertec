@@ -1,10 +1,11 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Http\Controllers\Accounting;
 
+use App\Http\Controllers\Controller;
 use App\Models\UsuarioContexto;
 use App\Models\Empleado;
-use App\Services\EmpleadoService;
+use App\Services\Accounting\EmpleadoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
