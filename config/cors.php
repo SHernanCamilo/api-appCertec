@@ -22,7 +22,7 @@ return [
        'http://localhost:4200', 
        'http://127.0.0.1:4200', 
        'http://192.168.1.9:8000',
-       'https://jade.medlisser.com.co'
+       'https://jade.medilaser.com.co'
    ],
    'allowed_headers' => ['*'],
    'exposed_headers' => [],
