@@ -19,6 +19,6 @@ class AntiFlujoPaso extends Model
 
     public function aprobadores()
     {
-        return $this->hasMany(AntiFluj oAprobador::class, 'id_flujo_paso');
+        return $this->hasMany(AntiFlujoAprobador::class, 'id_flujo_paso');
     }
 }

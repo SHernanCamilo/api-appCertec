@@ -153,32 +153,10 @@ return new class extends Migration
                 $table->index('nivel_jerarquico');
             });
         }
-
-        /**
-         * Agrega id_flujo a la solicitud (se asigna al crear la solicitud).
-         */
-        Schema::table('anti_solicitudes', function (Blueprint $table) {
-            $table->unsignedBigInteger('id_flujo')->nullable()->after('numero_solicitud');
-            $table->unsignedBigInteger('id_paso_actual')->nullable()->comment('Paso en el que está actualmente');
-
-            $table->foreign('id_flujo')->references('id')->on('anti_flujos')->onDelete('set null');
-            $table->foreign('id_paso_actual')->references('id')->on('anti_flujo_pasos')->onDelete('set null');
-
-            $table->index('id_flujo');
-            $table->index('id_paso_actual');
-        });
     }
 
     public function down(): void
     {
-        Schema::table('anti_solicitudes', function (Blueprint $table) {
-            $table->dropForeign(['id_flujo']);
-            $table->dropForeign(['id_paso_actual']);
-            $table->dropIndex(['id_flujo']);
-            $table->dropIndex(['id_paso_actual']);
-            $table->dropColumn(['id_flujo', 'id_paso_actual']);
-        });
-
         Schema::table('config_ubi_sucursales', function (Blueprint $table) {
             if (Schema::hasColumn('config_ubi_sucursales', 'prefijo')) {
                 $table->dropIndex(['prefijo']);

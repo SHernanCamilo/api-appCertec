@@ -292,7 +292,7 @@ class AnticipoController extends Controller
      */
     public function ciudades(): JsonResponse
     {
-        $ciudades = \App\Models\Finance\AntiCiudad::activos()
+        $ciudades = \App\Models\Finance\AntiCiudad::activas()
             ->orderBy('nombre')
             ->get();
 

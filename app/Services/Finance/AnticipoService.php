@@ -11,6 +11,7 @@ use App\Models\Empleado;
 use App\Models\Finance\AntiSolicitud;
 use App\Models\Finance\AntiSolicitudItem;
 use App\Models\Finance\AntiCiudad;
+use App\Models\Workflow\WfInstancia;
 use App\Services\Workflow\WorkflowResolver;
 use App\Services\Workflow\WorkflowExecutor;
 use App\Services\Workflow\WorkflowNotifier;
@@ -71,7 +72,7 @@ class AnticipoService
         return AntiConcepto::where('id_modalidad', $idModalidad)
             ->activos()
             ->with(['modalidad.clase.tipo'])
-            ->orderBy('nombre')
+            ->orderBy('id')
             ->get();
     }
 
@@ -130,9 +131,10 @@ class AnticipoService
 
         $topeAlimentacionDiario = $reglasAlimentacion->sum('valor_tope');
 
-        // Obtener reglas de transporte según tipo de ciudad (concepto ID 2)
+        // Obtener regla de transporte según tipo de ciudad (concepto ID 2)
+        // Las reglas de transporte tienen nivel=0 y descripción "Transporte Tipo A/B/C"
         $reglaTransporte = AntiRegla::where('id_concepto', 2)
-            ->paraNivel($nivel)
+            ->where('descripcion', 'like', "%Tipo {$ciudad->tipo_ciudad}%")
             ->activos()
             ->first();
 
@@ -302,9 +304,14 @@ class AnticipoService
         return DB::transaction(function () use ($id, $userId, $comentario, $montoAutorizado) {
             $solicitud = AntiSolicitud::findOrFail($id);
 
+            // Buscar la instancia de workflow activa para esta solicitud
+            $instancia = WfInstancia::where('modulo_record_id', $solicitud->id)
+                ->enProgreso()
+                ->firstOrFail();
+
             // Aprobar en el motor de flujos
             $instancia = $this->workflowExecutor->aprobar(
-                $solicitud->id, // Asumiendo que id_solicitud = id_instancia (ajustar según tu diseño)
+                $instancia->id,
                 $userId,
                 $comentario,
                 $montoAutorizado
@@ -336,9 +343,14 @@ class AnticipoService
         return DB::transaction(function () use ($id, $userId, $comentario) {
             $solicitud = AntiSolicitud::findOrFail($id);
 
+            // Buscar la instancia de workflow activa para esta solicitud
+            $instancia = WfInstancia::where('modulo_record_id', $solicitud->id)
+                ->enProgreso()
+                ->firstOrFail();
+
             // Rechazar en el motor de flujos
             $instancia = $this->workflowExecutor->rechazar(
-                $solicitud->id,
+                $instancia->id,
                 $userId,
                 $comentario
             );
