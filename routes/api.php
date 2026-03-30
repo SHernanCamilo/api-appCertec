@@ -231,7 +231,14 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('variables')->group
 });
 
 // Rutas de Anticipos → routes/Finance/AnticiposRouter.php
-require __DIR__ . '/Finance/AnticiposRouter.php';
+Route::middleware(['auth:api', 'check.user.active'])->prefix('anticipos')->group(function () {
+    require __DIR__ . '/Finance/AnticiposRouter.php';
+});
+
+// Rutas de Workflow (Administración de Flujos) → routes/Workflow/WorkflowRouter.php
+Route::middleware(['auth:api', 'check.user.active'])->prefix('workflow')->group(function () {
+    require __DIR__ . '/Workflow/WorkflowRouter.php';
+});
 
 // Rutas de GLPI API Integration
 Route::middleware(['auth:api', 'check.user.active'])->prefix('glpi')->group(function () {
