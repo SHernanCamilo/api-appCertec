@@ -709,6 +709,13 @@ class SincronizarActivosGlpi extends Command
             
             // Extraer datos para tabla D (detalles técnicos)
             $activoD = $this->mapActivoD($computer);
+            
+            // LOG TEMPORAL: Verificar valores
+            Log::channel('glpi_sync')->info("Valores extraídos", [
+                'id_glpi' => $computer['id'],
+                'usuario_glpi' => $activoC['usuario_glpi'],
+                'sistema_operativo' => $activoD['sistema_operativo']
+            ]);
 
             if ($existingC) {
                 // Si existe, verificar si necesita actualización
@@ -721,6 +728,7 @@ class SincronizarActivosGlpi extends Command
                         $existingC->agente !== $activoC['agente'] ||
                         $existingC->serial !== $activoC['serial'] ||
                         $existingC->ubicacion !== $activoC['ubicacion'] ||
+                        $existingC->usuario_glpi !== $activoC['usuario_glpi'] ||
                         // Verificar si han pasado más días de los configurados desde la última sincronización
                         !$existingC->date_u_sincronizacion || 
                         $existingC->date_u_sincronizacion->diffInDays(now()) >= $syncDays
@@ -739,35 +747,98 @@ class SincronizarActivosGlpi extends Command
                     return 'skipped';
                 }
                 
-                // Actualizar registros existentes
-                $existingC->update($activoC);
+                // Actualizar registros existentes usando DB directo para evitar problemas con Eloquent
+                DB::table('matzobs_activos_c')
+                    ->where('id', $existingC->id)
+                    ->update([
+                        'usuario_glpi' => $activoC['usuario_glpi'],
+                        'nombre_equipo' => $activoC['nombre_equipo'],
+                        'id_empresa' => $activoC['id_empresa'],
+                        'id_sede' => $activoC['id_sede'],
+                        'id_sucursal' => $activoC['id_sucursal'],
+                        'agente' => $activoC['agente'],
+                        'placa' => $activoC['placa'],
+                        'serial' => $activoC['serial'],
+                        'ubicacion' => $activoC['ubicacion'],
+                        'puntaje' => $activoC['puntaje'],
+                        'usuario_modificacion' => $activoC['usuario_modificacion'],
+                        'date_u_sincronizacion' => $activoC['date_u_sincronizacion'],
+                        'updated_at' => now()
+                    ]);
                 
-                if ($existingC->detalles) {
-                    $existingC->detalles->update($activoD);
+                // Actualizar o crear ActivoD
+                $existingD = MatzobsActivosD::where('activo_c_id', $existingC->id)->first();
+                
+                if ($existingD) {
+                    DB::table('matzobs_activos_d')
+                        ->where('activo_c_id', $existingC->id)
+                        ->update([
+                            'sistema_operativo' => $activoD['sistema_operativo'],
+                            'marca' => $activoD['marca'],
+                            'tipo' => $activoD['tipo'],
+                            'referencia' => $activoD['referencia'],
+                            'tamano_ram' => $activoD['tamano_ram'],
+                            'generacion_ram' => $activoD['generacion_ram'],
+                            'procesador' => $activoD['procesador'],
+                            'numero_procesador' => $activoD['numero_procesador'],
+                            'tipo_disco' => $activoD['tipo_disco'],
+                            'tamano_disco' => $activoD['tamano_disco'],
+                            'interfaz_conexion' => $activoD['interfaz_conexion'],
+                            'updated_at' => now()
+                        ]);
                 } else {
                     $activoD['activo_c_id'] = $existingC->id;
                     MatzobsActivosD::create($activoD);
                 }
                 
-                Log::channel('glpi_sync')->debug("Activo actualizado", [
+                Log::channel('glpi_sync')->info("Activo actualizado", [
                     'id_glpi' => $computer['id'],
-                    'nombre' => $computer['name'],
-                    'forced' => $force
+                    'nombre' => $computer['name']
                 ]);
                 
                 DB::commit();
                 return 'updated';
             } else {
-                // Crear nuevos registros
-                $newActivoC = MatzobsActivosC::create($activoC);
+                // Crear nuevos registros usando DB directo
+                $activoCId = DB::table('matzobs_activos_c')->insertGetId([
+                    'id_activo_glpi' => $activoC['id_activo_glpi'],
+                    'nombre_equipo' => $activoC['nombre_equipo'],
+                    'id_empresa' => $activoC['id_empresa'],
+                    'id_sede' => $activoC['id_sede'],
+                    'id_sucursal' => $activoC['id_sucursal'],
+                    'agente' => $activoC['agente'],
+                    'placa' => $activoC['placa'],
+                    'serial' => $activoC['serial'],
+                    'ubicacion' => $activoC['ubicacion'],
+                    'usuario_glpi' => $activoC['usuario_glpi'],
+                    'puntaje' => $activoC['puntaje'],
+                    'usuario_modificacion' => $activoC['usuario_modificacion'],
+                    'date_u_sincronizacion' => $activoC['date_u_sincronizacion'],
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
                 
-                $activoD['activo_c_id'] = $newActivoC->id;
-                MatzobsActivosD::create($activoD);
+                DB::table('matzobs_activos_d')->insert([
+                    'activo_c_id' => $activoCId,
+                    'marca' => $activoD['marca'],
+                    'tipo' => $activoD['tipo'],
+                    'referencia' => $activoD['referencia'],
+                    'tamano_ram' => $activoD['tamano_ram'],
+                    'generacion_ram' => $activoD['generacion_ram'],
+                    'procesador' => $activoD['procesador'],
+                    'numero_procesador' => $activoD['numero_procesador'],
+                    'tipo_disco' => $activoD['tipo_disco'],
+                    'tamano_disco' => $activoD['tamano_disco'],
+                    'interfaz_conexion' => $activoD['interfaz_conexion'],
+                    'sistema_operativo' => $activoD['sistema_operativo'],
+                    'created_at' => now(),
+                    'updated_at' => now()
+                ]);
                 
-                Log::channel('glpi_sync')->debug("Activo creado", [
+                Log::channel('glpi_sync')->info("Activo creado", [
                     'id_glpi' => $computer['id'],
                     'nombre' => $computer['name'],
-                    'id_local' => $newActivoC->id
+                    'id_local' => $activoCId
                 ]);
                 
                 DB::commit();
@@ -785,8 +856,12 @@ class SincronizarActivosGlpi extends Command
         // Extraer el TAG del agente
         $agentTag = $this->extractAgentTag($computer);
         
+        // Obtener nombre del equipo para validar nomenclatura
+        $nombreEquipo = $computer['name'] ?? 'Sin nombre';
+        
         // Buscar parámetros del agente (empresa, sede, sucursal) en la tabla matzobs_agentes
-        $agentParams = $this->getAgentParameters($agentTag, $stats);
+        // Ahora también valida la nomenclatura contra el nombre del equipo
+        $agentParams = $this->getAgentParameters($agentTag, $nombreEquipo, $stats);
         
         // Extraer ubicación y convertir "0" a null
         $ubicacion = $computer['locations_id'] ?? $computer['locations_id_name'] ?? $computer['location'] ?? null;
@@ -794,9 +869,12 @@ class SincronizarActivosGlpi extends Command
             $ubicacion = null;
         }
         
+        // Extraer usuario de GLPI
+        $usuarioGlpi = $this->extractUserName($computer);
+        
         return [
             'id_activo_glpi' => $computer['id'],
-            'nombre_equipo' => $computer['name'] ?? 'Sin nombre',
+            'nombre_equipo' => $nombreEquipo,
             'id_empresa' => $agentParams['id_empresa'],
             'id_sede' => $agentParams['id_sede'],
             'id_sucursal' => $agentParams['id_sucursal'],
@@ -804,6 +882,7 @@ class SincronizarActivosGlpi extends Command
             'placa' => $computer['comment'] ?? null,
             'serial' => $computer['serial'] ?? null,
             'ubicacion' => $ubicacion,
+            'usuario_glpi' => $usuarioGlpi,
             'puntaje' => 0.00, // Valor inicial
             'usuario_modificacion' => 'GLPI_SYNC', // Identificar que fue sincronizado
             'date_u_sincronizacion' => now()
@@ -812,9 +891,186 @@ class SincronizarActivosGlpi extends Command
     
     /**
      * Obtiene los parámetros del agente (empresa, sede, sucursal) desde la tabla matzobs_agentes
-     * Si no encuentra el TAG, usa valores por defecto
+     * Busca por TAG y valida que la nomenclatura coincida con las iniciales del nombre del equipo
+     * Si no encuentra coincidencia, usa valores por defecto
      */
-    private function getAgentParameters($tag, &$stats = null)
+    private function getAgentParameters($tag, $nombreEquipo, &$stats = null)
+    {
+        // Crear clave de cache que incluye tag y nomenclatura extraída del nombre
+        $nomenclaturaEquipo = $this->extractNomenclatura($nombreEquipo);
+        $cacheKey = $tag . '_' . $nomenclaturaEquipo;
+        
+        // Verificar cache primero
+        if (isset($this->agentParamsCache[$cacheKey])) {
+            $cached = $this->agentParamsCache[$cacheKey];
+            // Actualizar estadísticas si se proporcionan
+            if ($stats !== null && isset($cached['found'])) {
+                if ($cached['found']) {
+                    $stats['agents_found']++;
+                } else {
+                    $stats['agents_not_found']++;
+                }
+            }
+            return $cached;
+        }
+        
+        try {
+            // Buscar agentes con el mismo TAG
+            $agentes = MatrizObsAgente::where('tag', $tag)->get();
+            
+            if ($agentes->isEmpty()) {
+                // TAG no encontrado
+                return $this->getDefaultAgentParams($tag, $nomenclaturaEquipo, $cacheKey, $stats, 'TAG no encontrado');
+            }
+            
+            // Si solo hay un agente con ese TAG, usarlo directamente
+            if ($agentes->count() === 1) {
+                $agente = $agentes->first();
+                
+                // Validar que la nomenclatura del equipo coincida con la del agente
+                if ($this->validateNomenclatura($nomenclaturaEquipo, $agente->nomenclatura)) {
+                    return $this->cacheAndReturnAgentParams($agente, $cacheKey, $stats, true);
+                } else {
+                    Log::channel('glpi_sync')->warning("Nomenclatura no coincide para TAG '{$tag}'", [
+                        'tag' => $tag,
+                        'equipo' => $nombreEquipo,
+                        'nomenclatura_equipo' => $nomenclaturaEquipo,
+                        'nomenclatura_agente' => $agente->nomenclatura
+                    ]);
+                    return $this->getDefaultAgentParams($tag, $nomenclaturaEquipo, $cacheKey, $stats, 'Nomenclatura no coincide');
+                }
+            }
+            
+            // Si hay múltiples agentes con el mismo TAG, buscar por nomenclatura
+            foreach ($agentes as $agente) {
+                if ($this->validateNomenclatura($nomenclaturaEquipo, $agente->nomenclatura)) {
+                    Log::channel('glpi_sync')->debug("Agente encontrado por TAG y nomenclatura", [
+                        'tag' => $tag,
+                        'equipo' => $nombreEquipo,
+                        'nomenclatura_equipo' => $nomenclaturaEquipo,
+                        'nomenclatura_agente' => $agente->nomenclatura,
+                        'id_empresa' => $agente->id_empresa
+                    ]);
+                    return $this->cacheAndReturnAgentParams($agente, $cacheKey, $stats, true);
+                }
+            }
+            
+            // Si llegamos aquí, hay agentes con el TAG pero ninguno coincide con la nomenclatura
+            Log::channel('glpi_sync')->warning("TAG '{$tag}' encontrado pero ninguna nomenclatura coincide", [
+                'tag' => $tag,
+                'equipo' => $nombreEquipo,
+                'nomenclatura_equipo' => $nomenclaturaEquipo,
+                'agentes_disponibles' => $agentes->pluck('nomenclatura')->toArray()
+            ]);
+            
+            return $this->getDefaultAgentParams($tag, $nomenclaturaEquipo, $cacheKey, $stats, 'Nomenclatura no encontrada');
+            
+        } catch (\Exception $e) {
+            Log::channel('glpi_sync')->error("Error buscando parámetros de agente", [
+                'tag' => $tag,
+                'equipo' => $nombreEquipo,
+                'error' => $e->getMessage()
+            ]);
+            
+            return $this->getDefaultAgentParams($tag, $nomenclaturaEquipo, $cacheKey, $stats, 'Error en búsqueda');
+        }
+    }
+    
+    /**
+     * Extrae la nomenclatura (iniciales) del nombre del equipo
+     * Busca las primeras letras antes del primer guión o número
+     */
+    private function extractNomenclatura($nombreEquipo)
+    {
+        // Convertir a mayúsculas
+        $nombre = strtoupper(trim($nombreEquipo));
+        
+        // Extraer las iniciales antes del primer guión, espacio o número
+        if (preg_match('/^([A-Z]+)/', $nombre, $matches)) {
+            return $matches[1];
+        }
+        
+        return '';
+    }
+    
+    /**
+     * Valida si la nomenclatura del equipo coincide con la del agente
+     */
+    private function validateNomenclatura($nomenclaturaEquipo, $nomenclaturaAgente)
+    {
+        if (empty($nomenclaturaEquipo) || empty($nomenclaturaAgente)) {
+            return false;
+        }
+        
+        // Convertir ambas a mayúsculas para comparación
+        $nomenclaturaEquipo = strtoupper(trim($nomenclaturaEquipo));
+        $nomenclaturaAgente = strtoupper(trim($nomenclaturaAgente));
+        
+        // Verificar si el nombre del equipo comienza con la nomenclatura del agente
+        return strpos($nomenclaturaEquipo, $nomenclaturaAgente) === 0;
+    }
+    
+    /**
+     * Cachea y retorna los parámetros del agente
+     */
+    private function cacheAndReturnAgentParams($agente, $cacheKey, &$stats, $found)
+    {
+        $params = [
+            'id_empresa' => $agente->id_empresa,
+            'id_sede' => $agente->id_sede,
+            'id_sucursal' => $agente->id_sucursal,
+            'found' => $found
+        ];
+        
+        // Guardar en cache
+        $this->agentParamsCache[$cacheKey] = $params;
+        
+        // Actualizar estadísticas
+        if ($stats !== null) {
+            if ($found) {
+                $stats['agents_found']++;
+            } else {
+                $stats['agents_not_found']++;
+            }
+        }
+        
+        return $params;
+    }
+    
+    /**
+     * Retorna parámetros por defecto cuando no se encuentra el agente
+     */
+    private function getDefaultAgentParams($tag, $nomenclatura, $cacheKey, &$stats, $reason)
+    {
+        $defaultParams = [
+            'id_empresa' => null,
+            'id_sede' => null,
+            'id_sucursal' => null,
+            'found' => false
+        ];
+        
+        // Guardar en cache
+        $this->agentParamsCache[$cacheKey] = $defaultParams;
+        
+        // Actualizar estadísticas
+        if ($stats !== null) {
+            $stats['agents_not_found']++;
+        }
+        
+        Log::channel('glpi_sync')->warning("Usando valores por defecto para agente", [
+            'tag' => $tag,
+            'nomenclatura' => $nomenclatura,
+            'reason' => $reason
+        ]);
+        
+        return $defaultParams;
+    }
+    
+    /**
+     * DEPRECATED: Método antiguo mantenido por compatibilidad
+     * Obtiene los parámetros del agente solo por TAG (sin validar nomenclatura)
+     */
+    private function getAgentParametersOld($tag, &$stats = null)
     {
         // Verificar cache primero
         if (isset($this->agentParamsCache[$tag])) {
@@ -906,6 +1162,9 @@ class SincronizarActivosGlpi extends Command
 
     private function mapActivoD($computer)
     {
+        // Extraer sistema operativo
+        $sistemaOperativo = $this->extractOperatingSystem($computer);
+        
         return [
             'marca' => $this->extractManufacturer($computer),
             'tipo' => $this->extractType($computer),
@@ -916,7 +1175,8 @@ class SincronizarActivosGlpi extends Command
             'numero_procesador' => $this->extractProcessorNumber($computer),
             'tipo_disco' => $this->extractDiskType($computer),
             'tamano_disco' => $this->extractDiskSize($computer),
-            'interfaz_conexion' => $this->extractDiskInterface($computer)
+            'interfaz_conexion' => $this->extractDiskInterface($computer),
+            'sistema_operativo' => $sistemaOperativo
         ];
     }
 
@@ -1042,6 +1302,127 @@ class SincronizarActivosGlpi extends Command
     private function extractManufacturer($computer)
     {
         return $computer['manufacturers_id'] ?? $computer['manufacturers_id_name'] ?? null;
+    }
+
+    /**
+     * Extrae el nombre del usuario desde GLPI usando llamadas a la API
+     * Extrae el ID numérico del segundo href de User en el array de links
+     * 
+     * @param array $computer Datos del equipo desde GLPI
+     * @return string|null Nombre completo del usuario (firstname + realname)
+     */
+    private function extractUserName($computer)
+    {
+        $userId = null;
+        
+        // Buscar en el array de links el segundo href que contiene "User"
+        // El campo users_id trae el username (string), no el ID numérico
+        if (isset($computer['links']) && is_array($computer['links'])) {
+            $userLinks = [];
+            foreach ($computer['links'] as $link) {
+                if (isset($link['rel']) && $link['rel'] === 'User' && isset($link['href'])) {
+                    $userLinks[] = $link['href'];
+                }
+            }
+            
+            // Tomar el segundo link de User (índice 1) - este es el usuario real, no el técnico
+            if (count($userLinks) >= 2) {
+                $userHref = $userLinks[1];
+                if (preg_match('/\/User\/(\d+)/', $userHref, $matches)) {
+                    $userId = $matches[1];
+                }
+            } elseif (count($userLinks) === 1) {
+                $userHref = $userLinks[0];
+                if (preg_match('/\/User\/(\d+)/', $userHref, $matches)) {
+                    $userId = $matches[1];
+                }
+            }
+        }
+        
+        if (!$userId) {
+            return null;
+        }
+        
+        try {
+            $userEndpoint = "/User/{$userId}";
+            $userData = $this->apiCallWithRetry(function() use ($userEndpoint) {
+                return $this->glpiService->get($userEndpoint);
+            });
+            
+            if (empty($userData) || !is_array($userData)) {
+                return null;
+            }
+            
+            $firstname = $userData['firstname'] ?? '';
+            $realname = $userData['realname'] ?? '';
+            $fullName = trim($firstname . ' ' . $realname);
+            
+            return !empty($fullName) ? $fullName : null;
+            
+        } catch (\Exception $e) {
+            Log::channel('glpi_sync')->warning("Error extrayendo usuario", [
+                'computer_id' => $computer['id'] ?? 'unknown',
+                'users_id' => $userId,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Extrae el sistema operativo desde GLPI usando llamadas a la API
+     * 
+     * @param array $computer Datos del equipo desde GLPI
+     * @return string|null Sistema operativo
+     */
+    private function extractOperatingSystem($computer)
+    {
+        $computerId = $computer['id'] ?? null;
+        
+        if (!$computerId) {
+            return null;
+        }
+        
+        try {
+            // Paso 1: Obtener Item_OperatingSystem del equipo
+            $itemOsEndpoint = "/Computer/{$computerId}/Item_OperatingSystem";
+            $itemOsData = $this->apiCallWithRetry(function() use ($itemOsEndpoint) {
+                return $this->glpiService->get($itemOsEndpoint);
+            });
+            
+            if (empty($itemOsData) || !is_array($itemOsData)) {
+                return null;
+            }
+            
+            // Obtener el primer sistema operativo
+            $itemOs = is_array($itemOsData[0]) ? $itemOsData[0] : $itemOsData;
+            $operatingSystemId = $itemOs['operatingsystems_id'] ?? null;
+            
+            if (!$operatingSystemId || $operatingSystemId === '0' || $operatingSystemId === 0) {
+                return null;
+            }
+            
+            // Paso 2: Obtener el nombre del sistema operativo
+            $osEndpoint = "/OperatingSystem/{$operatingSystemId}";
+            $osData = $this->apiCallWithRetry(function() use ($osEndpoint) {
+                return $this->glpiService->get($osEndpoint);
+            });
+            
+            if (empty($osData) || !is_array($osData)) {
+                return null;
+            }
+            
+            $osName = $osData['name'] ?? null;
+            
+            return (!empty($osName) && $osName !== '0') ? $osName : null;
+            
+        } catch (\Exception $e) {
+            Log::channel('glpi_sync')->warning("Error extrayendo sistema operativo", [
+                'computer_id' => $computerId,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
     }
 
     private function extractType($computer)
@@ -1777,5 +2158,4 @@ class SincronizarActivosGlpi extends Command
         cache()->put($this->syncId . '_message', $errorMessage, 3600);
         cache()->put($this->syncId . '_error_at', now()->toISOString(), 3600);
     }
-
 }

@@ -34,6 +34,7 @@ class MatrizObsActivoC extends Model
         'placa',
         'serial',
         'ubicacion',
+        'usuario_glpi',
         'puntaje',
         'usuario_modificacion',
         'date_u_sincronizacion',

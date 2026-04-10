@@ -44,6 +44,7 @@ class MatrizObsActivoD extends Model
         'tamano_disco',
         'interfaz_conexion',
         'valoracion_disco',
+        'sistema_operativo',
         'incidencias_6_meses',
     ];
 

@@ -20,6 +20,7 @@ class MatrizObsAgente extends Model
      */
     protected $fillable = [
         'tag',
+        'nomenclatura',
         'id_empresa',
         'id_sucursal',
         'id_sede',

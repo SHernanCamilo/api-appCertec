@@ -36,10 +36,16 @@ class MatrizObsAgenteController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'tag' => 'required|string|max:100|unique:matzobs_agentes,tag',
+            'tag' => 'required|string|max:100',
+            'nomenclatura' => 'required|string|min:2|max:10|regex:/^[A-Z0-9]+$/',
             'id_empresa' => 'required|exists:ent_empresas,id',
             'id_sucursal' => 'required|exists:config_ubi_sucursales,id',
             'id_sede' => 'nullable|exists:config_ubi_sede,id',
+        ], [
+            'nomenclatura.required' => 'La nomenclatura es requerida',
+            'nomenclatura.min' => 'La nomenclatura debe tener al menos 2 caracteres',
+            'nomenclatura.max' => 'La nomenclatura no puede tener más de 10 caracteres',
+            'nomenclatura.regex' => 'La nomenclatura solo puede contener letras mayúsculas y números',
         ]);
 
         if ($validator->fails()) {
@@ -95,10 +101,16 @@ class MatrizObsAgenteController extends Controller
     public function update(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
-            'tag' => 'sometimes|required|string|max:100|unique:matzobs_agentes,tag,' . $id,
+            'tag' => 'sometimes|required|string|max:100',
+            'nomenclatura' => 'sometimes|required|string|min:2|max:10|regex:/^[A-Z0-9]+$/',
             'id_empresa' => 'sometimes|required|exists:ent_empresas,id',
             'id_sucursal' => 'sometimes|required|exists:config_ubi_sucursales,id',
             'id_sede' => 'nullable|exists:config_ubi_sede,id',
+        ], [
+            'nomenclatura.required' => 'La nomenclatura es requerida',
+            'nomenclatura.min' => 'La nomenclatura debe tener al menos 2 caracteres',
+            'nomenclatura.max' => 'La nomenclatura no puede tener más de 10 caracteres',
+            'nomenclatura.regex' => 'La nomenclatura solo puede contener letras mayúsculas y números',
         ]);
 
         if ($validator->fails()) {
