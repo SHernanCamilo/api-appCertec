@@ -21,23 +21,23 @@ Route::middleware(['auth:api'])->group(function () {
     // GESTIÓN DE SOLICITUDES
     // ========================================================================
     Route::prefix('solicitudes')->group(function () {
-        // Listar solicitudes
         Route::get('/', [AnticipoController::class, 'listar']);
-        
-        // Crear solicitud
         Route::post('/', [AnticipoController::class, 'crear']);
-        
-        // Ver detalle
         Route::get('/{id}', [AnticipoController::class, 'ver']);
         
-        // Aprobar solicitud
+        // Fase aprobación
         Route::post('/{id}/aprobar', [AnticipoController::class, 'aprobar']);
-        
-        // Rechazar solicitud
         Route::post('/{id}/rechazar', [AnticipoController::class, 'rechazar']);
-        
-        // Historial de aprobaciones
         Route::get('/{id}/historial', [AnticipoController::class, 'historial']);
+        
+        // Fase post-viaje
+        Route::post('/{id}/desembolsar', [AnticipoController::class, 'desembolsar']);
+        Route::post('/{id}/legalizar', [AnticipoController::class, 'legalizar']);
+        Route::post('/{id}/decidir-contabilidad', [AnticipoController::class, 'decidirContabilidad']);
+        Route::post('/{id}/registrar-devolucion', [AnticipoController::class, 'registrarDevolucion']);
+        Route::post('/{id}/aprobar-excedente', [AnticipoController::class, 'aprobarExcedente']);
+        Route::post('/{id}/rechazar-excedente', [AnticipoController::class, 'rechazarExcedente']);
+        Route::post('/{id}/cerrar', [AnticipoController::class, 'cerrarSolicitud']);
     });
 
     // ========================================================================

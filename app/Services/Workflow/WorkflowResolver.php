@@ -4,6 +4,7 @@ namespace App\Services\Workflow;
 
 use App\Models\Workflow\WfModulo;
 use App\Models\Workflow\WfDefinicion;
+use App\Models\Workflow\WfGrupo;
 use Illuminate\Support\Facades\Log;
 
 /**

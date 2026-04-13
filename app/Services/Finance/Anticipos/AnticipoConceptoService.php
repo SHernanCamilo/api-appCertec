@@ -2,7 +2,7 @@
 
 namespace App\Services\Finance\Anticipos;
 
-use App\Models\AntiConcepto;
+use App\Models\Finance\AntiConcepto;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Support\Facades\DB;

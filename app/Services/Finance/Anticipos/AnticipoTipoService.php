@@ -2,9 +2,9 @@
 
 namespace App\Services\Finance\Anticipos;
 
-use App\Models\AntiTipo;
-use App\Models\AntiClase;
-use App\Models\AntiModalidad;
+use App\Models\Finance\AntiTipo;
+use App\Models\Finance\AntiClase;
+use App\Models\Finance\AntiModalidad;
 
 /**
  * Servicio de catálogos: Tipos, Clases y Modalidades.

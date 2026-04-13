@@ -19,7 +19,6 @@ class Empleado extends Model
         'email',
         'tipo_identificacion',
         'unidad',
-        'id_unidad_funcional',
         'direccion',
         'telefono',
         'estado',
@@ -42,11 +41,6 @@ class Empleado extends Model
     public function cargoRelacion()
     {
         return $this->belongsTo(Cargo::class, 'id_cargo', 'id_cargo');
-    }
-
-    public function unidadFuncional()
-    {
-        return $this->belongsTo(\App\Models\Finance\AntiUnidadFuncional::class, 'id_unidad_funcional');
     }
 
     /**

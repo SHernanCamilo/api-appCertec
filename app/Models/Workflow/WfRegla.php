@@ -55,22 +55,22 @@ class WfRegla extends Model
 
     private function evaluarCondicion(string $campo, $valor, array $contexto): bool
     {
+        // Rangos numéricos (nivel_min, nivel_max, monto_min, monto_max)
+        if (str_ends_with($campo, '_min')) {
+            $campoBase = str_replace('_min', '', $campo);
+            return isset($contexto[$campoBase]) && $contexto[$campoBase] >= $valor;
+        }
+        if (str_ends_with($campo, '_max')) {
+            $campoBase = str_replace('_max', '', $campo);
+            return isset($contexto[$campoBase]) && $contexto[$campoBase] <= $valor;
+        }
+
         // Si el campo no existe en el contexto, la condición no aplica
         if (!isset($contexto[$campo])) {
             return false;
         }
 
-        $valorContexto = $contexto[$campo];
-
-        // Rangos numéricos (nivel_min, nivel_max, monto_min, monto_max)
-        if (str_ends_with($campo, '_min')) {
-            return $valorContexto >= $valor;
-        }
-        if (str_ends_with($campo, '_max')) {
-            return $valorContexto <= $valor;
-        }
-
-        // Comparación exacta (prefijo, cobertura, etc.)
-        return $valorContexto == $valor;
+        // Comparación exacta (prefijo, cobertura, id_grupo, etc.)
+        return $contexto[$campo] == $valor;
     }
 }

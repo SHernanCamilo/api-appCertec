@@ -8,7 +8,7 @@ use App\Models\Workflow\WfDefinicion;
 use App\Models\Workflow\WfPaso;
 use App\Models\Workflow\WfRegla;
 use App\Models\Finance\AntiCiudad;
-use App\Models\AntiRegla;
+use App\Models\Finance\AntiRegla;
 use App\Models\Cargo;
 use Illuminate\Support\Facades\DB;
 
