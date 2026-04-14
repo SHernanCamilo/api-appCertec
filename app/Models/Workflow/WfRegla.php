@@ -65,9 +65,10 @@ class WfRegla extends Model
             return isset($contexto[$campoBase]) && $contexto[$campoBase] <= $valor;
         }
 
-        // Si el campo no existe en el contexto, la condición no aplica
-        if (!isset($contexto[$campo])) {
-            return false;
+        // Si el campo no existe en el contexto o es null, ignorar esta condición
+        // (permite que reglas con id_grupo funcionen aunque el contexto no tenga grupo)
+        if (!array_key_exists($campo, $contexto) || $contexto[$campo] === null) {
+            return true;
         }
 
         // Comparación exacta (prefijo, cobertura, id_grupo, etc.)

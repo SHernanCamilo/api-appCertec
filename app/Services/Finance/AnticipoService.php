@@ -281,9 +281,9 @@ class AnticipoService
                 );
 
                 $flujo = $this->workflowResolver->resolverFlujo('anticipos', [
-                    'nivel_jerarquico' => $topes['nivel_jerarquico'],
+                    'nivel' => $topes['nivel_jerarquico'],
                     'prefijo' => $empleado->empresa->sucursales->first()->prefijo ?? 'MA',
-                    'monto' => $topes['total'],
+                    'monto' => $solicitud->monto_solicitado,
                     'cobertura' => $data['cobertura'],
                     'id_empresa' => $empleado->id_empresa,
                     'id_grupo' => $grupo?->id,
@@ -308,8 +308,8 @@ class AnticipoService
                 'solicitud_id' => $solicitud->id,
                 'numero' => $numeroSolicitud,
                 'empleado' => $empleado->nombre,
-                'monto' => $topes['total'],
-                'flujo' => $flujo->codigo,
+                'monto' => $solicitud->monto_solicitado,
+                'estado' => $solicitud->estado,
             ]);
 
             return $solicitud->load(['items', 'empleado', 'ciudadDestino']);
