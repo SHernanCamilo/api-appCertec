@@ -54,8 +54,7 @@ class AnticipoController extends Controller
     {
         $request->validate([
             'id_empleado' => 'required|integer|exists:config_person_tercero,id',
-            'id_unidad_funcional' => 'required|integer|exists:anti_unidades_funcionales,id',
-            'id_sede_origen' => 'required|integer|exists:config_ubi_sede,id',
+            'id_sede_origen' => 'nullable|integer|exists:config_ubi_sede,id',
             'id_ciudad_destino' => 'required|integer|exists:anti_ciudades,id',
             'fecha_salida' => 'required|date',
             'fecha_regreso' => 'required|date|after_or_equal:fecha_salida',
@@ -64,10 +63,15 @@ class AnticipoController extends Controller
         ]);
 
         try {
-            $solicitud = $this->anticipoService->crearSolicitud([
-                ...$request->all(),
-                'radicado_por' => auth()->id(),
-            ]);
+            // Si no envían id_sede_origen, tomarlo del contexto del usuario
+            $data = $request->all();
+            if (empty($data['id_sede_origen'])) {
+                $contexto = \App\Models\UsuarioContexto::obtenerContexto(auth()->user());
+                $data['id_sede_origen'] = $contexto?->sede_id ?? $contexto?->sucursal_id;
+            }
+            $data['radicado_por'] = auth()->id();
+
+            $solicitud = $this->anticipoService->crearSolicitud($data);
 
             return response()->json([
                 'success' => true,
@@ -116,7 +120,6 @@ class AnticipoController extends Controller
                 'empleado',
                 'ciudadDestino',
                 'sedeOrigen',
-                'unidadFuncional',
                 'items.concepto',
                 'items.regla',
             ])->findOrFail($id);
@@ -218,6 +221,122 @@ class AnticipoController extends Controller
                 'success' => false,
                 'message' => 'Error al obtener historial: ' . $e->getMessage(),
             ], 500);
+        }
+    }
+
+    // ========================================================================
+    // FASE POST-VIAJE
+    // ========================================================================
+
+    /**
+     * Tesorería desembolsa el anticipo.
+     * POST /api/anticipos/solicitudes/{id}/desembolsar
+     */
+    public function desembolsar(int $id): JsonResponse
+    {
+        try {
+            $solicitud = $this->anticipoService->desembolsar($id, auth()->id());
+            return response()->json(['success' => true, 'message' => 'Anticipo desembolsado', 'data' => $solicitud]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    /**
+     * Solicitante sube soportes y legaliza.
+     * POST /api/anticipos/solicitudes/{id}/legalizar
+     */
+    public function legalizar(Request $request, int $id): JsonResponse
+    {
+        $request->validate([
+            'monto_legalizado' => 'required|numeric|min:0',
+            'observaciones' => 'nullable|string|max:1000',
+        ]);
+
+        try {
+            $solicitud = $this->anticipoService->legalizar($id, auth()->id(), $request->all());
+            return response()->json(['success' => true, 'message' => 'Solicitud legalizada', 'data' => $solicitud]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    /**
+     * Contabilidad decide: aceptar | sobrante | excedente.
+     * POST /api/anticipos/solicitudes/{id}/decidir-contabilidad
+     */
+    public function decidirContabilidad(Request $request, int $id): JsonResponse
+    {
+        $request->validate([
+            'decision' => 'required|in:aceptar,sobrante,excedente',
+            'comentario' => 'nullable|string|max:500',
+        ]);
+
+        try {
+            $solicitud = $this->anticipoService->decidirContabilidad(
+                $id, auth()->id(), $request->decision, $request->comentario
+            );
+            return response()->json(['success' => true, 'message' => 'Decisión registrada', 'data' => $solicitud]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    /**
+     * Solicitante registra devolución del sobrante.
+     * POST /api/anticipos/solicitudes/{id}/registrar-devolucion
+     */
+    public function registrarDevolucion(int $id): JsonResponse
+    {
+        try {
+            $solicitud = $this->anticipoService->registrarDevolucion($id, auth()->id());
+            return response()->json(['success' => true, 'message' => 'Devolución registrada', 'data' => $solicitud]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    /**
+     * Dir. Financiera aprueba reintegro del excedente.
+     * POST /api/anticipos/solicitudes/{id}/aprobar-excedente
+     */
+    public function aprobarExcedente(Request $request, int $id): JsonResponse
+    {
+        try {
+            $solicitud = $this->anticipoService->aprobarExcedente($id, auth()->id(), $request->comentario);
+            return response()->json(['success' => true, 'message' => 'Excedente aprobado', 'data' => $solicitud]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    /**
+     * Dir. Financiera rechaza reintegro del excedente.
+     * POST /api/anticipos/solicitudes/{id}/rechazar-excedente
+     */
+    public function rechazarExcedente(Request $request, int $id): JsonResponse
+    {
+        $request->validate(['comentario' => 'required|string|max:500']);
+
+        try {
+            $solicitud = $this->anticipoService->rechazarExcedente($id, auth()->id(), $request->comentario);
+            return response()->json(['success' => true, 'message' => 'Excedente rechazado', 'data' => $solicitud]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
+        }
+    }
+
+    /**
+     * Contabilidad cierra la solicitud.
+     * POST /api/anticipos/solicitudes/{id}/cerrar
+     */
+    public function cerrarSolicitud(Request $request, int $id): JsonResponse
+    {
+        try {
+            $solicitud = $this->anticipoService->cerrar($id, auth()->id(), $request->comentario);
+            return response()->json(['success' => true, 'message' => 'Solicitud cerrada', 'data' => $solicitud]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 400);
         }
     }
 

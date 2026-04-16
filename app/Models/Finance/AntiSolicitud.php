@@ -34,7 +34,7 @@ class AntiSolicitud extends Model
     protected $fillable = [
         'numero_solicitud',
         'id_empleado',
-        'id_unidad_funcional',
+        'unidad_funcional',
         'id_sede_origen',
         'id_ciudad_destino',
         'fecha_salida',
@@ -64,11 +64,6 @@ class AntiSolicitud extends Model
     public function empleado()
     {
         return $this->belongsTo(Empleado::class, 'id_empleado');
-    }
-
-    public function unidadFuncional()
-    {
-        return $this->belongsTo(AntiUnidadFuncional::class, 'id_unidad_funcional');
     }
 
     public function sedeOrigen()

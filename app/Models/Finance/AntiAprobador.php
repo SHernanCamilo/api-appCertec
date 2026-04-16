@@ -43,4 +43,9 @@ class AntiAprobador extends Model
     {
         return $this->belongsTo(Sede::class, 'id_sede');
     }
+
+    public function scopeActivos($query)
+    {
+        return $query->where('estado', true);
+    }
 }

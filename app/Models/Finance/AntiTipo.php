@@ -1,15 +1,14 @@
 <?php
 
-namespace App\Models;
+namespace App\Models\Finance;
 
 use Illuminate\Database\Eloquent\Model;
 
-class AntiModalidad extends Model
+class AntiTipo extends Model
 {
-    protected $table = 'anti_modalidades';
+    protected $table = 'anti_tipos';
     
     protected $fillable = [
-        'id_clase',
         'codigo',
         'nombre',
         'descripcion',
@@ -21,15 +20,15 @@ class AntiModalidad extends Model
     ];
     
     /**
-     * Relación: Una modalidad pertenece a una clase
+     * Relación: Un tipo tiene muchas clases
      */
-    public function clase()
+    public function clases()
     {
-        return $this->belongsTo(AntiClase::class, 'id_clase');
+        return $this->hasMany(AntiClase::class, 'id_tipo');
     }
     
     /**
-     * Scope: Solo modalidades activas
+     * Scope: Solo tipos activos
      */
     public function scopeActivos($query)
     {

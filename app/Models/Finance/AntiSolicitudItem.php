@@ -3,8 +3,8 @@
 namespace App\Models\Finance;
 
 use Illuminate\Database\Eloquent\Model;
-use App\Models\AntiConcepto;
-use App\Models\AntiRegla;
+use App\Models\Finance\AntiConcepto;
+use App\Models\Finance\AntiRegla;
 
 class AntiSolicitudItem extends Model
 {

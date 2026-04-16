@@ -2,8 +2,8 @@
 
 namespace App\Services\Finance\Anticipos;
 
-use App\Models\AntiConcepto;
-use App\Models\AntiRegla;
+use App\Models\Finance\AntiConcepto;
+use App\Models\Finance\AntiRegla;
 
 /**
  * Servicio de Reglas asociadas a un Concepto.

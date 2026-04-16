@@ -3,14 +3,23 @@
 namespace App\Http\Controllers\Finance;
 
 use App\Http\Controllers\Controller;
-use App\Services\Finance\AnticipoService;
+use App\Services\Finance\Anticipos\AnticipoTipoService;
+use App\Services\Finance\Anticipos\AnticipoConceptoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Controlador de Conceptos de Anticipo.
+ *
+ * Gestiona catálogos (Tipos, Clases, Modalidades) y CRUD de Conceptos con Reglas.
+ */
 class AnticipoConceptoController extends Controller
 {
-    public function __construct(private readonly AnticipoService $anticipo) {}
+    public function __construct(
+        private readonly AnticipoTipoService $tipoService,
+        private readonly AnticipoConceptoService $conceptoService,
+    ) {}
 
     // -------------------------------------------------------------------------
     // Catálogos: Tipos, Clases, Modalidades
@@ -21,7 +30,7 @@ class AnticipoConceptoController extends Controller
         try {
             return response()->json([
                 'success' => true,
-                'data'    => $this->anticipo->tipos->getTipos(),
+                'data'    => $this->tipoService->getTipos(),
             ]);
         } catch (\Exception $e) {
             return $this->error('Error al obtener los tipos de anticipos', $e);
@@ -33,7 +42,7 @@ class AnticipoConceptoController extends Controller
         try {
             return response()->json([
                 'success' => true,
-                'data'    => $this->anticipo->tipos->getClasesPorTipo($tipoId),
+                'data'    => $this->tipoService->getClasesPorTipo($tipoId),
             ]);
         } catch (\Exception $e) {
             return $this->error('Error al obtener las clases', $e);
@@ -45,7 +54,7 @@ class AnticipoConceptoController extends Controller
         try {
             return response()->json([
                 'success' => true,
-                'data'    => $this->anticipo->tipos->getModalidadesPorClase($claseId),
+                'data'    => $this->tipoService->getModalidadesPorClase($claseId),
             ]);
         } catch (\Exception $e) {
             return $this->error('Error al obtener las modalidades', $e);
@@ -59,7 +68,7 @@ class AnticipoConceptoController extends Controller
     public function index(Request $request): JsonResponse
     {
         try {
-            $paginado = $this->anticipo->conceptos->listar($request->all());
+            $paginado = $this->conceptoService->listar($request->all());
 
             return response()->json([
                 'success'      => true,
@@ -79,7 +88,7 @@ class AnticipoConceptoController extends Controller
         try {
             return response()->json([
                 'success' => true,
-                'data'    => $this->anticipo->conceptos->obtener($id),
+                'data'    => $this->conceptoService->obtener($id),
             ]);
         } catch (\Exception $e) {
             return $this->error('Concepto no encontrado', $e, 404);
@@ -99,7 +108,7 @@ class AnticipoConceptoController extends Controller
         ]);
 
         try {
-            $result = $this->anticipo->conceptos->crear($request->all());
+            $result = $this->conceptoService->crear($request->all());
 
             Log::info('Anticipo concepto store', ['id' => $result['concepto']->id, 'creado' => $result['creado']]);
 
@@ -126,7 +135,7 @@ class AnticipoConceptoController extends Controller
         ]);
 
         try {
-            $concepto = $this->anticipo->conceptos->actualizar($id, $request->all());
+            $concepto = $this->conceptoService->actualizar($id, $request->all());
 
             Log::info('Anticipo concepto actualizado', ['id' => $id]);
 
@@ -141,7 +150,7 @@ class AnticipoConceptoController extends Controller
     public function destroy(int $id): JsonResponse
     {
         try {
-            $this->anticipo->conceptos->eliminar($id);
+            $this->conceptoService->eliminar($id);
 
             Log::info('Anticipo concepto eliminado', ['id' => $id]);
 
@@ -154,7 +163,7 @@ class AnticipoConceptoController extends Controller
     public function toggleEstado(int $id): JsonResponse
     {
         try {
-            $concepto = $this->anticipo->conceptos->toggleEstado($id);
+            $concepto = $this->conceptoService->toggleEstado($id);
 
             Log::info('Anticipo concepto estado cambiado', ['id' => $id, 'estado' => $concepto->estado]);
 
