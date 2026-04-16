@@ -62,6 +62,11 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     Route::post('users/tenant/sincronizar', [App\Http\Controllers\UserController::class, 'sincronizarUsuariosTenant']);
     Route::post('users/check-email', [App\Http\Controllers\UserController::class, 'checkEmail']);
     
+    // 🔍 RUTAS DE DEBUG - REMOVER EN PRODUCCIÓN
+    Route::get('debug/usuarios', [App\Http\Controllers\DebugPermisosController::class, 'listarUsuariosConPermisos']);
+    Route::get('debug/usuario/{userId}', [App\Http\Controllers\DebugPermisosController::class, 'debugUsuario']);
+    Route::get('debug/comparar/{userId1}/{userId2}', [App\Http\Controllers\DebugPermisosController::class, 'compararUsuarios']);
+    
     // Rutas para gestionar dominios permitidos
     Route::apiResource('allowed-domains', App\Http\Controllers\AllowedDomainController::class);
     Route::post('allowed-domains/check-email', [App\Http\Controllers\AllowedDomainController::class, 'checkEmail']);

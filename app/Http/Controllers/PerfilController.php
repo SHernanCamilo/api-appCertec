@@ -156,6 +156,14 @@ class PerfilController extends Controller
 
         $perfil->load(['modulo', 'roles', 'permisos']);
 
+        // Invalidar caché del sidebar para todos los usuarios que tienen roles con este perfil
+        $sidebarService = app(\App\Services\SidebarService::class);
+        foreach ($perfil->roles as $rol) {
+            foreach ($rol->usuarios as $usuario) {
+                $sidebarService->clearCache($usuario);
+            }
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Perfil actualizado exitosamente',

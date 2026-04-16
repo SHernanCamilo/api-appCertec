@@ -81,6 +81,10 @@ class UserController extends Controller
         // Asignar roles (usando la tabla personalizada)
         if ($request->has('roles')) {
             $user->rolesCustom()->sync($request->roles);
+            
+            // Invalidar caché del sidebar
+            $sidebarService = app(\App\Services\SidebarService::class);
+            $sidebarService->clearCache($user);
         }
 
         // Asignar empresas múltiples con sucursales y sedes
@@ -96,8 +100,11 @@ class UserController extends Controller
             $user->empresas()->sync($empresasData);
         }
 
-        // Recargar relaciones
-        $user->load('rolesCustom', 'empresas', 'sucursal', 'sede');
+        // Recargar relaciones con permisos completos
+        $user->load(['rolesCustom.perfiles.modulo', 'rolesCustom.perfiles.permisos', 'empresas', 'sucursal', 'sede']);
+
+        // Obtener permisos usando el mismo método que AuthController
+        $permisosUnicos = $this->getUserPermissions($user);
 
         return response()->json([
             'id' => $user->id,
@@ -112,7 +119,7 @@ class UserController extends Controller
             'empresas' => $user->empresas,
             'sucursal' => $user->sucursal,
             'sede' => $user->sede,
-            'permissions' => []
+            'permissions' => $permisosUnicos
         ], 201);
     }
 
@@ -121,7 +128,10 @@ class UserController extends Controller
      */
     public function show($id)
     {
-        $user = User::with('roles')->findOrFail($id);
+        $user = User::with(['rolesCustom.perfiles.modulo', 'rolesCustom.perfiles.permisos', 'empresas', 'sucursal', 'sede'])->findOrFail($id);
+
+        // Obtener permisos usando el mismo método que AuthController
+        $permisosUnicos = $this->getUserPermissions($user);
 
         return response()->json([
             'id' => $user->id,
@@ -134,9 +144,69 @@ class UserController extends Controller
             'telefono' => $user->telefono,
             'estado' => $user->estado,
             'created_at' => $user->created_at,
-            'roles' => $user->getRoleNames(),
-            'permissions' => $user->getAllPermissions()->pluck('name')
+            'roles' => $user->rolesCustom,
+            'empresas' => $user->empresas,
+            'sucursal' => $user->sucursal,
+            'sede' => $user->sede,
+            'permissions' => $permisosUnicos
         ]);
+    }
+
+    /**
+     * Obtener permisos de un usuario basados en sus roles y perfiles
+     */
+    private function getUserPermissions($user): array
+    {
+        $user->loadMissing(['rolesCustom.perfiles.permisos', 'rolesCustom.perfiles.modulo']);
+
+        // Recopilar todos los id_modulo relevantes
+        $moduloIds = $user->rolesCustom
+            ->flatMap->perfiles
+            ->pluck('id_modulo')
+            ->filter()
+            ->unique()
+            ->values();
+
+        // Una sola query para obtener el primer permiso tipo 'boton' por módulo
+        $prefijosModulo = \App\Models\Permiso::whereIn('id_modulo', $moduloIds)
+            ->where('tipo', 'boton')
+            ->orderBy('orden')
+            ->get()
+            ->groupBy('id_modulo')
+            ->map(function ($permisos) {
+                $codigo = $permisos->first()->codigo;
+                $partes = explode('-', $codigo);
+                if (count($partes) >= 3) {
+                    array_pop($partes);
+                    return implode('-', $partes);
+                }
+                return $codigo;
+            });
+
+        $permisosCodigos = collect();
+
+        foreach ($user->rolesCustom as $rol) {
+            foreach ($rol->perfiles as $perfil) {
+                $modulo = $perfil->modulo;
+                $codigoModulo = $modulo
+                    ? ($prefijosModulo[$modulo->id]
+                        ?? strtolower(str_replace('_', '-', $modulo->codigo)))
+                    : 'mod';
+
+                if ($perfil->puede_crear)    $permisosCodigos->push("{$codigoModulo}-crear");
+                if ($perfil->puede_leer)     $permisosCodigos->push("{$codigoModulo}-ver");
+                if ($perfil->puede_editar)   $permisosCodigos->push("{$codigoModulo}-editar");
+                if ($perfil->puede_eliminar) $permisosCodigos->push("{$codigoModulo}-eliminar");
+
+                foreach ($perfil->permisos as $permiso) {
+                    if ($permiso->estado) {
+                        $permisosCodigos->push($permiso->codigo);
+                    }
+                }
+            }
+        }
+
+        return $permisosCodigos->unique()->values()->toArray();
     }
 
     /**
@@ -210,6 +280,10 @@ class UserController extends Controller
         // Sincronizar roles (usando la tabla personalizada)
         if ($request->has('roles')) {
             $user->rolesCustom()->sync($request->roles);
+            
+            // Invalidar caché del sidebar
+            $sidebarService = app(\App\Services\SidebarService::class);
+            $sidebarService->clearCache($user);
         }
 
         // Sincronizar empresas múltiples con sucursales y sedes
@@ -225,8 +299,11 @@ class UserController extends Controller
             $user->empresas()->sync($empresasData);
         }
 
-        // Recargar relaciones
-        $user->load('rolesCustom', 'empresas', 'sucursal', 'sede');
+        // Recargar relaciones con permisos completos
+        $user->load(['rolesCustom.perfiles.modulo', 'rolesCustom.perfiles.permisos', 'empresas', 'sucursal', 'sede']);
+
+        // Obtener permisos usando el mismo método que AuthController
+        $permisosUnicos = $this->getUserPermissions($user);
 
         return response()->json([
             'id' => $user->id,
@@ -241,7 +318,7 @@ class UserController extends Controller
             'empresas' => $user->empresas,
             'sucursal' => $user->sucursal,
             'sede' => $user->sede,
-            'permissions' => []
+            'permissions' => $permisosUnicos
         ]);
     }
 
