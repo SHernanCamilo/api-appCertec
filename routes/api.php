@@ -63,9 +63,9 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     Route::post('users/check-email', [App\Http\Controllers\UserController::class, 'checkEmail']);
     
     // 🔍 RUTAS DE DEBUG - REMOVER EN PRODUCCIÓN
-    Route::get('debug/usuarios', [App\Http\Controllers\DebugPermisosController::class, 'listarUsuariosConPermisos']);
-    Route::get('debug/usuario/{userId}', [App\Http\Controllers\DebugPermisosController::class, 'debugUsuario']);
-    Route::get('debug/comparar/{userId1}/{userId2}', [App\Http\Controllers\DebugPermisosController::class, 'compararUsuarios']);
+    // Route::get('debug/usuarios', [App\Http\Controllers\DebugPermisosController::class, 'listarUsuariosConPermisos']);
+    // Route::get('debug/usuario/{userId}', [App\Http\Controllers\DebugPermisosController::class, 'debugUsuario']);
+    // Route::get('debug/comparar/{userId1}/{userId2}', [App\Http\Controllers\DebugPermisosController::class, 'compararUsuarios']);
     
     // Rutas para gestionar dominios permitidos
     Route::apiResource('allowed-domains', App\Http\Controllers\AllowedDomainController::class);
@@ -220,6 +220,27 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obs-activos
     Route::put('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'update']);
 });
 
+// ─── Rutas de Cierre de Inventario - Matriz de Obsolescencia ─────────────────
+Route::middleware(['auth:api', 'check.user.active'])->prefix('cierre-inventario')->group(function () {
+
+    // Configuración del proceso (rutas específicas ANTES del {id} para evitar conflictos)
+    Route::get('/config',    [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'getConfig']);
+    Route::put('/config',    [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'updateConfig']);
+
+    // Comparación entre dos cierres
+    Route::get('/comparar',  [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'comparar']);
+
+    // CRUD de cierres
+    Route::get('/',          [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'index']);
+    Route::post('/',         [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'store']);
+    Route::get('/{id}',      [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'show']);
+    Route::delete('/{id}',   [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'destroy']);
+
+    // Sub-recursos del cierre
+    Route::get('/{id}/detalle',         [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'detalle']);
+    Route::get('/{id}/resumen-empresa', [App\Http\Controllers\MatrizObsolescencia\CierreInventarioController::class, 'resumenPorEmpresa']);
+});
+
 // Rutas de Plantillas de Documentos
 Route::middleware(['auth:api', 'check.user.active'])->prefix('templates')->group(function () {
     Route::get('/', [App\Http\Controllers\TemplateController::class, 'index']);
@@ -298,4 +319,17 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('glpi')->group(func
         Route::get('/{id}/tags', [App\Http\Controllers\GLPI\ComputerDetailController::class, 'getTagInfo']);
         Route::get('/{id}/complete', [App\Http\Controllers\GLPI\ComputerDetailController::class, 'getCompleteInfo']);
     });
+});
+
+// ─── Rutas de Tareas Programadas (Task Scheduler) ────────────────────────────
+Route::middleware(['auth:api', 'check.user.active'])->prefix('v1')->group(function () {
+    // Rutas específicas (deben ir ANTES del apiResource)
+    Route::get('scheduled-tasks/stats/dashboard', [App\Http\Controllers\Api\TaskSchedulerController::class, 'dashboardStats']);
+    Route::get('scheduled-tasks/types', [App\Http\Controllers\Api\TaskSchedulerController::class, 'types']);
+    Route::post('scheduled-tasks/{id}/execute', [App\Http\Controllers\Api\TaskSchedulerController::class, 'execute']);
+    Route::post('scheduled-tasks/{id}/cancel', [App\Http\Controllers\Api\TaskSchedulerController::class, 'cancel']);
+    Route::post('scheduled-tasks/{id}/retry', [App\Http\Controllers\Api\TaskSchedulerController::class, 'retry']);
+    
+    // CRUD estándar
+    Route::apiResource('scheduled-tasks', App\Http\Controllers\Api\TaskSchedulerController::class);
 });
