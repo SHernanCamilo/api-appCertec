@@ -266,6 +266,11 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('workflow')->group(
     require __DIR__ . '/Workflow/WorkflowRouter.php';
 });
 
+// ─── Rutas de Talento Humano - Eventos ───────────────────────────────────────
+Route::middleware(['auth:api', 'check.user.active'])->prefix('talento-humano/eventos')->group(function () {
+    require __DIR__ . '/TalentoHumano/EventosRouter.php';
+});
+
 // Rutas de GLPI API Integration
 Route::middleware(['auth:api', 'check.user.active'])->prefix('glpi')->group(function () {
     // Rutas de sesión GLPI
