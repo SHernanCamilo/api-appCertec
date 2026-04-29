@@ -26,16 +26,27 @@ class ScheduledTask extends Model
         'error_message',
         'job_id',
         'created_by',
+        'is_recurring',
+        'is_active',
+        'recurrence_type',
+        'recurrence_value',
+        'last_run_at',
+        'next_run_at',
     ];
 
     protected $casts = [
         'parameters' => 'array',
+        'recurrence_value' => 'array',
         'scheduled_at' => 'datetime',
         'started_at' => 'datetime',
         'completed_at' => 'datetime',
+        'last_run_at' => 'datetime',
+        'next_run_at' => 'datetime',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
+        'is_recurring' => 'boolean',
+        'is_active' => 'boolean',
     ];
 
     // Tipos de tareas disponibles
@@ -50,6 +61,18 @@ class ScheduledTask extends Model
     const STATUS_COMPLETED = 'completed';
     const STATUS_FAILED = 'failed';
     const STATUS_CANCELLED = 'cancelled';
+
+    // Tipos de recurrencia
+    const RECURRENCE_EVERY_MINUTE = 'every_minute';
+    const RECURRENCE_EVERY_5_MINUTES = 'every_5_minutes';
+    const RECURRENCE_EVERY_15_MINUTES = 'every_15_minutes';
+    const RECURRENCE_EVERY_30_MINUTES = 'every_30_minutes';
+    const RECURRENCE_HOURLY = 'hourly';
+    const RECURRENCE_DAILY = 'daily';
+    const RECURRENCE_WEEKLY = 'weekly';
+    const RECURRENCE_MONTHLY = 'monthly';
+    const RECURRENCE_CUSTOM_DAYS = 'custom_days';
+    const RECURRENCE_CRON = 'cron';
 
     /**
      * Relación con el usuario que creó la tarea
@@ -185,5 +208,130 @@ class ScheduledTask extends Model
         return $this->status === self::STATUS_PENDING 
             && $this->scheduled_at 
             && $this->scheduled_at->isPast();
+    }
+
+    /**
+     * Scope para tareas recurrentes activas
+     */
+    public function scopeRecurringActive($query)
+    {
+        return $query->where('is_recurring', true)
+            ->where('is_active', true);
+    }
+
+    /**
+     * Scope para tareas que deben ejecutarse (recurrentes)
+     */
+    public function scopeReadyToExecuteRecurring($query)
+    {
+        return $query->where('is_recurring', true)
+            ->where('is_active', true)
+            ->where(function ($q) {
+                $q->whereNull('next_run_at')
+                  ->orWhere('next_run_at', '<=', Carbon::now());
+            })
+            ->where(function ($q) {
+                $q->where('status', self::STATUS_PENDING)
+                  ->orWhere('status', self::STATUS_COMPLETED);
+            });
+    }
+
+    /**
+     * Marcar tarea recurrente como completada y calcular próxima ejecución
+     */
+    public function markAsCompletedRecurring($result = null)
+    {
+        $this->update([
+            'status' => self::STATUS_COMPLETED,
+            'completed_at' => Carbon::now(),
+            'last_run_at' => Carbon::now(),
+            'result' => $result,
+        ]);
+
+        // Calcular próxima ejecución
+        if ($this->is_recurring && $this->is_active) {
+            $this->calculateNextRun();
+        }
+    }
+
+    /**
+     * Calcular próxima ejecución basada en el tipo de recurrencia
+     */
+    public function calculateNextRun()
+    {
+        $now = Carbon::now();
+        $nextRun = null;
+
+        switch ($this->recurrence_type) {
+            case self::RECURRENCE_EVERY_MINUTE:
+                $nextRun = $now->copy()->addMinute();
+                break;
+
+            case self::RECURRENCE_EVERY_5_MINUTES:
+                $nextRun = $now->copy()->addMinutes(5);
+                break;
+
+            case self::RECURRENCE_EVERY_15_MINUTES:
+                $nextRun = $now->copy()->addMinutes(15);
+                break;
+
+            case self::RECURRENCE_EVERY_30_MINUTES:
+                $nextRun = $now->copy()->addMinutes(30);
+                break;
+
+            case self::RECURRENCE_HOURLY:
+                $nextRun = $now->copy()->addHour();
+                break;
+
+            case self::RECURRENCE_DAILY:
+                $time = $this->recurrence_value['time'] ?? '00:00';
+                [$hour, $minute] = explode(':', $time);
+                $nextRun = $now->copy()->addDay()->setTime((int)$hour, (int)$minute, 0);
+                break;
+
+            case self::RECURRENCE_WEEKLY:
+                $time = $this->recurrence_value['time'] ?? '00:00';
+                $dayOfWeek = $this->recurrence_value['day_of_week'] ?? 1; // 1=Lunes
+                [$hour, $minute] = explode(':', $time);
+                
+                $nextRun = $now->copy()->next($dayOfWeek)->setTime((int)$hour, (int)$minute, 0);
+                break;
+
+            case self::RECURRENCE_MONTHLY:
+                $time = $this->recurrence_value['time'] ?? '00:00';
+                $day = $this->recurrence_value['day'] ?? 1;
+                [$hour, $minute] = explode(':', $time);
+                
+                if ($day === 'last') {
+                    $nextRun = $now->copy()->addMonth()->endOfMonth()->setTime((int)$hour, (int)$minute, 0);
+                } else {
+                    $nextRun = $now->copy()->addMonth()->setDay((int)$day)->setTime((int)$hour, (int)$minute, 0);
+                }
+                break;
+
+            case self::RECURRENCE_CUSTOM_DAYS:
+                $time = $this->recurrence_value['time'] ?? '00:00';
+                $days = $this->recurrence_value['days'] ?? [1]; // Array de días [1,3,5]
+                [$hour, $minute] = explode(':', $time);
+                
+                $nextRun = $now->copy()->addDay();
+                while (!in_array($nextRun->dayOfWeek, $days)) {
+                    $nextRun->addDay();
+                }
+                $nextRun->setTime((int)$hour, (int)$minute, 0);
+                break;
+
+            case self::RECURRENCE_CRON:
+                // Para expresiones cron personalizadas
+                // Requiere librería cron-expression
+                break;
+        }
+
+        if ($nextRun) {
+            $this->update([
+                'next_run_at' => $nextRun,
+                'status' => self::STATUS_PENDING,
+            ]);
+        }
     }
 }

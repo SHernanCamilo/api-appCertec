@@ -67,18 +67,31 @@ class TaskSchedulerController extends Controller
     public function store(StoreScheduledTaskRequest $request): JsonResponse
     {
         try {
-            $scheduledAt = $request->scheduled_at 
-                ? Carbon::parse($request->scheduled_at) 
-                : null;
+            // Verificar si es tarea recurrente
+            if ($request->is_recurring) {
+                $task = $this->taskScheduler->scheduleRecurringTask(
+                    name: $request->name,
+                    type: $request->type,
+                    recurrenceType: $request->recurrence_type,
+                    recurrenceValue: $request->recurrence_value ?? [],
+                    parameters: $request->parameters ?? [],
+                    description: $request->description,
+                    createdBy: auth()->id()
+                );
+            } else {
+                $scheduledAt = $request->scheduled_at 
+                    ? Carbon::parse($request->scheduled_at) 
+                    : null;
 
-            $task = $this->taskScheduler->scheduleTask(
-                name: $request->name,
-                type: $request->type,
-                parameters: $request->parameters ?? [],
-                scheduledAt: $scheduledAt,
-                description: $request->description,
-                createdBy: auth()->id()
-            );
+                $task = $this->taskScheduler->scheduleTask(
+                    name: $request->name,
+                    type: $request->type,
+                    parameters: $request->parameters ?? [],
+                    scheduledAt: $scheduledAt,
+                    description: $request->description,
+                    createdBy: auth()->id()
+                );
+            }
 
             return response()->json([
                 'message' => 'Tarea programada creada exitosamente',
@@ -336,6 +349,114 @@ class TaskSchedulerController extends Controller
 
         return response()->json([
             'data' => $formattedTypes,
+        ]);
+    }
+
+    /**
+     * Toggle active status of recurring task
+     * POST /api/v1/scheduled-tasks/{id}/toggle
+     */
+    public function toggle(int $id): JsonResponse
+    {
+        try {
+            $task = ScheduledTask::find($id);
+
+            if (!$task) {
+                return response()->json([
+                    'message' => 'Tarea no encontrada',
+                ], 404);
+            }
+
+            if (!$task->is_recurring) {
+                return response()->json([
+                    'message' => 'Solo se pueden activar/desactivar tareas recurrentes',
+                ], 422);
+            }
+
+            $this->taskScheduler->toggleRecurringTask($id, !$task->is_active);
+
+            return response()->json([
+                'message' => $task->is_active ? 'Tarea desactivada' : 'Tarea activada',
+                'data' => new ScheduledTaskResource($task->fresh()->load('creator')),
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Error al cambiar estado de la tarea',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    /**
+     * Get recurrence types
+     * GET /api/v1/scheduled-tasks/recurrence-types
+     */
+    public function recurrenceTypes(): JsonResponse
+    {
+        $types = [
+            [
+                'key' => 'every_minute',
+                'name' => 'Cada minuto',
+                'description' => 'Se ejecuta cada minuto',
+                'requires_config' => false,
+            ],
+            [
+                'key' => 'every_5_minutes',
+                'name' => 'Cada 5 minutos',
+                'description' => 'Se ejecuta cada 5 minutos',
+                'requires_config' => false,
+            ],
+            [
+                'key' => 'every_15_minutes',
+                'name' => 'Cada 15 minutos',
+                'description' => 'Se ejecuta cada 15 minutos',
+                'requires_config' => false,
+            ],
+            [
+                'key' => 'every_30_minutes',
+                'name' => 'Cada 30 minutos',
+                'description' => 'Se ejecuta cada 30 minutos',
+                'requires_config' => false,
+            ],
+            [
+                'key' => 'hourly',
+                'name' => 'Cada hora',
+                'description' => 'Se ejecuta cada hora',
+                'requires_config' => false,
+            ],
+            [
+                'key' => 'daily',
+                'name' => 'Diariamente',
+                'description' => 'Se ejecuta todos los días a una hora específica',
+                'requires_config' => true,
+                'config_fields' => ['time'],
+            ],
+            [
+                'key' => 'weekly',
+                'name' => 'Semanalmente',
+                'description' => 'Se ejecuta un día específico de la semana',
+                'requires_config' => true,
+                'config_fields' => ['day_of_week', 'time'],
+            ],
+            [
+                'key' => 'monthly',
+                'name' => 'Mensualmente',
+                'description' => 'Se ejecuta un día específico del mes',
+                'requires_config' => true,
+                'config_fields' => ['day', 'time'],
+            ],
+            [
+                'key' => 'custom_days',
+                'name' => 'Días personalizados',
+                'description' => 'Se ejecuta en días específicos de la semana',
+                'requires_config' => true,
+                'config_fields' => ['days', 'time'],
+            ],
+        ];
+
+        return response()->json([
+            'data' => $types,
         ]);
     }
 }

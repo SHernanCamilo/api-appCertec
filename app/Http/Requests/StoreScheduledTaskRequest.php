@@ -24,11 +24,43 @@ class StoreScheduledTaskRequest extends FormRequest
     {
         $availableTypes = array_keys(config('scheduled-tasks.types', []));
 
-        return [
+        $rules = [
             'name' => 'required|string|max:255',
             'type' => 'required|string|in:' . implode(',', $availableTypes),
             'description' => 'nullable|string|max:1000',
-            'scheduled_at' => [
+            'parameters' => 'nullable|array',
+            'max_attempts' => 'nullable|integer|min:1|max:10',
+            'is_recurring' => 'nullable|boolean',
+        ];
+
+        // Si es tarea recurrente
+        if ($this->is_recurring) {
+            $rules['recurrence_type'] = 'required|string|in:every_minute,every_5_minutes,every_15_minutes,every_30_minutes,hourly,daily,weekly,monthly,custom_days,cron';
+            $rules['recurrence_value'] = 'nullable|array';
+            
+            // Validaciones específicas según tipo de recurrencia
+            if ($this->recurrence_type === 'daily') {
+                $rules['recurrence_value.time'] = 'required|date_format:H:i';
+            }
+            
+            if ($this->recurrence_type === 'weekly') {
+                $rules['recurrence_value.day_of_week'] = 'required|integer|min:0|max:6';
+                $rules['recurrence_value.time'] = 'required|date_format:H:i';
+            }
+            
+            if ($this->recurrence_type === 'monthly') {
+                $rules['recurrence_value.day'] = 'required'; // Puede ser número o 'last'
+                $rules['recurrence_value.time'] = 'required|date_format:H:i';
+            }
+            
+            if ($this->recurrence_type === 'custom_days') {
+                $rules['recurrence_value.days'] = 'required|array';
+                $rules['recurrence_value.days.*'] = 'integer|min:0|max:6';
+                $rules['recurrence_value.time'] = 'required|date_format:H:i';
+            }
+        } else {
+            // Si no es recurrente, validar scheduled_at
+            $rules['scheduled_at'] = [
                 'nullable',
                 'date',
                 function ($attribute, $value, $fail) {
@@ -42,10 +74,10 @@ class StoreScheduledTaskRequest extends FormRequest
                         }
                     }
                 },
-            ],
-            'parameters' => 'nullable|array',
-            'max_attempts' => 'nullable|integer|min:1|max:10',
-        ];
+            ];
+        }
+
+        return $rules;
     }
 
     /**
@@ -59,6 +91,13 @@ class StoreScheduledTaskRequest extends FormRequest
             'type.in' => 'El tipo de tarea no es válido',
             'scheduled_at.after_or_equal' => 'La fecha de programación debe ser igual o posterior a la fecha actual',
             'parameters.array' => 'Los parámetros deben ser un objeto JSON',
+            'recurrence_type.required' => 'El tipo de recurrencia es requerido para tareas recurrentes',
+            'recurrence_type.in' => 'El tipo de recurrencia no es válido',
+            'recurrence_value.time.required' => 'La hora es requerida',
+            'recurrence_value.time.date_format' => 'La hora debe tener el formato HH:MM',
+            'recurrence_value.day_of_week.required' => 'El día de la semana es requerido',
+            'recurrence_value.day.required' => 'El día del mes es requerido',
+            'recurrence_value.days.required' => 'Los días son requeridos',
         ];
     }
 

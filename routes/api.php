@@ -326,9 +326,11 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('v1')->group(functi
     // Rutas específicas (deben ir ANTES del apiResource)
     Route::get('scheduled-tasks/stats/dashboard', [App\Http\Controllers\Api\TaskSchedulerController::class, 'dashboardStats']);
     Route::get('scheduled-tasks/types', [App\Http\Controllers\Api\TaskSchedulerController::class, 'types']);
+    Route::get('scheduled-tasks/recurrence-types', [App\Http\Controllers\Api\TaskSchedulerController::class, 'recurrenceTypes']);
     Route::post('scheduled-tasks/{id}/execute', [App\Http\Controllers\Api\TaskSchedulerController::class, 'execute']);
     Route::post('scheduled-tasks/{id}/cancel', [App\Http\Controllers\Api\TaskSchedulerController::class, 'cancel']);
     Route::post('scheduled-tasks/{id}/retry', [App\Http\Controllers\Api\TaskSchedulerController::class, 'retry']);
+    Route::post('scheduled-tasks/{id}/toggle', [App\Http\Controllers\Api\TaskSchedulerController::class, 'toggle']);
     
     // CRUD estándar
     Route::apiResource('scheduled-tasks', App\Http\Controllers\Api\TaskSchedulerController::class);

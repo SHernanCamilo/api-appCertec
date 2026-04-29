@@ -235,4 +235,149 @@ class TaskSchedulerService
 
         Log::info("Tarea reintentada", ['task_id' => $taskId]);
     }
+
+    /**
+     * Programar una tarea recurrente
+     */
+    public function scheduleRecurringTask(
+        string $name,
+        string $type,
+        string $recurrenceType,
+        array $recurrenceValue = [],
+        array $parameters = [],
+        ?string $description = null,
+        ?int $createdBy = null
+    ): ScheduledTask {
+        // Validar que el tipo de tarea existe
+        $taskConfig = config("scheduled-tasks.types.{$type}");
+        
+        if (!$taskConfig) {
+            throw new \InvalidArgumentException("Tipo de tarea no válido: {$type}");
+        }
+
+        // Validar parámetros según configuración
+        $this->validateParameters($type, $parameters);
+
+        // Crear la tarea recurrente
+        $task = ScheduledTask::create([
+            'name' => $name,
+            'type' => $type,
+            'status' => ScheduledTask::STATUS_PENDING,
+            'parameters' => $parameters,
+            'description' => $description,
+            'max_attempts' => $taskConfig['max_attempts'] ?? 3,
+            'created_by' => $createdBy,
+            'is_recurring' => true,
+            'is_active' => true,
+            'recurrence_type' => $recurrenceType,
+            'recurrence_value' => $recurrenceValue,
+        ]);
+
+        // Calcular primera ejecución
+        $task->calculateNextRun();
+
+        Log::info("Tarea recurrente creada", [
+            'task_id' => $task->id,
+            'type' => $type,
+            'recurrence_type' => $recurrenceType,
+            'next_run_at' => $task->next_run_at,
+        ]);
+
+        return $task;
+    }
+
+    /**
+     * Ejecutar una tarea recurrente
+     */
+    public function executeRecurringTask(ScheduledTask $task): void
+    {
+        if (!$task->is_recurring) {
+            throw new \Exception("Esta no es una tarea recurrente");
+        }
+
+        // Marcar como iniciada
+        $task->markAsStarted();
+
+        try {
+            // Despachar el job
+            $taskConfig = config("scheduled-tasks.types.{$task->type}");
+            $jobClass = $taskConfig['job_class'];
+
+            if (!class_exists($jobClass)) {
+                throw new \Exception("Clase de job no encontrada: {$jobClass}");
+            }
+
+            // Crear y despachar el job
+            $job = new $jobClass($task->id, $task->parameters ?? []);
+            dispatch($job);
+
+            Log::info("Tarea recurrente despachada", [
+                'task_id' => $task->id,
+                'job_class' => $jobClass,
+            ]);
+
+        } catch (\Exception $e) {
+            $task->markAsFailed($e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * Activar/Desactivar tarea recurrente
+     */
+    public function toggleRecurringTask(int $taskId, bool $isActive): bool
+    {
+        $task = ScheduledTask::find($taskId);
+
+        if (!$task) {
+            throw new \Exception("Tarea no encontrada: {$taskId}");
+        }
+
+        if (!$task->is_recurring) {
+            throw new \Exception("Esta no es una tarea recurrente");
+        }
+
+        $task->update(['is_active' => $isActive]);
+
+        Log::info("Tarea recurrente " . ($isActive ? 'activada' : 'desactivada'), [
+            'task_id' => $taskId
+        ]);
+
+        return true;
+    }
+
+    /**
+     * Actualizar configuración de recurrencia
+     */
+    public function updateRecurrence(
+        int $taskId,
+        string $recurrenceType,
+        array $recurrenceValue
+    ): ScheduledTask {
+        $task = ScheduledTask::find($taskId);
+
+        if (!$task) {
+            throw new \Exception("Tarea no encontrada: {$taskId}");
+        }
+
+        if (!$task->is_recurring) {
+            throw new \Exception("Esta no es una tarea recurrente");
+        }
+
+        $task->update([
+            'recurrence_type' => $recurrenceType,
+            'recurrence_value' => $recurrenceValue,
+        ]);
+
+        // Recalcular próxima ejecución
+        $task->calculateNextRun();
+
+        Log::info("Recurrencia actualizada", [
+            'task_id' => $taskId,
+            'recurrence_type' => $recurrenceType,
+            'next_run_at' => $task->next_run_at,
+        ]);
+
+        return $task;
+    }
 }

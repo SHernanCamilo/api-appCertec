@@ -29,6 +29,8 @@ class ScheduledTaskResource extends JsonResource
             'scheduled_at' => $this->scheduled_at?->toIso8601String(),
             'started_at' => $this->started_at?->toIso8601String(),
             'completed_at' => $this->completed_at?->toIso8601String(),
+            'last_run_at' => $this->last_run_at?->toIso8601String(),
+            'next_run_at' => $this->next_run_at?->toIso8601String(),
             'attempts' => $this->attempts,
             'max_attempts' => $this->max_attempts,
             'can_retry' => $this->canRetry(),
@@ -38,6 +40,12 @@ class ScheduledTaskResource extends JsonResource
             'result' => $this->result,
             'error_message' => $this->error_message,
             'job_id' => $this->job_id,
+            'is_recurring' => $this->is_recurring,
+            'is_active' => $this->is_active,
+            'recurrence_type' => $this->recurrence_type,
+            'recurrence_type_label' => $this->getRecurrenceTypeLabel(),
+            'recurrence_value' => $this->recurrence_value,
+            'recurrence_description' => $this->getRecurrenceDescription(),
             'created_by' => $this->created_by,
             'creator' => $this->whenLoaded('creator', function () {
                 return [
@@ -86,5 +94,68 @@ class ScheduledTaskResource extends JsonResource
         $remainingMinutes = $minutes % 60;
         
         return "{$hours}h {$remainingMinutes}m";
+    }
+
+    /**
+     * Obtener etiqueta del tipo de recurrencia
+     */
+    private function getRecurrenceTypeLabel(): ?string
+    {
+        if (!$this->is_recurring) {
+            return null;
+        }
+
+        return match($this->recurrence_type) {
+            'every_minute' => 'Cada minuto',
+            'every_5_minutes' => 'Cada 5 minutos',
+            'every_15_minutes' => 'Cada 15 minutos',
+            'every_30_minutes' => 'Cada 30 minutos',
+            'hourly' => 'Cada hora',
+            'daily' => 'Diariamente',
+            'weekly' => 'Semanalmente',
+            'monthly' => 'Mensualmente',
+            'custom_days' => 'Días personalizados',
+            'cron' => 'Expresión cron',
+            default => $this->recurrence_type,
+        };
+    }
+
+    /**
+     * Obtener descripción legible de la recurrencia
+     */
+    private function getRecurrenceDescription(): ?string
+    {
+        if (!$this->is_recurring || !$this->recurrence_value) {
+            return null;
+        }
+
+        $value = $this->recurrence_value;
+
+        return match($this->recurrence_type) {
+            'daily' => "Todos los días a las {$value['time']}",
+            'weekly' => "Cada " . $this->getDayName($value['day_of_week']) . " a las {$value['time']}",
+            'monthly' => $value['day'] === 'last' 
+                ? "Último día del mes a las {$value['time']}"
+                : "Día {$value['day']} de cada mes a las {$value['time']}",
+            'custom_days' => "Días: " . implode(', ', array_map([$this, 'getDayName'], $value['days'])) . " a las {$value['time']}",
+            default => null,
+        };
+    }
+
+    /**
+     * Obtener nombre del día
+     */
+    private function getDayName(int $day): string
+    {
+        return match($day) {
+            0 => 'Domingo',
+            1 => 'Lunes',
+            2 => 'Martes',
+            3 => 'Miércoles',
+            4 => 'Jueves',
+            5 => 'Viernes',
+            6 => 'Sábado',
+            default => (string)$day,
+        };
     }
 }
