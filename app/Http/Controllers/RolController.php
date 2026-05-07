@@ -207,6 +207,12 @@ class RolController extends Controller
         $rol->perfiles()->sync($request->perfiles);
         $rol->load(['perfiles.modulo']);
 
+        // Invalidar caché del sidebar para todos los usuarios con este rol
+        $sidebarService = app(\App\Services\SidebarService::class);
+        foreach ($rol->usuarios as $usuario) {
+            $sidebarService->clearCache($usuario);
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Perfiles asignados exitosamente',

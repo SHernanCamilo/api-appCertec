@@ -32,8 +32,8 @@ class CheckPermission
             return $next($request);
         }
 
-        // Cargar relaciones necesarias
-        $user->load(['rolesCustom.perfiles.permisos']);
+        // Cargar relaciones necesarias (incluyendo módulo para construir códigos CRUD)
+        $user->load(['rolesCustom.perfiles.modulo', 'rolesCustom.perfiles.permisos']);
 
         // Verificar si el usuario tiene permisos
         if ($this->usuarioTienePermiso($user, $permisos)) {
@@ -77,24 +77,9 @@ class CheckPermission
         $permisosUsuario = collect();
         foreach ($user->rolesCustom as $rol) {
             foreach ($rol->perfiles as $perfil) {
-                // Agregar permisos del perfil
-                $permisosUsuario = $permisosUsuario->merge(
-                    $perfil->permisos->pluck('codigo')
-                );
-                
-                // Agregar permisos CRUD básicos
-                if ($perfil->puede_crear) {
-                    $permisosUsuario->push($perfil->modulo->codigo . '-crear');
-                }
-                if ($perfil->puede_leer) {
-                    $permisosUsuario->push($perfil->modulo->codigo . '-leer');
-                }
-                if ($perfil->puede_editar) {
-                    $permisosUsuario->push($perfil->modulo->codigo . '-editar');
-                }
-                if ($perfil->puede_eliminar) {
-                    $permisosUsuario->push($perfil->modulo->codigo . '-eliminar');
-                }
+                // Usar el método del modelo para obtener códigos de permisos
+                $codigosPermisos = $perfil->obtenerCodigosPermisos();
+                $permisosUsuario = $permisosUsuario->merge($codigosPermisos);
             }
         }
 

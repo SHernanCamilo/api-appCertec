@@ -53,10 +53,10 @@ class Rol extends Model
     {
         return $this->belongsToMany(
             User::class,
-            'seg_usuario_rol',
-            'id_rol',
+            'seg_rol_user',
+            'rol_id',
             'user_id'
-        )->withPivot('id_empresa')->withTimestamps();
+        )->withTimestamps();
     }
 
     /**
