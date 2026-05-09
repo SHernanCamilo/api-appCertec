@@ -84,12 +84,13 @@ class User extends Authenticatable implements JWTSubject
     }
 
     /**
-     * Relación muchos a muchos con empresas
+     * Relación muchos a muchos con empresas.
+     * Un usuario puede tener múltiples sucursales de la misma empresa.
      */
     public function empresas()
     {
         return $this->belongsToMany(Empresa::class, 'seg_empresa_user', 'user_id', 'empresa_id')
-                    ->withPivot('id_sucursal', 'id_sede', 'recursivo')
+                    ->withPivot('id', 'id_sucursal', 'id_sede', 'recursivo')
                     ->withTimestamps();
     }
 

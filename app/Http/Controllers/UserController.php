@@ -87,17 +87,9 @@ class UserController extends Controller
             $sidebarService->clearCache($user);
         }
 
-        // Asignar empresas múltiples con sucursales y sedes
+        // Asignar empresas con múltiples sucursales por empresa
         if ($request->has('empresasAsignadas')) {
-            $empresasData = [];
-            foreach ($request->empresasAsignadas as $asignacion) {
-                $empresasData[$asignacion['empresa_id']] = [
-                    'id_sucursal' => $asignacion['sucursal_id'],
-                    'id_sede' => $asignacion['sede_id'],
-                    'recursivo' => $asignacion['recursivo']
-                ];
-            }
-            $user->empresas()->sync($empresasData);
+            $this->syncEmpresasConSucursales($user, $request->empresasAsignadas);
         }
 
         // Recargar relaciones con permisos completos
@@ -286,17 +278,9 @@ class UserController extends Controller
             $sidebarService->clearCache($user);
         }
 
-        // Sincronizar empresas múltiples con sucursales y sedes
+        // Sincronizar empresas con múltiples sucursales por empresa
         if ($request->has('empresasAsignadas')) {
-            $empresasData = [];
-            foreach ($request->empresasAsignadas as $asignacion) {
-                $empresasData[$asignacion['empresa_id']] = [
-                    'id_sucursal' => $asignacion['sucursal_id'],
-                    'id_sede' => $asignacion['sede_id'],
-                    'recursivo' => $asignacion['recursivo']
-                ];
-            }
-            $user->empresas()->sync($empresasData);
+            $this->syncEmpresasConSucursales($user, $request->empresasAsignadas);
         }
 
         // Recargar relaciones con permisos completos
@@ -762,5 +746,74 @@ class UserController extends Controller
             'exists' => $exists,
             'message' => $exists ? 'El email ya está registrado' : 'El email está disponible'
         ]);
+    }
+
+    /**
+     * Sincroniza las asignaciones empresa-sucursal de un usuario.
+     * Soporta múltiples sucursales de la misma empresa.
+     * Reemplaza el uso de sync() que solo permitía 1 registro por empresa.
+     */
+    private function syncEmpresasConSucursales(User $user, array $empresasAsignadas): void
+    {
+        // Clave única: empresa_id + sucursal_id + sede_id
+        $nuevasKeys = [];
+        $nuevasAsignaciones = [];
+
+        foreach ($empresasAsignadas as $asignacion) {
+            $key = $asignacion['empresa_id'] . '-' . ($asignacion['sucursal_id'] ?? 'null') . '-' . ($asignacion['sede_id'] ?? 'null');
+            $nuevasKeys[$key] = true;
+            $nuevasAsignaciones[$key] = [
+                'user_id'      => $user->id,
+                'empresa_id'   => $asignacion['empresa_id'],
+                'id_sucursal'  => $asignacion['sucursal_id'] ?? null,
+                'id_sede'      => $asignacion['sede_id'] ?? null,
+                'recursivo'    => $asignacion['recursivo'] ? 1 : 0,
+                'created_at'   => now(),
+                'updated_at'   => now(),
+            ];
+        }
+
+        // Obtener asignaciones actuales en BD
+        $actuales = \DB::table('seg_empresa_user')
+            ->where('user_id', $user->id)
+            ->get();
+
+        $idsEliminar = [];
+        $keysExistentes = [];
+
+        foreach ($actuales as $row) {
+            $key = $row->empresa_id . '-' . ($row->id_sucursal ?? 'null') . '-' . ($row->id_sede ?? 'null');
+            if (!isset($nuevasKeys[$key])) {
+                // Ya no está en la nueva lista → eliminar
+                $idsEliminar[] = $row->id;
+            } else {
+                // Ya existe → no insertar de nuevo, solo actualizar recursivo si cambió
+                $keysExistentes[$key] = $row->id;
+            }
+        }
+
+        \DB::transaction(function () use ($user, $idsEliminar, $nuevasAsignaciones, $keysExistentes) {
+            // Eliminar los que ya no aplican
+            if (!empty($idsEliminar)) {
+                \DB::table('seg_empresa_user')->whereIn('id', $idsEliminar)->delete();
+            }
+
+            // Insertar o actualizar
+            foreach ($nuevasAsignaciones as $key => $data) {
+                if (isset($keysExistentes[$key])) {
+                    // Actualizar solo el campo recursivo (y sede si cambió)
+                    \DB::table('seg_empresa_user')
+                        ->where('id', $keysExistentes[$key])
+                        ->update([
+                            'id_sede'    => $data['id_sede'],
+                            'recursivo'  => $data['recursivo'],
+                            'updated_at' => now(),
+                        ]);
+                } else {
+                    // Insertar nuevo registro
+                    \DB::table('seg_empresa_user')->insert($data);
+                }
+            }
+        });
     }
 }
