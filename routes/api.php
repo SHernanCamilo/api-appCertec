@@ -340,3 +340,32 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('v1')->group(functi
     // CRUD estándar
     Route::apiResource('scheduled-tasks', App\Http\Controllers\Api\TaskSchedulerController::class);
 });
+
+// ─── Rutas de Configuración - Secuencias Numéricas ───────────────────────────
+Route::middleware(['auth:api', 'check.user.active'])->prefix('config/secuencias')->group(function () {
+
+    // Catálogo de patrones
+    Route::prefix('patrones')->group(function () {
+        Route::get('/',        [App\Http\Controllers\Config\SecPatronController::class, 'index']);
+        Route::post('/',       [App\Http\Controllers\Config\SecPatronController::class, 'store']);
+        Route::get('/{id}',    [App\Http\Controllers\Config\SecPatronController::class, 'show']);
+        Route::put('/{id}',    [App\Http\Controllers\Config\SecPatronController::class, 'update']);
+        Route::delete('/{id}', [App\Http\Controllers\Config\SecPatronController::class, 'destroy']);
+    });
+
+    // Cabeceras de secuencia
+    Route::get('/previsualizar', [App\Http\Controllers\Config\SecSecuenciaController::class, 'previsualizar']);
+    Route::get('/',              [App\Http\Controllers\Config\SecSecuenciaController::class, 'index']);
+    Route::post('/',             [App\Http\Controllers\Config\SecSecuenciaController::class, 'store']);
+    Route::get('/{id}',          [App\Http\Controllers\Config\SecSecuenciaController::class, 'show']);
+    Route::put('/{id}',          [App\Http\Controllers\Config\SecSecuenciaController::class, 'update']);
+    Route::delete('/{id}',       [App\Http\Controllers\Config\SecSecuenciaController::class, 'destroy']);
+
+    // Detalles anidados bajo la secuencia
+    Route::prefix('/{secuenciaId}/detalles')->group(function () {
+        Route::get('/',              [App\Http\Controllers\Config\SecDetalleController::class, 'index']);
+        Route::post('/',             [App\Http\Controllers\Config\SecDetalleController::class, 'store']);
+        Route::put('/{detalleId}',   [App\Http\Controllers\Config\SecDetalleController::class, 'update']);
+        Route::delete('/{detalleId}',[App\Http\Controllers\Config\SecDetalleController::class, 'destroy']);
+    });
+});
