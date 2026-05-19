@@ -266,6 +266,16 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('workflow')->group(
     require __DIR__ . '/Workflow/WorkflowRouter.php';
 });
 
+// Rutas de Cuadro de Turnos → routes/Turnos/TurnosRouter.php
+Route::middleware(['auth:api', 'check.user.active'])->prefix('turnos')->group(function () {
+    require __DIR__ . '/Turnos/TurnosRouter.php';
+});
+
+// Rutas de Microsoft Fabric / Analytics → routes/Fabric/FabricRouter.php
+Route::middleware(['auth:api', 'check.user.active'])->prefix('fabric')->group(function () {
+    require __DIR__ . '/Fabric/FabricRouter.php';
+});
+
 // Rutas de GLPI API Integration
 Route::middleware(['auth:api', 'check.user.active'])->prefix('glpi')->group(function () {
     // Rutas de sesión GLPI
