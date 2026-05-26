@@ -18,11 +18,15 @@ class CierreAutomaticoJob extends BaseScheduledJob
     protected function execute(ScheduledTask $task)
     {
         $empresaId = $this->parameters['empresa_id'] ?? null;
-        $periodo = $this->parameters['periodo'] ?? null;
-
-        if (!$periodo) {
-            throw new \Exception("Parámetro requerido: periodo (formato YYYY-MM)");
-        }
+        
+        // Calcular periodo automáticamente si no se proporciona
+        // Esto permite que las tareas recurrentes funcionen sin actualizar el periodo manualmente
+        $periodo = $this->parameters['periodo'] ?? now()->format('Y-m');
+        
+        Log::channel('cron')->info("Periodo calculado", [
+            'periodo_parametro' => $this->parameters['periodo'] ?? 'no especificado',
+            'periodo_usado' => $periodo,
+        ]);
 
         Log::channel('cron')->info("Iniciando cierre automático de inventario", [
             'task_id' => $task->id,

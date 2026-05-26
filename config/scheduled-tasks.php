@@ -29,8 +29,8 @@ return [
             'max_attempts' => 2,
             'timeout' => 1800, // 30 minutos
             'parameters' => [
-                'empresa_id' => 'integer|required',
-                'periodo' => 'string|required',
+                'empresa_id' => 'integer|nullable',
+                'periodo' => 'string|nullable', // Opcional: si no se proporciona, usa el mes actual
             ],
         ],
         'mantenimiento_db' => [

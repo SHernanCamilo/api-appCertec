@@ -276,6 +276,11 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('fabric')->group(fu
     require __DIR__ . '/Fabric/FabricRouter.php';
 });
 
+// ─── Rutas de Talento Humano - Eventos ───────────────────────────────────────
+Route::middleware(['auth:api', 'check.user.active'])->prefix('talento-humano/eventos')->group(function () {
+    require __DIR__ . '/TalentoHumano/EventosRouter.php';
+});
+
 // Rutas de GLPI API Integration
 Route::middleware(['auth:api', 'check.user.active'])->prefix('glpi')->group(function () {
     // Rutas de sesión GLPI
@@ -336,10 +341,41 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('v1')->group(functi
     // Rutas específicas (deben ir ANTES del apiResource)
     Route::get('scheduled-tasks/stats/dashboard', [App\Http\Controllers\Api\TaskSchedulerController::class, 'dashboardStats']);
     Route::get('scheduled-tasks/types', [App\Http\Controllers\Api\TaskSchedulerController::class, 'types']);
+    Route::get('scheduled-tasks/recurrence-types', [App\Http\Controllers\Api\TaskSchedulerController::class, 'recurrenceTypes']);
     Route::post('scheduled-tasks/{id}/execute', [App\Http\Controllers\Api\TaskSchedulerController::class, 'execute']);
     Route::post('scheduled-tasks/{id}/cancel', [App\Http\Controllers\Api\TaskSchedulerController::class, 'cancel']);
     Route::post('scheduled-tasks/{id}/retry', [App\Http\Controllers\Api\TaskSchedulerController::class, 'retry']);
+    Route::post('scheduled-tasks/{id}/toggle', [App\Http\Controllers\Api\TaskSchedulerController::class, 'toggle']);
     
     // CRUD estándar
     Route::apiResource('scheduled-tasks', App\Http\Controllers\Api\TaskSchedulerController::class);
+});
+
+// ─── Rutas de Configuración - Secuencias Numéricas ───────────────────────────
+Route::middleware(['auth:api', 'check.user.active'])->prefix('config/secuencias')->group(function () {
+
+    // Catálogo de patrones
+    Route::prefix('patrones')->group(function () {
+        Route::get('/',        [App\Http\Controllers\Config\SecPatronController::class, 'index']);
+        Route::post('/',       [App\Http\Controllers\Config\SecPatronController::class, 'store']);
+        Route::get('/{id}',    [App\Http\Controllers\Config\SecPatronController::class, 'show']);
+        Route::put('/{id}',    [App\Http\Controllers\Config\SecPatronController::class, 'update']);
+        Route::delete('/{id}', [App\Http\Controllers\Config\SecPatronController::class, 'destroy']);
+    });
+
+    // Cabeceras de secuencia
+    Route::get('/previsualizar', [App\Http\Controllers\Config\SecSecuenciaController::class, 'previsualizar']);
+    Route::get('/',              [App\Http\Controllers\Config\SecSecuenciaController::class, 'index']);
+    Route::post('/',             [App\Http\Controllers\Config\SecSecuenciaController::class, 'store']);
+    Route::get('/{id}',          [App\Http\Controllers\Config\SecSecuenciaController::class, 'show']);
+    Route::put('/{id}',          [App\Http\Controllers\Config\SecSecuenciaController::class, 'update']);
+    Route::delete('/{id}',       [App\Http\Controllers\Config\SecSecuenciaController::class, 'destroy']);
+
+    // Detalles anidados bajo la secuencia
+    Route::prefix('/{secuenciaId}/detalles')->group(function () {
+        Route::get('/',              [App\Http\Controllers\Config\SecDetalleController::class, 'index']);
+        Route::post('/',             [App\Http\Controllers\Config\SecDetalleController::class, 'store']);
+        Route::put('/{detalleId}',   [App\Http\Controllers\Config\SecDetalleController::class, 'update']);
+        Route::delete('/{detalleId}',[App\Http\Controllers\Config\SecDetalleController::class, 'destroy']);
+    });
 });

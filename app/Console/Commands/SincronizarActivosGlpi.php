@@ -1488,16 +1488,20 @@ class SincronizarActivosGlpi extends Command
             }
             
             if ($totalRamMiB > 0) {
-                // Convertir de MiB a GB sin redondear a valores estándar (valor exacto)
-                $totalRamGB = (int) round($totalRamMiB / 1000);
+                // Convertir de MiB a GB usando conversión binaria correcta (1024)
+                $totalRamGB = $totalRamMiB / 1024;
                 
-                Log::channel('glpi_sync')->debug("Conversión RAM MiB a GB (exacto)", [
+                // Aproximar al valor estándar más cercano (4, 8, 16, 32, 64, etc.)
+                $totalRamGBRedondeado = $this->redondearRamEstandar($totalRamGB);
+                
+                Log::channel('glpi_sync')->debug("Conversión RAM MiB a GB (aproximado a estándar)", [
                     'computer_id' => $computer['id'],
                     'ram_mib' => $totalRamMiB,
-                    'ram_gb' => $totalRamGB
+                    'ram_gb_calculado' => round($totalRamGB, 2),
+                    'ram_gb_final' => $totalRamGBRedondeado
                 ]);
                 
-                return $totalRamGB;
+                return $totalRamGBRedondeado;
             }
             
             return null;
@@ -1506,9 +1510,10 @@ class SincronizarActivosGlpi extends Command
         // Fallback: buscar en otros campos posibles
         if (isset($computer['ram'])) {
             $ramMiB = (int) $computer['ram'];
-            // Convertir de MiB a GB sin redondear
-            $ramGB = (int) round($ramMiB / 1000);
-            return $ramGB;
+            // Convertir de MiB a GB usando conversión binaria correcta
+            $ramGB = $ramMiB / 1024;
+            // Aproximar al valor estándar
+            return $this->redondearRamEstandar($ramGB);
         }
         
         return null;
@@ -1516,7 +1521,7 @@ class SincronizarActivosGlpi extends Command
     
     /**
      * Redondear RAM a valores estándar (4, 8, 16, 32, 64, 128, etc.)
-     * NOTA: Este método se mantiene para MaxRAM si es necesario
+     * Aproxima al valor estándar más cercano para evitar valores como 33 GB cuando es 32 GB
      */
     private function redondearRamEstandar($ramGB)
     {
@@ -1708,37 +1713,83 @@ class SincronizarActivosGlpi extends Command
 
     private function extractProcessorNumber($computer)
     {
-        // Método 1: Contar procesadores en devices
+        // Método 1: Buscar número de núcleos (cores) en devices
         if (isset($computer['devices']['Item_DeviceProcessor']) && !empty($computer['devices']['Item_DeviceProcessor'])) {
-            $count = count($computer['devices']['Item_DeviceProcessor']);
-            Log::channel('glpi_sync')->debug("Número de procesadores encontrado en devices para equipo {$computer['id']}", [
-                'processor_count' => $count
-            ]);
-            return $count;
+            foreach ($computer['devices']['Item_DeviceProcessor'] as $processor) {
+                // Buscar el campo de núcleos (puede estar como 'nbcores_default', 'nbcores', 'cores')
+                $cores = $processor['nbcores_default'] ?? $processor['nbcores'] ?? $processor['cores'] ?? null;
+                
+                if ($cores && $cores > 0) {
+                    Log::channel('glpi_sync')->debug("Número de núcleos encontrado en devices para equipo {$computer['id']}", [
+                        'cores' => $cores
+                    ]);
+                    return (int) $cores;
+                }
+            }
         }
         
-        // Método 2: Intentar obtener información usando el servicio
+        // Método 2: Intentar obtener información de núcleos usando el servicio
         try {
             $processorItems = $this->apiCallWithRetry(function() use ($computer) {
                 return $this->glpiService->get("/Computer/{$computer['id']}/Item_DeviceProcessor");
             });
             
             if (!empty($processorItems) && is_array($processorItems)) {
-                $count = count($processorItems);
-                Log::channel('glpi_sync')->debug("Número de procesadores encontrado via API para equipo {$computer['id']}", [
-                    'processor_count' => $count
-                ]);
-                return $count;
+                foreach ($processorItems as $processorItem) {
+                    $deviceprocessors_id = $processorItem['deviceprocessors_id'] ?? null;
+                    
+                    if ($deviceprocessors_id) {
+                        // Verificar cache primero
+                        $cacheKey = 'processor_cores_' . $deviceprocessors_id;
+                        if (isset($this->deviceProcessorCache[$cacheKey])) {
+                            $cores = $this->deviceProcessorCache[$cacheKey];
+                            Log::channel('glpi_sync')->debug("Número de núcleos encontrado en cache para equipo {$computer['id']}", [
+                                'cores' => $cores,
+                                'deviceprocessors_id' => $deviceprocessors_id
+                            ]);
+                            return $cores;
+                        }
+                        
+                        // Obtener DeviceProcessor para conseguir el número de núcleos
+                        $deviceProcessor = $this->apiCallWithRetry(function() use ($deviceprocessors_id) {
+                            return $this->glpiService->getItem('DeviceProcessor', $deviceprocessors_id);
+                        });
+                        
+                        if (!empty($deviceProcessor)) {
+                            $cores = $deviceProcessor['nbcores_default'] ?? $deviceProcessor['nbcores'] ?? null;
+                            
+                            if ($cores && $cores > 0) {
+                                // Guardar en cache
+                                $this->deviceProcessorCache[$cacheKey] = (int) $cores;
+                                
+                                Log::channel('glpi_sync')->debug("Número de núcleos encontrado via API para equipo {$computer['id']}", [
+                                    'cores' => $cores,
+                                    'deviceprocessors_id' => $deviceprocessors_id
+                                ]);
+                                return (int) $cores;
+                            }
+                        }
+                    }
+                    
+                    // También intentar obtener directamente del Item_DeviceProcessor
+                    $cores = $processorItem['nbcores_default'] ?? $processorItem['nbcores'] ?? $processorItem['cores'] ?? null;
+                    if ($cores && $cores > 0) {
+                        Log::channel('glpi_sync')->debug("Número de núcleos encontrado en Item_DeviceProcessor para equipo {$computer['id']}", [
+                            'cores' => $cores
+                        ]);
+                        return (int) $cores;
+                    }
+                }
             }
         } catch (\Exception $e) {
-            Log::channel('glpi_sync')->warning("Error obteniendo número de procesadores via API para equipo {$computer['id']}", [
+            Log::channel('glpi_sync')->warning("Error obteniendo número de núcleos via API para equipo {$computer['id']}", [
                 'error' => $e->getMessage()
             ]);
         }
         
-        // Fallback: asumir 1 procesador si no se encuentra información
-        Log::channel('glpi_sync')->debug("No se encontró información de número de procesadores para equipo {$computer['id']}, asumiendo 1");
-        return 1;
+        // Fallback: retornar null si no se encuentra información de núcleos
+        Log::channel('glpi_sync')->debug("No se encontró información de número de núcleos para equipo {$computer['id']}");
+        return null;
     }
 
     private function extractDiskType($computer)
