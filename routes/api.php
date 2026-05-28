@@ -61,6 +61,7 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     Route::get('users/tenant/obtener', [App\Http\Controllers\UserController::class, 'obtenerUsuariosTenant']);
     Route::post('users/tenant/sincronizar', [App\Http\Controllers\UserController::class, 'sincronizarUsuariosTenant']);
     Route::post('users/check-email', [App\Http\Controllers\UserController::class, 'checkEmail']);
+    Route::get('users-por-empresa/{empresaId}', [App\Http\Controllers\UserController::class, 'porEmpresa']);
     
     // 🔍 RUTAS DE DEBUG - REMOVER EN PRODUCCIÓN
     // Route::get('debug/usuarios', [App\Http\Controllers\DebugPermisosController::class, 'listarUsuariosConPermisos']);
@@ -90,6 +91,10 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     Route::apiResource('sedes', App\Http\Controllers\SedeController::class);
     Route::get('sedes-por-sucursal/{sucursalId}', [App\Http\Controllers\SedeController::class, 'porSucursal']);
     Route::get('sedes-por-empresa/{empresaId}', [App\Http\Controllers\SedeController::class, 'porEmpresa']);
+
+    // Unidades funcionales (organización)
+    Route::get('unidades-funcionales/buscar', [App\Http\Controllers\UnidadFuncionalController::class, 'buscar']);
+    Route::apiResource('unidades-funcionales', App\Http\Controllers\UnidadFuncionalController::class);
     
     // Rutas de módulos
     Route::apiResource('modulos', App\Http\Controllers\Api\ModuloController::class);
