@@ -9,10 +9,11 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Aprobadores parametrizables por paso.
- * Soporta 3 estrategias:
+ * Soporta 4 estrategias:
  *   1. Aprobador fijo (id_user)
  *   2. Aprobador por unidad funcional (dinámico)
  *   3. Aprobador por prefijo de sucursal (dinámico)
+ *   4. Aprobador por grupo (dinámico)
  */
 class WfAprobador extends Model
 {
@@ -24,6 +25,7 @@ class WfAprobador extends Model
         'id_unidad_funcional',
         'prefijo_sucursal',
         'id_sede',
+        'id_grupo',
         'es_suplente',
         'estado',
     ];
@@ -51,6 +53,11 @@ class WfAprobador extends Model
     public function sede()
     {
         return $this->belongsTo(Sede::class, 'id_sede');
+    }
+
+    public function grupo()
+    {
+        return $this->belongsTo(WfGrupo::class, 'id_grupo');
     }
 
     public function scopeActivos($query)
