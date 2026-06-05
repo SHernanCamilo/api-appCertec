@@ -18,12 +18,12 @@ class FabricConnectionService
     private const TOKEN_CACHE_KEY = 'fabric_aad_token';
     private const TOKEN_TTL_MIN   = 55; // El token dura 60 min, renovamos a los 55
 
-    private string $host;
-    private int    $port;
-    private string $database;
-    private string $clientId;
-    private string $clientSecret;
-    private string $tenantId;
+private ?string $host;
+private int     $port;
+private ?string $database;
+private ?string $clientId;
+private ?string $clientSecret;
+private ?string $tenantId;
 
     public function __construct()
     {

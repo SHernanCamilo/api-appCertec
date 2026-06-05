@@ -19,6 +19,8 @@ class CtAsignacion extends Model{
         'es_festivo',
         'hora_inicio_override',
         'hora_fin_override',
+        'hora_inicio_override_2',
+        'hora_fin_override_2',
         'observacion',
     ];
 
@@ -102,5 +104,63 @@ class CtAsignacion extends Model{
         }
 
         return $this->plantilla?->hora_fin;
+    }
+
+    /**
+     * Retorna la hora de inicio del SEGUNDO rango (jornada partida).
+     */
+    public function getHoraInicio2(): ?string
+    {
+        if ($this->hora_inicio_override_2) {
+            return $this->hora_inicio_override_2;
+        }
+
+        return $this->plantilla?->hora_inicio_2;
+    }
+
+    /**
+     * Retorna la hora de fin del SEGUNDO rango (jornada partida).
+     */
+    public function getHoraFin2(): ?string
+    {
+        if ($this->hora_fin_override_2) {
+            return $this->hora_fin_override_2;
+        }
+
+        return $this->plantilla?->hora_fin_2;
+    }
+
+    /**
+     * Indica si la asignación es de jornada partida (tiene segundo rango).
+     */
+    public function esJornadaPartida(): bool
+    {
+        return !empty($this->getHoraInicio2()) && !empty($this->getHoraFin2());
+    }
+
+    /**
+     * Retorna todos los rangos horarios de la asignación.
+     * 
+     * @return array  [['inicio' => 'HH:MM', 'fin' => 'HH:MM'], ...]
+     */
+    public function getRangos(): array
+    {
+        $rangos = [];
+
+        if ($this->getHoraInicio() && $this->getHoraFin()) {
+            $rangos[] = [
+                'inicio' => $this->getHoraInicio(),
+                'fin'    => $this->getHoraFin(),
+            ];
+        }
+
+        if ($this->esJornadaPartida()) {
+            $rangos[] = [
+                'inicio' => $this->getHoraInicio2(),
+                'fin'    => $this->getHoraFin2(),
+            ];
+        }
+
+        return $rangos;
     }
 }

@@ -57,6 +57,8 @@ class PlantillaController extends Controller
             'nombre'          => 'required|string|max:100',
             'hora_inicio'     => 'required|date_format:H:i',
             'hora_fin'        => 'required|date_format:H:i',
+            'hora_inicio_2'   => 'nullable|date_format:H:i|required_with:hora_fin_2',
+            'hora_fin_2'      => 'nullable|date_format:H:i|required_with:hora_inicio_2|after:hora_inicio_2',
             'duracion_horas'  => 'required|numeric|min:0.5|max:24',
             'es_nocturno'     => 'boolean',
             'color_hex'       => 'nullable|string|regex:/^#[0-9A-Fa-f]{6}$/',
@@ -65,12 +67,28 @@ class PlantillaController extends Controller
         ]);
 
         try {
+            // Validar que el primer rango esté antes del segundo si hay jornada partida
+            if ($request->filled('hora_inicio_2') && $request->filled('hora_fin_2')) {
+                if ($request->hora_fin > $request->hora_inicio_2) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'El primer rango debe terminar antes del inicio del segundo rango.',
+                    ], 422);
+                }
+            }
+
             $plantilla = CtPlantilla::create($request->all());
+
+            // Recalcular duracion_horas automáticamente si no se envió o está incorrecta
+            $duracionCalculada = $plantilla->calcularDuracionTotal();
+            if (abs($plantilla->duracion_horas - $duracionCalculada) > 0.01) {
+                $plantilla->update(['duracion_horas' => $duracionCalculada]);
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Plantilla creada exitosamente.',
-                'data'    => $plantilla,
+                'data'    => $plantilla->fresh(),
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
@@ -112,6 +130,8 @@ class PlantillaController extends Controller
             'nombre'         => 'string|max:100',
             'hora_inicio'    => 'date_format:H:i',
             'hora_fin'       => 'date_format:H:i',
+            'hora_inicio_2'  => 'nullable|date_format:H:i',
+            'hora_fin_2'     => 'nullable|date_format:H:i',
             'duracion_horas' => 'numeric|min:0.5|max:24',
             'es_nocturno'    => 'boolean',
             'color_hex'      => 'nullable|string|regex:/^#[0-9A-Fa-f]{6}$/',
@@ -122,6 +142,12 @@ class PlantillaController extends Controller
         try {
             $plantilla = CtPlantilla::findOrFail($id);
             $plantilla->update($request->all());
+
+            // Recalcular duracion_horas automáticamente
+            $duracionCalculada = $plantilla->calcularDuracionTotal();
+            if (abs($plantilla->duracion_horas - $duracionCalculada) > 0.01) {
+                $plantilla->update(['duracion_horas' => $duracionCalculada]);
+            }
 
             return response()->json([
                 'success' => true,

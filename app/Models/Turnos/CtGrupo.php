@@ -19,6 +19,7 @@ class CtGrupo extends Model
         'descripcion',
         'id_empresa',
         'id_sede',
+        'id_unidad_funcional',
         'estado',
     ];
 
@@ -38,6 +39,11 @@ class CtGrupo extends Model
     public function sede(): BelongsTo
     {
         return $this->belongsTo(Sede::class, 'id_sede');
+    }
+
+    public function unidadFuncional(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\Turnos\ConfigUnidadFuncional::class, 'id_unidad_funcional');
     }
 
     /**
@@ -90,5 +96,10 @@ class CtGrupo extends Model
     public function scopePorSede($query, int $idSede)
     {
         return $query->where('id_sede', $idSede);
+    }
+
+    public function scopePorUnidadFuncional($query, int $idUnidadFuncional)
+    {
+        return $query->where('id_unidad_funcional', $idUnidadFuncional);
     }
 }

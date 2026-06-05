@@ -6,6 +6,10 @@ use App\Http\Controllers\Turnos\GrupoController;
 use App\Http\Controllers\Turnos\CuadroController;
 use App\Http\Controllers\Turnos\AsignacionController;
 use App\Http\Controllers\Turnos\NovedadController;
+use App\Http\Controllers\Turnos\UnidadFuncionalController;
+use App\Http\Controllers\Turnos\FestivoController;
+use App\Http\Controllers\Turnos\CalculoHorasController;
+use App\Http\Controllers\CuadroTurnoPermisoController;
 
 /**
  * Rutas del módulo Cuadro de Turnos
@@ -15,6 +19,29 @@ use App\Http\Controllers\Turnos\NovedadController;
  */
 
 Route::middleware(['auth:api'])->group(function () {
+
+    // =========================================================================
+    // PERMISOS DE CUADRO DE TURNOS
+    // =========================================================================
+    Route::get('cuadro-turno-permisos/usuario-completo/{userId}', [CuadroTurnoPermisoController::class, 'usuarioCompleto']);
+    Route::get('cuadro-turno-permisos/debug', [CuadroTurnoPermisoController::class, 'debug']);
+    Route::get('cuadro-turno-permisos/usuarios', [CuadroTurnoPermisoController::class, 'listarUsuarios']);
+    Route::get('cuadro-turno-permisos/empresas', [CuadroTurnoPermisoController::class, 'listarEmpresas']);
+    Route::get('cuadro-turno-permisos/sedes', [CuadroTurnoPermisoController::class, 'listarSedes']);
+    Route::get('cuadro-turno-permisos/unidades-funcionales-con-prefijo/{sedeId}', [CuadroTurnoPermisoController::class, 'listarUnidadesPorSedeConPrefijo']);
+    Route::get('cuadro-turno-permisos/unidades-funcionales/{sedeId}', [CuadroTurnoPermisoController::class, 'listarUnidadesPorSede']);
+    Route::get('cuadro-turno-permisos/usuario/{userId}', [CuadroTurnoPermisoController::class, 'permisosPorUsuario']);
+    Route::get('cuadro-turno-permisos', [CuadroTurnoPermisoController::class, 'index']);
+    Route::post('cuadro-turno-permisos', [CuadroTurnoPermisoController::class, 'store']);
+    Route::delete('cuadro-turno-permisos/{id}', [CuadroTurnoPermisoController::class, 'destroy']);
+    Route::post('cuadro-turno-permisos/asignar-multiples', [CuadroTurnoPermisoController::class, 'asignarMultiples']);
+
+    // =========================================================================
+    // UNIDADES FUNCIONALES
+    // =========================================================================
+    Route::get('unidades-funcionales/del-usuario', [UnidadFuncionalController::class, 'delUsuario']);
+    Route::get('unidades-funcionales/{id}/empleados', [UnidadFuncionalController::class, 'empleados']);
+    Route::apiResource('unidades-funcionales', UnidadFuncionalController::class);
 
     // =========================================================================
     // PLANTILLAS DE TURNO
@@ -55,13 +82,36 @@ Route::middleware(['auth:api'])->group(function () {
     Route::get('cuadros/{id}/grilla', [CuadroController::class, 'grilla']);
     Route::post('cuadros/{id}/asignaciones', [CuadroController::class, 'asignarMasivo']);
 
+    // Turnos de un empleado en un período
+    Route::get('empleados/{idEmpleado}/turnos', [AsignacionController::class, 'turnosEmpleado']);
+
+    // Vista individual: cuadro completo del empleado (turnos + totales de horas por categoría + festivos)
+    Route::get('empleados/{idEmpleado}/cuadro-mes', [AsignacionController::class, 'cuadroMesEmpleado']);
+    
+    // Eliminar todo el cuadro de turnos del empleado en un mes/año
+    Route::delete('empleados/{idEmpleado}/cuadro-mes', [AsignacionController::class, 'eliminarCuadroMesEmpleado']);
+
+    // Asegura que exista un cuadro mensual para una UNIDAD FUNCIONAL (lo crea si no existe)
+    Route::post('cuadros/ensure', [AsignacionController::class, 'ensureCuadroUnidad']);
+
     // =========================================================================
     // ASIGNACIONES INDIVIDUALES
     // =========================================================================
     Route::apiResource('asignaciones', AsignacionController::class)->except(['index']);
 
-    // Turnos de un empleado en un período
-    Route::get('empleados/{idEmpleado}/turnos', [AsignacionController::class, 'turnosEmpleado']);
+    // =========================================================================
+    // FESTIVOS
+    // =========================================================================
+    Route::get('festivos', [FestivoController::class, 'index']);
+    Route::post('festivos', [FestivoController::class, 'store']);
+    Route::put('festivos/{id}', [FestivoController::class, 'update']);
+    Route::delete('festivos/{id}', [FestivoController::class, 'destroy']);
+
+    // =========================================================================
+    // CÁLCULO DE HORAS (4 categorías: normales, nocturnas, festivas, festivas_nocturnas)
+    // =========================================================================
+    Route::get('calculo/empleado/{idEmpleado}', [CalculoHorasController::class, 'porEmpleadoMes']);
+    Route::get('calculo/empleado/{idEmpleado}/rango', [CalculoHorasController::class, 'porEmpleadoRango']);
 
     // =========================================================================
     // NOVEDADES

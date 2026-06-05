@@ -188,6 +188,7 @@ class CuadroTurnoService
 
     /**
      * Asignar un turno a un empleado en una fecha.
+     * Soporta jornada partida (segundo rango opcional).
      * Valida solapamiento de horario antes de guardar.
      */
     public function asignarTurno(array $data): CtAsignacion
@@ -209,7 +210,9 @@ class CuadroTurnoService
                 $idPlantilla,
                 $data['hora_inicio_override'] ?? null,
                 $data['hora_fin_override'] ?? null,
-                $data['id'] ?? null
+                $data['id'] ?? null,
+                $data['hora_inicio_override_2'] ?? null,
+                $data['hora_fin_override_2'] ?? null
             );
 
             if ($haySolapamiento) {
@@ -224,12 +227,14 @@ class CuadroTurnoService
                 'fecha'       => $data['fecha'],
             ],
             [
-                'id_plantilla'         => $idPlantilla,
-                'es_descanso'          => $esDescanso,
-                'es_festivo'           => $data['es_festivo'] ?? false,
-                'hora_inicio_override' => $data['hora_inicio_override'] ?? null,
-                'hora_fin_override'    => $data['hora_fin_override'] ?? null,
-                'observacion'          => $data['observacion'] ?? null,
+                'id_plantilla'           => $idPlantilla,
+                'es_descanso'            => $esDescanso,
+                'es_festivo'             => $data['es_festivo'] ?? false,
+                'hora_inicio_override'   => $data['hora_inicio_override'] ?? null,
+                'hora_fin_override'      => $data['hora_fin_override'] ?? null,
+                'hora_inicio_override_2' => $data['hora_inicio_override_2'] ?? null,
+                'hora_fin_override_2'    => $data['hora_fin_override_2'] ?? null,
+                'observacion'            => $data['observacion'] ?? null,
             ]
         );
     }
@@ -271,7 +276,8 @@ class CuadroTurnoService
      *
      * Retorna TRUE si hay solapamiento (conflicto), FALSE si no hay.
      *
-     * Lógica: dos turnos se solapan si inicio1 < fin2 AND fin1 > inicio2
+     * Soporta jornada partida: valida ambos rangos (Turno 1 y Turno 2 opcional).
+     * Lógica: dos rangos se solapan si inicio1 < fin2 AND fin1 > inicio2
      */
     public function validarSolapamiento(
         int $idEmpleado,
@@ -279,22 +285,33 @@ class CuadroTurnoService
         ?int $idPlantilla,
         ?string $horaInicioOverride = null,
         ?string $horaFinOverride = null,
-        ?int $excluirAsignacionId = null
+        ?int $excluirAsignacionId = null,
+        ?string $horaInicioOverride2 = null,
+        ?string $horaFinOverride2 = null
     ): bool {
         if (!$idPlantilla) {
             return false; // Descanso, no hay solapamiento
         }
 
-        // Obtener la plantilla nueva
         $plantillaNueva = CtPlantilla::find($idPlantilla);
         if (!$plantillaNueva) {
             return false;
         }
 
-        $nuevaInicio = $horaInicioOverride ?? $plantillaNueva->hora_inicio;
-        $nuevaFin    = $horaFinOverride    ?? $plantillaNueva->hora_fin;
+        // Construir lista de rangos de la nueva asignación (1 o 2 rangos)
+        $rangosNuevos = [];
+        $rangosNuevos[] = [
+            'inicio' => $horaInicioOverride ?? $plantillaNueva->hora_inicio,
+            'fin'    => $horaFinOverride    ?? $plantillaNueva->hora_fin,
+        ];
 
-        // Buscar todas las asignaciones del empleado en esa fecha (en cualquier cuadro)
+        $inicio2 = $horaInicioOverride2 ?? $plantillaNueva->hora_inicio_2;
+        $fin2    = $horaFinOverride2    ?? $plantillaNueva->hora_fin_2;
+        if ($inicio2 && $fin2) {
+            $rangosNuevos[] = ['inicio' => $inicio2, 'fin' => $fin2];
+        }
+
+        // Buscar todas las asignaciones del empleado en esa fecha
         $query = CtAsignacion::where('id_empleado', $idEmpleado)
             ->where('fecha', $fecha)
             ->where('es_descanso', false)
@@ -308,16 +325,33 @@ class CuadroTurnoService
         $asignacionesExistentes = $query->get();
 
         foreach ($asignacionesExistentes as $asignacion) {
-            $existenteInicio = $asignacion->hora_inicio_override ?? $asignacion->plantilla?->hora_inicio;
-            $existenteFin    = $asignacion->hora_fin_override    ?? $asignacion->plantilla?->hora_fin;
+            $rangosExistentes = $asignacion->getRangos();
 
-            if (!$existenteInicio || !$existenteFin) {
-                continue;
+            foreach ($rangosNuevos as $rangoNuevo) {
+                foreach ($rangosExistentes as $rangoExistente) {
+                    // Dos rangos se solapan si: inicio1 < fin2 AND fin1 > inicio2
+                    if ($rangoNuevo['inicio'] < $rangoExistente['fin']
+                        && $rangoNuevo['fin'] > $rangoExistente['inicio']) {
+                        return true;
+                    }
+                }
             }
 
-            // Dos turnos se solapan si: inicio1 < fin2 AND fin1 > inicio2
-            if ($nuevaInicio < $existenteFin && $nuevaFin > $existenteInicio) {
-                return true; // Hay solapamiento
+            // Validar también solapamiento entre los dos rangos de la nueva asignación
+            if (count($rangosNuevos) === 2) {
+                if ($rangosNuevos[0]['inicio'] < $rangosNuevos[1]['fin']
+                    && $rangosNuevos[0]['fin'] > $rangosNuevos[1]['inicio']) {
+                    return true;
+                }
+            }
+        }
+
+        // Validación adicional: aunque no haya asignaciones existentes,
+        // verificar coherencia interna de la nueva (rango 1 vs rango 2)
+        if (count($rangosNuevos) === 2) {
+            if ($rangosNuevos[0]['inicio'] < $rangosNuevos[1]['fin']
+                && $rangosNuevos[0]['fin'] > $rangosNuevos[1]['inicio']) {
+                return true;
             }
         }
 
@@ -438,13 +472,17 @@ class CuadroTurnoService
                 'es_festivo'   => $asignacion->es_festivo,
                 'id_plantilla' => $asignacion->id_plantilla,
                 'plantilla'    => $asignacion->plantilla ? [
-                    'id'         => $asignacion->plantilla->id,
-                    'codigo'     => $asignacion->plantilla->codigo,
-                    'nombre'     => $asignacion->plantilla->nombre,
-                    'hora_inicio' => $asignacion->getHoraInicio(),
-                    'hora_fin'    => $asignacion->getHoraFin(),
-                    'color_hex'  => $asignacion->plantilla->color_hex,
+                    'id'             => $asignacion->plantilla->id,
+                    'codigo'         => $asignacion->plantilla->codigo,
+                    'nombre'         => $asignacion->plantilla->nombre,
+                    'hora_inicio'    => $asignacion->getHoraInicio(),
+                    'hora_fin'       => $asignacion->getHoraFin(),
+                    'hora_inicio_2'  => $asignacion->getHoraInicio2(),
+                    'hora_fin_2'     => $asignacion->getHoraFin2(),
+                    'es_jornada_partida' => $asignacion->esJornadaPartida(),
+                    'color_hex'      => $asignacion->plantilla->color_hex,
                 ] : null,
+                'rangos'       => $asignacion->getRangos(),
                 'observacion'  => $asignacion->observacion,
             ];
         }
@@ -465,32 +503,396 @@ class CuadroTurnoService
         $fechaInicio = Carbon::createFromDate($anio, $mes, 1)->startOfMonth()->toDateString();
         $fechaFin    = Carbon::createFromDate($anio, $mes, 1)->endOfMonth()->toDateString();
 
-        $asignaciones = CtAsignacion::with(['cuadro.grupo', 'plantilla'])
-            ->where('id_empleado', $idEmpleado)
-            ->whereBetween('fecha', [$fechaInicio, $fechaFin])
-            ->orderBy('fecha')
+        // Get the assignment records
+        $asignaciones = \DB::table('humtal_ct_asignacion as ha')
+            ->where('ha.id_empleado', $idEmpleado)
+            ->whereBetween('ha.fecha', [$fechaInicio, $fechaFin])
+            ->select(
+                'ha.id',
+                'ha.fecha',
+                'ha.es_descanso',
+                'ha.es_festivo',
+                'ha.hora_inicio_override',
+                'ha.hora_fin_override',
+                'ha.hora_inicio_override_2',
+                'ha.hora_fin_override_2',
+                'ha.id_plantilla',
+                'ha.id_empleado',
+                'ha.observacion'
+            )
+            ->orderBy('ha.fecha')
             ->get();
 
-        return $asignaciones->map(function ($a) {
+        // Get empleado name - try to find in users first, if not found check config_person_tercero
+        $empleadoData = \DB::table('users')->find($idEmpleado);
+        
+        if (!$empleadoData) {
+            $empleadoData = \DB::table('config_person_tercero')->find($idEmpleado);
+        }
+
+        $empleadoNombre = $empleadoData ? ($empleadoData->name ?? $empleadoData->nombre ?? 'Desconocido') : 'Desconocido';
+
+        return $asignaciones->map(function ($a) use ($empleadoNombre) {
+            $plantilla = \DB::table('humtal_ct_plantillas')->find($a->id_plantilla);
+            
+            // Usar override si existe, sino usar plantilla
+            $horaInicio = $a->hora_inicio_override ?? ($plantilla->hora_inicio ?? '00:00:00');
+            $horaFin = $a->hora_fin_override ?? ($plantilla->hora_fin ?? '00:00:00');
+            $horaInicio2 = $a->hora_inicio_override_2;
+            $horaFin2 = $a->hora_fin_override_2;
+            
             return [
-                'id'           => $a->id,
-                'fecha'        => Carbon::parse($a->fecha)->format('Y-m-d'),
-                'es_descanso'  => $a->es_descanso,
-                'es_festivo'   => $a->es_festivo,
-                'hora_inicio'  => $a->getHoraInicio(),
-                'hora_fin'     => $a->getHoraFin(),
-                'plantilla'    => $a->plantilla ? [
-                    'id'        => $a->plantilla->id,
-                    'codigo'    => $a->plantilla->codigo,
-                    'nombre'    => $a->plantilla->nombre,
-                    'color_hex' => $a->plantilla->color_hex,
+                'id'             => $a->id,
+                'fecha'          => Carbon::parse($a->fecha)->format('Y-m-d'),
+                'es_descanso'    => $a->es_descanso,
+                'es_festivo'     => $a->es_festivo,
+                'hora_inicio'    => $horaInicio,
+                'hora_fin'       => $horaFin,
+                'hora_inicio_2'  => $horaInicio2,
+                'hora_fin_2'     => $horaFin2,
+                'es_jornada_partida' => false,
+                'rangos'         => $plantilla ? [['inicio' => $plantilla->hora_inicio, 'fin' => $plantilla->hora_fin]] : [],
+                'plantilla'      => $plantilla ? [
+                    'id'        => $plantilla->id,
+                    'codigo'    => $plantilla->codigo,
+                    'nombre'    => $plantilla->nombre,
+                    'color_hex' => $plantilla->color_hex ?? '#000000',
                 ] : null,
-                'grupo'        => $a->cuadro?->grupo ? [
-                    'id'     => $a->cuadro->grupo->id,
-                    'nombre' => $a->cuadro->grupo->nombre,
-                ] : null,
-                'observacion'  => $a->observacion,
+                'grupo'          => [
+                    'id'     => $a->id_empleado,
+                    'nombre' => 'Individual: ' . $empleadoNombre,
+                ],
+                'observacion'    => $a->observacion,
             ];
         })->toArray();
+    }
+
+    /**
+     * Obtener cuadro completo del empleado con turnos, totales y festivos
+     */
+    public function obtenerCuadroEmpleado(int $idEmpleado, int $anio, int $mes): array
+    {
+        try {
+            $fechaInicio = Carbon::createFromDate($anio, $mes, 1)->startOfMonth()->toDateString();
+            $fechaFin    = Carbon::createFromDate($anio, $mes, 1)->endOfMonth()->toDateString();
+
+            // Obtener datos del empleado desde users
+            $empleado = \DB::table('users')
+                ->where('id', $idEmpleado)
+                ->select('id', 'name as nombre', 'email')
+                ->first();
+
+            $turnos = $this->obtenerTurnosEmpleado($idEmpleado, $anio, $mes);
+            $festivos = $this->obtenerFestivosDelAnio($anio);
+            $totales = $this->calcularTotalesMes($turnos, $festivos, $fechaInicio, $fechaFin);
+            $porDia = $this->desglosarPorDia($turnos, $festivos, $fechaInicio, $fechaFin);
+
+            return [
+                'empleado'  => $empleado ? (array) $empleado : ['id' => $idEmpleado, 'nombre' => 'Desconocido'],
+                'anio'      => $anio,
+                'mes'       => $mes,
+                'turnos'    => $turnos,
+                'totales'   => $totales,
+                'por_dia'   => $porDia,
+                'festivos'  => $festivos,
+            ];
+        } catch (\Exception $e) {
+            throw new \Exception('Error al obtener cuadro del empleado: ' . $e->getMessage());
+        }
+    }
+/**
+ * Eliminar todos los turnos de un empleado en un mes/año
+ */
+public function eliminarCuadroEmpleado(int $idEmpleado, int $anio, int $mes): array
+{
+    try {
+        $fechaInicio = Carbon::createFromDate($anio, $mes, 1)->startOfMonth()->toDateString();
+        $fechaFin    = Carbon::createFromDate($anio, $mes, 1)->endOfMonth()->toDateString();
+
+        $asignacionesEliminadas = CtAsignacion::where('id_empleado', $idEmpleado)
+            ->whereBetween('fecha', [$fechaInicio, $fechaFin])
+            ->delete();
+
+        return [
+            'id_empleado'             => $idEmpleado,
+            'anio'                    => $anio,
+            'mes'                     => $mes,
+            'asignaciones_eliminadas' => $asignacionesEliminadas,
+            'mensaje'                 => "Se eliminaron {$asignacionesEliminadas} asignaciones del empleado en {$mes}/{$anio}",
+        ];
+    } catch (\Exception $e) {
+        throw new \Exception('Error al eliminar cuadro del empleado: ' . $e->getMessage());
+    }
+}
+    /**
+     * Eliminar todos los turnos de un empleado en un mes/año
+     */
+   public function obtenerOCrearCuadro(int $idEmpleado, int $anio, int $mes): array
+    {
+        $cuadro = CtCuadro::where('id_empleado', $idEmpleado)
+            ->where('anio', $anio)
+            ->where('mes', $mes)
+            ->first();
+
+        if ($cuadro) {
+            return [
+                'id_cuadro' => $cuadro->id,
+                'anio'      => $cuadro->anio,
+                'mes'       => $cuadro->mes,
+                'estado'    => $cuadro->estado,
+            ];
+        }
+
+        $cuadro = CtCuadro::create([
+            'id_empleado'  => $idEmpleado,
+            'anio'         => $anio,
+            'mes'          => $mes,
+            'estado'       => 'borrador',
+            'id_user_crea' => auth()->id(),
+        ]);
+
+        return [
+            'id_cuadro' => $cuadro->id,
+            'anio'      => $cuadro->anio,
+            'mes'       => $cuadro->mes,
+            'estado'    => $cuadro->estado,
+        ];
+    } 
+
+    /**
+     * Crear una nueva asignación
+     */
+    public function crearAsignacion(array $data): array
+    {
+        $asignacion = CtAsignacion::create($data);
+        return $this->formatearAsignacion($asignacion);
+    }
+
+    /**
+     * Actualizar una asignación existente
+     */
+    public function actualizarAsignacion(CtAsignacion $asignacion, array $data): array
+    {
+        $asignacion->update($data);
+        return $this->formatearAsignacion($asignacion->fresh());
+    }
+
+    /**
+     * Formatear asignación para respuesta
+     */
+    private function formatearAsignacion(CtAsignacion $a): array
+    {
+        return [
+            'id'             => $a->id,
+            'id_cuadro'      => $a->id_cuadro,
+            'id_empleado'    => $a->id_empleado,
+            'fecha'          => $a->fecha,
+            'es_descanso'    => $a->es_descanso,
+            'es_festivo'     => $a->es_festivo,
+            'hora_inicio'    => $a->getHoraInicio(),
+            'hora_fin'       => $a->getHoraFin(),
+            'hora_inicio_2'  => $a->getHoraInicio2(),
+            'hora_fin_2'     => $a->getHoraFin2(),
+            'es_jornada_partida' => $a->esJornadaPartida(),
+            'rangos'         => $a->getRangos(),
+            'plantilla'      => $a->plantilla ? [
+                'id'        => $a->plantilla->id,
+                'nombre'    => $a->plantilla->nombre,
+                'color_hex' => $a->plantilla->color_hex,
+            ] : null,
+            'observacion'    => $a->observacion,
+        ];
+    }
+
+    /**
+     * Obtener festivos de un año (público)
+     */
+    public function obtenerFestivosDelAnio(int $anio): array
+    {
+        return $this->obtenerFestivos($anio);
+    }
+
+    /**
+     * Obtener festivos de un año
+     */
+    private function obtenerFestivos(int $anio): array
+    {
+        $inicioAnio = Carbon::createFromDate($anio, 1, 1)->startOfYear()->toDateString();
+        $finAnio    = Carbon::createFromDate($anio, 12, 31)->endOfYear()->toDateString();
+        
+        $festivos = \App\Models\Turnos\CtFestivo::whereBetween('fecha', [$inicioAnio, $finAnio])->get();
+        return $festivos->map(function ($f) {
+            return [
+                'fecha'  => $f->fecha,
+                'nombre' => $f->nombre,
+            ];
+        })->toArray();
+    }
+
+    /**
+     * Calcular totales de horas por categoría
+     */
+    private function calcularTotalesMes(array $turnos, array $festivos, string $fechaInicio, string $fechaFin): array
+    {
+        $total = 0;
+        $normales = 0;
+        $nocturnas = 0;
+        $festivas = 0;
+        $festivasNocturnas = 0;
+
+        $festivosMapa = collect($festivos)->mapWithKeys(function ($f) {
+            return [substr($f['fecha'], 0, 10) => true];
+        });
+
+        foreach ($turnos as $turno) {
+            if ($turno['es_descanso'] || !$turno['hora_inicio']) continue;
+
+            $horas = $this->calcularHoras($turno, $festivosMapa->has($turno['fecha']));
+            
+            $total += $horas['total'];
+            $normales += $horas['normales'];
+            $nocturnas += $horas['nocturnas'];
+            $festivas += $horas['festivas'];
+            $festivasNocturnas += $horas['festivas_nocturnas'];
+        }
+
+        return [
+            'total'                => round($total, 2),
+            'normales'             => round($normales, 2),
+            'nocturnas'            => round($nocturnas, 2),
+            'festivas'             => round($festivas, 2),
+            'festivas_nocturnas'   => round($festivasNocturnas, 2),
+        ];
+    }
+
+    /**
+     * Desglose por día
+     */
+    private function desglosarPorDia(array $turnos, array $festivos, string $fechaInicio, string $fechaFin): array
+    {
+        $festivosMapa = collect($festivos)->mapWithKeys(function ($f) {
+            return [substr($f['fecha'], 0, 10) => true];
+        });
+
+        $desglose = [];
+        foreach ($turnos as $turno) {
+            if (!isset($desglose[$turno['fecha']])) {
+                $desglose[$turno['fecha']] = [
+                    'normales'           => 0,
+                    'nocturnas'          => 0,
+                    'festivas'           => 0,
+                    'festivas_nocturnas' => 0,
+                    'rangos'             => [],
+                ];
+            }
+
+            if ($turno['es_descanso'] || !$turno['hora_inicio']) continue;
+
+            $horas = $this->calcularHoras($turno, $festivosMapa->has($turno['fecha']));
+            $desglose[$turno['fecha']]['normales'] += $horas['normales'];
+            $desglose[$turno['fecha']]['nocturnas'] += $horas['nocturnas'];
+            $desglose[$turno['fecha']]['festivas'] += $horas['festivas'];
+            $desglose[$turno['fecha']]['festivas_nocturnas'] += $horas['festivas_nocturnas'];
+            $desglose[$turno['fecha']]['rangos'] = $turno['rangos'];
+        }
+
+        return $desglose;
+    }
+
+    /**
+     * Calcular horas de un turno específico
+     */
+    private function calcularHoras(array $turno, bool $esFestivo): array
+    {
+        $horaInicio = $turno['hora_inicio'] ?? null;
+        $horaFin = $turno['hora_fin'] ?? null;
+        $horaInicio2 = $turno['hora_inicio_2'] ?? null;
+        $horaFin2 = $turno['hora_fin_2'] ?? null;
+
+        $horas = [
+            'total'                => 0,
+            'normales'             => 0,
+            'nocturnas'            => 0,
+            'festivas'             => 0,
+            'festivas_nocturnas'   => 0,
+        ];
+
+        if ($horaInicio && $horaFin) {
+            $h = $this->calcularHorasRango($horaInicio, $horaFin, $esFestivo);
+            foreach ($h as $k => $v) {
+                $horas[$k] += $v;
+            }
+        }
+
+        if ($horaInicio2 && $horaFin2) {
+            $h = $this->calcularHorasRango($horaInicio2, $horaFin2, $esFestivo);
+            foreach ($h as $k => $v) {
+                $horas[$k] += $v;
+            }
+        }
+
+        $horas['total'] = $horas['normales'] + $horas['nocturnas'] + $horas['festivas'] + $horas['festivas_nocturnas'];
+
+        return $horas;
+    }
+
+    /**
+     * Calcular horas de un rango horario (considera nocturnas desde 19:00)
+     */
+    private function calcularHorasRango(string $inicio, string $fin, bool $esFestivo): array
+    {
+        $horas = [
+            'normales'           => 0,
+            'nocturnas'          => 0,
+            'festivas'           => 0,
+            'festivas_nocturnas' => 0,
+        ];
+
+        $inicioMinutos = $this->horaAMinutos($inicio);
+        $finMinutos = $this->horaAMinutos($fin);
+
+        if ($finMinutos <= $inicioMinutos) {
+            $finMinutos += 24 * 60;
+        }
+
+        $totalMinutos = $finMinutos - $inicioMinutos;
+        $horasTotal = $totalMinutos / 60;
+
+        $nocturnasInicio = $this->horaAMinutos('19:00');
+
+        if ($esFestivo) {
+            if ($inicioMinutos >= $nocturnasInicio) {
+                $horas['festivas_nocturnas'] = $horasTotal;
+            } elseif ($finMinutos <= $nocturnasInicio) {
+                $horas['festivas'] = $horasTotal;
+            } else {
+                $horasFestivas = ($nocturnasInicio - $inicioMinutos) / 60;
+                $horasFestivasNocturnas = ($finMinutos - $nocturnasInicio) / 60;
+                $horas['festivas'] = $horasFestivas;
+                $horas['festivas_nocturnas'] = $horasFestivasNocturnas;
+            }
+        } else {
+            if ($inicioMinutos >= $nocturnasInicio) {
+                $horas['nocturnas'] = $horasTotal;
+            } elseif ($finMinutos <= $nocturnasInicio) {
+                $horas['normales'] = $horasTotal;
+            } else {
+                $horasNormales = ($nocturnasInicio - $inicioMinutos) / 60;
+                $horasNocturnas = ($finMinutos - $nocturnasInicio) / 60;
+                $horas['normales'] = $horasNormales;
+                $horas['nocturnas'] = $horasNocturnas;
+            }
+        }
+
+        return $horas;
+    }
+
+    /**
+     * Convertir hora HH:MM a minutos
+     */
+    private function horaAMinutos(string $hora): int
+    {
+        [$h, $m] = explode(':', $hora);
+        return (int) $h * 60 + (int) $m;
     }
 }

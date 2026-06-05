@@ -243,6 +243,9 @@ class AuthController extends Controller
             $permisosUnicos = $this->getUserPermissions($user);
             $sidebar        = $this->sidebarService->getSidebarModules($user);
 
+            // Obtener sedes según el rol del usuario (4-tier logic)
+            $sedes = $this->getSedesForUser($user);
+
             \Log::info('✅ Login exitoso', ['user_id' => $user->id, 'email' => $user->email]);
 
             return response()->json([
@@ -262,9 +265,64 @@ class AuthController extends Controller
                     'empresas'              => $user->empresas,
                     'sucursal'              => $user->sucursal,
                     'sede'                  => $user->sede,
+                    'sedes'                 => $sedes,
                     'permissions'           => $permisosUnicos
                 ],
                 'sidebar' => $sidebar
             ]);
         }
+
+    /**
+     * Obtiene las sedes disponibles para el usuario según su rol
+     */
+    private function getSedesForUser($user)
+    {
+        try {
+            // Verificar si es super_admin
+            $isAdmin = false;
+            if ($user->rolesCustom && $user->rolesCustom->isNotEmpty()) {
+                $isAdmin = $user->rolesCustom->whereIn('nombre', ['super_admin'])->isNotEmpty() ||
+                           $user->rolesCustom->whereIn('id', [1])->isNotEmpty();
+            }
+
+            if ($isAdmin) {
+                // Super admin ve todas las sedes
+                $sedes = \DB::table('config_ubi_sede')
+                    ->select('id', 'nombre')
+                    ->orderBy('nombre')
+                    ->get();
+                return $sedes ? $sedes->toArray() : [];
+            }
+
+            // Obtener empresas del usuario
+            $empresasDelUsuario = \DB::table('seg_empresa_user')
+                ->where('user_id', $user->id)
+                ->pluck('empresa_id')
+                ->toArray();
+
+            if (empty($empresasDelUsuario)) {
+                // Transversal ve todas las sedes
+                $sedes = \DB::table('config_ubi_sede')
+                    ->select('id', 'nombre')
+                    ->orderBy('nombre')
+                    ->get();
+                return $sedes ? $sedes->toArray() : [];
+            }
+
+            // Usuario con empresa asignada: obtener sedes de sus empresas
+            // Las sedes están relacionadas con sucursales, que están relacionadas con empresas
+            $sedes = \DB::table('config_ubi_sede')
+                ->join('config_ubi_sucursales', 'config_ubi_sede.id_Sucursal', '=', 'config_ubi_sucursales.id')
+                ->whereIn('config_ubi_sucursales.id_empresa', $empresasDelUsuario)
+                ->select('config_ubi_sede.id', 'config_ubi_sede.nombre')
+                ->distinct()
+                ->orderBy('config_ubi_sede.nombre')
+                ->get();
+                
+            return $sedes ? $sedes->toArray() : [];
+        } catch (\Exception $e) {
+            // Si hay error, retornar array vacío
+            return [];
+        }
+    }
 }

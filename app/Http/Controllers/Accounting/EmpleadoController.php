@@ -161,4 +161,194 @@ class EmpleadoController extends Controller
             'data'    => $tercero,
         ]);
     }
+
+    /**
+     * Devuelve las unidades funcionales únicas registradas en la tabla terceros
+     * (config_person_tercero), tomadas de la columna 'unidad'.
+     * Además, intenta asociar la sede basándose en el sufijo del nombre de la unidad.
+     */
+    public function unidadesDisponibles(Request $request): JsonResponse
+    {
+        try {
+            $query = Empleado::query()
+                ->whereNotNull('unidad')
+                ->where('unidad', '!=', '');
+
+            // Filtro opcional por empresa
+            if ($request->filled('id_empresa')) {
+                $query->where('id_empresa', $request->id_empresa);
+            }
+
+            $unidades = $query->select('unidad')
+                ->distinct()
+                ->orderBy('unidad')
+                ->pluck('unidad')
+                ->values();
+
+            // Mapeo manual de acrónimos a sedes
+            $sedeMap = [
+                'NVA' => 'Neiva',
+                'TJA' => 'Tunja',
+                'KTA' => 'Facatativa',
+            ];
+
+            // Mapear unidades con su sede
+            $resultado = $unidades->map(function ($unidad) use ($sedeMap) {
+                $sede = null;
+                
+                // Extraer el sufijo después del último guión
+                if (str_contains($unidad, '-')) {
+                    $partes = explode('-', $unidad);
+                    $ultimaParte = end($partes);
+                    if (strlen(trim($ultimaParte)) >= 2 && strlen(trim($ultimaParte)) <= 4) {
+                        $sufijo = strtoupper(trim($ultimaParte));
+                        if (isset($sedeMap[$sufijo])) {
+                            $sede = $sedeMap[$sufijo];
+                        }
+                    }
+                }
+
+                return [
+                    'unidad' => $unidad,
+                    'sede'   => $sede,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data'    => $resultado,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener las unidades',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Devuelve los empleados (terceros) que pertenecen a una unidad funcional.
+     */
+    public function empleadosPorUnidad(Request $request): JsonResponse
+    {
+        try {
+            $request->validate([
+                'unidad' => 'required|string',
+            ]);
+
+            $query = Empleado::query()
+                ->where('unidad', $request->unidad)
+                ->where('estado', true);
+
+            // Filtro opcional por empresa
+            if ($request->filled('id_empresa')) {
+                $query->where('id_empresa', $request->id_empresa);
+            }
+
+            $empleados = $query->select('id', 'nombre', 'email', 'numero_identificacion', 'unidad')
+                ->orderBy('nombre')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data'    => $empleados,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener los empleados de la unidad',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Devuelve los turnos de todos los empleados de una unidad funcional para un mes.
+     * Vista tipo grilla: filas = empleados, columnas = días del mes.
+     */
+    public function turnosUnidadMes(Request $request): JsonResponse
+    {
+        try {
+            $request->validate([
+                'unidad' => 'required|string',
+                'mes'    => 'required|integer|between:1,12',
+                'anio'   => 'required|integer|between:2020,2030',
+            ]);
+
+            $unidad = $request->unidad;
+            $mes    = (int) $request->mes;
+            $anio   = (int) $request->anio;
+
+            // Obtener empleados de la unidad
+            $empleados = Empleado::where('unidad', $unidad)
+                ->where('estado', true)
+                ->select('id', 'nombre', 'numero_identificacion')
+                ->orderBy('nombre')
+                ->get();
+
+            if ($empleados->isEmpty()) {
+                return response()->json([
+                    'success' => true,
+                    'data'    => [],
+                    'meta'    => ['mes' => $mes, 'anio' => $anio, 'unidad' => $unidad, 'dias_mes' => cal_days_in_month(CAL_GREGORIAN, $mes, $anio)],
+                ]);
+            }
+
+            $fechaInicio = \Carbon\Carbon::createFromDate($anio, $mes, 1)->startOfMonth()->toDateString();
+            $fechaFin    = \Carbon\Carbon::createFromDate($anio, $mes, 1)->endOfMonth()->toDateString();
+            $diasMes     = \Carbon\Carbon::createFromDate($anio, $mes, 1)->daysInMonth;
+
+            // Obtener todas las asignaciones de estos empleados en el mes
+            $idsEmpleados = $empleados->pluck('id')->toArray();
+
+            $asignaciones = \App\Models\Turnos\CtAsignacion::with(['plantilla'])
+                ->whereIn('id_empleado', $idsEmpleados)
+                ->whereBetween('fecha', [$fechaInicio, $fechaFin])
+                ->get()
+                ->groupBy('id_empleado');
+
+            // Construir la grilla
+            $grilla = $empleados->map(function ($empleado) use ($asignaciones, $diasMes) {
+                $turnosEmpleado = $asignaciones->get($empleado->id, collect());
+                
+                // Indexar por día
+                $turnosPorDia = [];
+                foreach ($turnosEmpleado as $asig) {
+                    $dia = (int) \Carbon\Carbon::parse($asig->fecha)->day;
+                    $turnosPorDia[$dia] = [
+                        'es_descanso' => $asig->es_descanso,
+                        'plantilla'   => $asig->plantilla ? [
+                            'nombre'    => $asig->plantilla->nombre,
+                            'color_hex' => $asig->plantilla->color_hex,
+                        ] : null,
+                    ];
+                }
+
+                return [
+                    'id'     => $empleado->id,
+                    'nombre' => $empleado->nombre,
+                    'cedula' => $empleado->numero_identificacion,
+                    'dias'   => $turnosPorDia,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data'    => $grilla,
+                'meta'    => [
+                    'mes'      => $mes,
+                    'anio'     => $anio,
+                    'unidad'   => $unidad,
+                    'dias_mes' => $diasMes,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener los turnos de la unidad',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
 }

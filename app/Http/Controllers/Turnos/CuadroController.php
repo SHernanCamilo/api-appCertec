@@ -219,15 +219,17 @@ class CuadroController extends Controller
     public function asignarMasivo(Request $request, int $id): JsonResponse
     {
         $request->validate([
-            'asignaciones'                    => 'required|array|min:1',
-            'asignaciones.*.id_empleado'      => 'required|integer|exists:config_person_tercero,id',
-            'asignaciones.*.fecha'            => 'required|date',
-            'asignaciones.*.id_plantilla'     => 'nullable|integer|exists:humtal_ct_plantillas,id',
-            'asignaciones.*.es_descanso'      => 'boolean',
-            'asignaciones.*.es_festivo'       => 'boolean',
-            'asignaciones.*.hora_inicio_override' => 'nullable|date_format:H:i',
-            'asignaciones.*.hora_fin_override'    => 'nullable|date_format:H:i',
-            'asignaciones.*.observacion'      => 'nullable|string|max:255',
+            'asignaciones'                            => 'required|array|min:1',
+            'asignaciones.*.id_empleado'              => 'required|integer|exists:config_person_tercero,id',
+            'asignaciones.*.fecha'                    => 'required|date',
+            'asignaciones.*.id_plantilla'             => 'nullable|integer|exists:humtal_ct_plantillas,id',
+            'asignaciones.*.es_descanso'              => 'boolean',
+            'asignaciones.*.es_festivo'               => 'boolean',
+            'asignaciones.*.hora_inicio_override'     => 'nullable|date_format:H:i',
+            'asignaciones.*.hora_fin_override'        => 'nullable|date_format:H:i',
+            'asignaciones.*.hora_inicio_override_2'   => 'nullable|date_format:H:i',
+            'asignaciones.*.hora_fin_override_2'      => 'nullable|date_format:H:i',
+            'asignaciones.*.observacion'              => 'nullable|string|max:255',
         ]);
 
         try {
