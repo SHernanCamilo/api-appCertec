@@ -3,6 +3,7 @@
 namespace App\Services\Config;
 
 use App\Models\Config\ConfigUnidadFuncional;
+use App\Models\Empleado;
 use App\Models\Sede;
 use App\Models\Sucursal;
 use App\Models\User;
@@ -29,7 +30,7 @@ class UnidadFuncionalService
     public function buscarPorCodigo(string $codigo, int $empresaId, User $user): ?ConfigUnidadFuncional
     {
         return ConfigUnidadFuncional::query()
-            ->with(['empresa:id,nombre,prefijo', 'sucursal:id,nombre', 'sede:id,nombre', 'usuarios:id,name,email', 'responsables:id,name,email'])
+            ->with(['empresa:id,nombre,prefijo', 'sucursal:id,nombre', 'sede:id,nombre', 'usuarios:id,nombre,email,numero_identificacion', 'responsables:id,nombre,email,numero_identificacion'])
             ->accessibleByUser($user)
             ->where('id_empresa', $empresaId)
             ->where('codigo', $codigo)
@@ -39,7 +40,7 @@ class UnidadFuncionalService
     public function obtener(int $id, User $user): ConfigUnidadFuncional
     {
         return ConfigUnidadFuncional::query()
-            ->with(['empresa:id,nombre,prefijo', 'sucursal:id,nombre', 'sede:id,nombre', 'usuarios:id,name,email', 'responsables:id,name,email'])
+            ->with(['empresa:id,nombre,prefijo', 'sucursal:id,nombre', 'sede:id,nombre', 'usuarios:id,nombre,email,numero_identificacion', 'responsables:id,nombre,email,numero_identificacion'])
             ->accessibleByUser($user)
             ->findOrFail($id);
     }
@@ -125,43 +126,65 @@ class UnidadFuncionalService
                 'id' => $unidad->sede->id,
                 'nombre' => $unidad->sede->nombre,
             ] : null,
-            'usuarios_autorizados' => $unidad->usuarios->map(fn (User $usuario) => [
-                'id_user' => $usuario->id,
-                'codigo' => str_pad((string) $usuario->id, 3, '0', STR_PAD_LEFT),
-                'nombre' => $usuario->name,
+            'usuarios_autorizados' => $unidad->usuarios->map(fn (Empleado $persona) => [
+                'id_user' => $persona->id,
+                'codigo' => $persona->numero_identificacion ?: str_pad((string) $persona->id, 3, '0', STR_PAD_LEFT),
+                'nombre' => $persona->nombre,
             ])->values()->all(),
-            'jefes_encargados' => $unidad->responsables->map(fn (User $responsable) => [
-                'id_user' => $responsable->id,
-                'codigo' => str_pad((string) $responsable->id, 3, '0', STR_PAD_LEFT),
-                'nombre' => $responsable->name,
+            'jefes_encargados' => $unidad->responsables->map(fn (Empleado $persona) => [
+                'id_user' => $persona->id,
+                'codigo' => $persona->numero_identificacion ?: str_pad((string) $persona->id, 3, '0', STR_PAD_LEFT),
+                'nombre' => $persona->nombre,
             ])->values()->all(),
             'created_at' => $unidad->created_at,
             'updated_at' => $unidad->updated_at,
         ];
     }
 
-    private function syncUsuarios(ConfigUnidadFuncional $unidad, array $userIds): void
+    private function syncUsuarios(ConfigUnidadFuncional $unidad, array $personIds): void
     {
-        $ids = collect($userIds)
+        $ids = collect($personIds)
             ->filter(fn ($id) => $id !== null && $id !== '')
             ->map(fn ($id) => (int) $id)
             ->unique()
             ->values()
             ->all();
+
+        $this->validarPersonasEmpresa($ids, (int) $unidad->id_empresa);
 
         $unidad->usuarios()->sync($ids);
     }
 
-    private function syncResponsables(ConfigUnidadFuncional $unidad, array $userIds): void
+    private function syncResponsables(ConfigUnidadFuncional $unidad, array $personIds): void
     {
-        $ids = collect($userIds)
+        $ids = collect($personIds)
             ->filter(fn ($id) => $id !== null && $id !== '')
             ->map(fn ($id) => (int) $id)
             ->unique()
             ->values()
             ->all();
 
+        $this->validarPersonasEmpresa($ids, (int) $unidad->id_empresa);
+
         $unidad->responsables()->sync($ids);
+    }
+
+    private function validarPersonasEmpresa(array $personIds, int $empresaId): void
+    {
+        if (empty($personIds)) {
+            return;
+        }
+
+        $validos = Empleado::query()
+            ->where('id_empresa', $empresaId)
+            ->whereIn('id', $personIds)
+            ->count();
+
+        if ($validos !== count($personIds)) {
+            throw ValidationException::withMessages([
+                'usuarios_autorizados' => ['Una o más personas no pertenecen a la empresa seleccionada'],
+            ]);
+        }
     }
 
     private function validarJerarquia(array $data): void

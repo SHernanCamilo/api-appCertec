@@ -177,9 +177,9 @@ class UnidadFuncionalController extends Controller
             'id_sede' => 'nullable|integer|exists:config_ubi_sede,id',
             'estado' => 'nullable|boolean',
             'usuarios_autorizados' => 'nullable|array',
-            'usuarios_autorizados.*' => 'integer|exists:users,id',
+            'usuarios_autorizados.*' => 'integer|exists:config_person_tercero,id',
             'jefes_encargados' => 'nullable|array',
-            'jefes_encargados.*' => 'integer|exists:users,id',
+            'jefes_encargados.*' => 'integer|exists:config_person_tercero,id',
         ], [
             'codigo.unique' => 'Ya existe una unidad funcional con este código en la empresa',
             'codigo.required' => 'El código es obligatorio',

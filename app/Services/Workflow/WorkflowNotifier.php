@@ -6,6 +6,8 @@ use App\Models\Workflow\WfInstancia;
 use App\Models\Workflow\WfNotificacion;
 use App\Models\Workflow\WfAprobador;
 use App\Models\Empleado;
+use App\Models\User;
+use App\Models\Config\ConfigUnidadFunResponsable;
 use App\Models\ConfigPersonTercero;
 use Illuminate\Support\Facades\Log;
 
@@ -81,22 +83,21 @@ class WorkflowNotifier
 
     /**
      * Resuelve quiénes deben aprobar el paso actual.
-     *
-     * Estrategias:
-     *   1. Aprobador fijo (id_user)
-     *   2. Aprobador por unidad funcional
-     *   3. Aprobador por prefijo de sucursal
-     *   4. Aprobador por grupo
-     *
-     * @param WfInstancia $instancia
-     * @return \Illuminate\Support\Collection
      */
     public function resolverAprobadores(WfInstancia $instancia): \Illuminate\Support\Collection
     {
-        $paso = $instancia->pasoActual;
-        $contexto = $instancia->contexto ?? [];
-        
-        // Obtener configuración de aprobadores para este paso
+        if (!$instancia->pasoActual) {
+            return collect();
+        }
+
+        return $this->resolverAprobadoresParaPaso($instancia->pasoActual, $instancia->contexto ?? []);
+    }
+
+    /**
+     * Resuelve intervinientes de un paso según wf_aprobadores y contexto del evento.
+     */
+    public function resolverAprobadoresParaPaso(\App\Models\Workflow\WfPaso $paso, array $contexto): \Illuminate\Support\Collection
+    {
         $aprobadores = WfAprobador::where('id_paso', $paso->id)
             ->activos()
             ->titulares()
@@ -114,23 +115,43 @@ class WorkflowNotifier
         $usuarios = collect();
 
         foreach ($aprobadores as $aprobador) {
-            // Estrategia 1: Aprobador fijo
             if ($aprobador->id_user) {
-                $usuarios->push($aprobador->user);
+                $contextUfId = (int)($contexto['id_unidad_funcional'] ?? 0);
+                if ($aprobador->id_unidad_funcional !== null) {
+                    $cfgUfId = (int)$aprobador->id_unidad_funcional;
+                    if ($cfgUfId === 0) {
+                        $cfgUfId = $contextUfId;
+                    }
+                    if ($contextUfId > 0 && $cfgUfId > 0 && $cfgUfId !== $contextUfId) {
+                        continue;
+                    }
+                }
+
+                if ($aprobador->user) {
+                    $usuarios->push($aprobador->user);
+                }
                 continue;
             }
 
-            // Estrategia 2: Por unidad funcional
-            if ($aprobador->id_unidad_funcional) {
-                $usuariosUF = $this->obtenerAprobadoresPorUnidadFuncional(
-                    $aprobador->id_unidad_funcional,
-                    $paso->rol_aprobador
-                );
-                $usuarios = $usuarios->merge($usuariosUF);
+            // UF fija en config, o 0 = UF del contexto del evento
+            if ($aprobador->id_unidad_funcional !== null) {
+                $ufId = (int)$aprobador->id_unidad_funcional;
+                $contextUfId = (int)($contexto['id_unidad_funcional'] ?? 0);
+                if ($ufId === 0) {
+                    $ufId = $contextUfId;
+                } elseif ($contextUfId > 0 && $ufId !== $contextUfId) {
+                    continue;
+                }
+                if ($ufId > 0) {
+                    $usuariosUF = $this->obtenerAprobadoresPorUnidadFuncional($ufId, $paso->rol_aprobador);
+                    if ($aprobador->permiso_codigo) {
+                        $usuariosUF = $this->intersectarConPermiso($usuariosUF, $aprobador->permiso_codigo, $contexto);
+                    }
+                    $usuarios = $usuarios->merge($usuariosUF);
+                }
                 continue;
             }
 
-            // Estrategia 3: Por prefijo de sucursal
             if ($aprobador->prefijo_sucursal) {
                 $usuariosSucursal = $this->obtenerAprobadoresPorPrefijoSucursal(
                     $aprobador->prefijo_sucursal,
@@ -141,7 +162,6 @@ class WorkflowNotifier
                 continue;
             }
 
-            // Estrategia 4: Por grupo
             if ($aprobador->id_grupo) {
                 $usuariosGrupo = $this->obtenerAprobadoresPorGrupo(
                     $aprobador->id_grupo,
@@ -151,9 +171,137 @@ class WorkflowNotifier
                 $usuarios = $usuarios->merge($usuariosGrupo);
                 continue;
             }
+
+            if ($aprobador->permiso_codigo) {
+                $usuariosPermiso = $this->obtenerAprobadoresPorPermiso(
+                    $aprobador->permiso_codigo,
+                    $contexto,
+                    $aprobador->alcance
+                );
+                $usuarios = $usuarios->merge($usuariosPermiso);
+                continue;
+            }
         }
 
-        return $usuarios->unique('id');
+        return $usuarios->filter()->unique('id')->values();
+    }
+
+    /**
+     * Nombres legibles de intervinientes para UI.
+     */
+    public function nombresIntervinientes(\Illuminate\Support\Collection $usuarios): string
+    {
+        return $usuarios->pluck('name')->filter()->unique()->implode(', ');
+    }
+
+    /**
+     * Primer empleado (config_person_tercero) entre los intervinientes resueltos.
+     */
+    public function primerEmpleadoIdIntervinientes(\Illuminate\Support\Collection $usuarios): ?int
+    {
+        foreach ($usuarios as $user) {
+            $empleadoId = $this->resolveEmpleadoIdFromUser($user->id);
+            if ($empleadoId) {
+                return $empleadoId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Estrategia 5: permiso + alcance opcional (uf|sucursal|sede|empresa).
+     */
+    private function obtenerAprobadoresPorPermiso(
+        string $codigoPermiso,
+        array $contexto,
+        ?string $alcance = null
+    ): \Illuminate\Support\Collection {
+        $empresaId = $contexto['id_empresa'] ?? null;
+        $usuarios = User::conPermiso($codigoPermiso, $empresaId)->get();
+
+        if ($usuarios->isEmpty()) {
+            Log::warning("Sin usuarios con el permiso para aprobar", [
+                'permiso' => $codigoPermiso,
+                'id_empresa' => $empresaId,
+                'alcance' => $alcance,
+            ]);
+            return collect();
+        }
+
+        return $this->filtrarUsuariosPorAlcance($usuarios, $alcance, $contexto, $codigoPermiso);
+    }
+
+    /**
+     * Usuarios con permiso que además cumplen el alcance organizacional.
+     */
+    private function filtrarUsuariosPorAlcance(
+        \Illuminate\Support\Collection $usuarios,
+        ?string $alcance,
+        array $contexto,
+        ?string $codigoPermiso = null
+    ): \Illuminate\Support\Collection {
+        $alcance = $alcance ?: 'empresa';
+
+        if ($alcance === 'empresa') {
+            return $usuarios;
+        }
+
+        if ($alcance === 'uf') {
+            $ufId = (int)($contexto['id_unidad_funcional'] ?? 0);
+            if ($ufId <= 0) {
+                return collect();
+            }
+            $ufUsers = $this->obtenerResponsablesUnidadFuncional($ufId);
+            $ids = $ufUsers->pluck('id')->all();
+            return $usuarios->whereIn('id', $ids)->values();
+        }
+
+        if ($alcance === 'sucursal') {
+            $sucursalId = (int)($contexto['id_sucursal'] ?? 0);
+            $empresaId = (int)($contexto['id_empresa'] ?? 0);
+            if ($sucursalId <= 0 || $empresaId <= 0) {
+                return collect();
+            }
+
+            return $usuarios->filter(function (User $u) use ($empresaId, $sucursalId) {
+                return $u->empresas()
+                    ->where('ent_empresas.id', $empresaId)
+                    ->where(function ($q) use ($sucursalId) {
+                        $q->where('seg_empresa_user.id_sucursal', $sucursalId)
+                            ->orWhere('seg_empresa_user.recursivo', true);
+                    })
+                    ->exists();
+            })->values();
+        }
+
+        if ($alcance === 'sede') {
+            $sedeId = (int)($contexto['id_sede'] ?? 0);
+            $empresaId = (int)($contexto['id_empresa'] ?? 0);
+            if ($sedeId <= 0 || $empresaId <= 0) {
+                return collect();
+            }
+
+            return $usuarios->filter(function (User $u) use ($empresaId, $sedeId) {
+                return $u->empresas()
+                    ->where('ent_empresas.id', $empresaId)
+                    ->where('seg_empresa_user.id_sede', $sedeId)
+                    ->exists();
+            })->values();
+        }
+
+        return $usuarios;
+    }
+
+    private function intersectarConPermiso(
+        \Illuminate\Support\Collection $usuarios,
+        string $codigoPermiso,
+        array $contexto
+    ): \Illuminate\Support\Collection {
+        $empresaId = $contexto['id_empresa'] ?? null;
+        $conPermiso = User::conPermiso($codigoPermiso, $empresaId)->pluck('id')->all();
+
+        return $usuarios->whereIn('id', $conPermiso)->values();
     }
 
     /**
@@ -186,8 +334,92 @@ class WorkflowNotifier
             Log::warning("Modelo AntiAprobador no disponible", ['error' => $e->getMessage()]);
         }
 
-        // Fallback: buscar en Empleados con relación a unidad funcional
-        return collect();
+        // Fallback: responsables registrados en config_unidades_fun_responsable
+        return $this->obtenerResponsablesUnidadFuncional($idUnidadFuncional);
+    }
+
+    /**
+     * Obtiene los usuarios responsables de una unidad funcional
+     * desde config_unidades_fun_responsable.
+     *
+     * @param int $idUnidadFuncional ID en config_unidades_funcionales
+     * @return \Illuminate\Support\Collection<int, User>
+     */
+    public function obtenerResponsablesUnidadFuncional(int $idUnidadFuncional): \Illuminate\Support\Collection
+    {
+        $personas = ConfigUnidadFunResponsable::where('id_unidad_funcional', $idUnidadFuncional)
+            ->with('persona:id,email,numero_identificacion')
+            ->get()
+            ->pluck('persona')
+            ->filter();
+
+        if ($personas->isEmpty()) {
+            return collect();
+        }
+
+        $emails = $personas->pluck('email')->filter()->unique()->values();
+        $documentos = $personas->pluck('numero_identificacion')->filter()->unique()->values();
+
+        return User::query()
+            ->where(function ($q) use ($emails, $documentos) {
+                if ($emails->isNotEmpty()) {
+                    $q->whereIn('email', $emails);
+                }
+                if ($documentos->isNotEmpty()) {
+                    $q->orWhereIn('numero_identificacion', $documentos);
+                }
+            })
+            ->get();
+    }
+
+    /**
+     * Indica si un usuario es responsable de una unidad funcional
+     * (puede cargar eventos a empleados de esa unidad).
+     */
+    public function esResponsableDeUnidad(int $userId, int $idUnidadFuncional): bool
+    {
+        $empleadoId = $this->resolveEmpleadoIdFromUser($userId);
+
+        if (!$empleadoId) {
+            return false;
+        }
+
+        return ConfigUnidadFunResponsable::where('id_unidad_funcional', $idUnidadFuncional)
+            ->where('id_user', $empleadoId)
+            ->exists();
+    }
+
+    public function resolveEmpleadoIdFromUser(int $userId): ?int
+    {
+        $user = User::find($userId);
+
+        if (!$user) {
+            return null;
+        }
+
+        $query = Empleado::query()->where('estado', true);
+
+        if (!empty($user->numero_identificacion)) {
+            $empleado = (clone $query)
+                ->where('numero_identificacion', $user->numero_identificacion)
+                ->value('id');
+
+            if ($empleado) {
+                return (int) $empleado;
+            }
+        }
+
+        if (!empty($user->email)) {
+            $empleado = (clone $query)
+                ->where('email', $user->email)
+                ->value('id');
+
+            if ($empleado) {
+                return (int) $empleado;
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -17,6 +17,45 @@ class EmpleadoController extends Controller
     {
     }
 
+    public function opciones(Request $request): JsonResponse
+    {
+        try {
+            $query = \App\Models\Empleado::select('id', 'nombre', 'email', 'numero_identificacion')
+                ->orderBy('nombre');
+
+            if ($request->filled('empresa_id')) {
+                $query->where('id_empresa', $request->integer('empresa_id'));
+            }
+
+            if ($request->boolean('activos')) {
+                $query->where('estado', true);
+            }
+
+            if ($request->filled('search') && strlen($request->search) >= 2) {
+                $term = $request->search;
+                $query->where(function ($q) use ($term) {
+                    $q->where('nombre', 'like', '%' . $term . '%')
+                      ->orWhere('numero_identificacion', 'like', $term . '%');
+                });
+            }
+
+            $limit  = (int) $request->input('limit', 100);
+            $limit  = min(max($limit, 10), 500);
+            $page   = (int) $request->input('page', 1);
+            $page   = max($page, 1);
+            $offset = ($page - 1) * $limit;
+
+            $data = $query->limit($limit)->offset($offset)->get();
+
+            return response()->json([
+                'success' => true,
+                'data'    => $data,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
     public function index(Request $request): JsonResponse
     {
         try {

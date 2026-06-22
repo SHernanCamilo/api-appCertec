@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Accounting\EmpleadoController;
 
 Route::middleware(['auth:api', 'check.user.active'])->group(function () {
+    Route::get('empleados/opciones', [EmpleadoController::class, 'opciones']);
     Route::get('empleados', [EmpleadoController::class, 'index']);
     Route::post('empleados', [EmpleadoController::class, 'store']);
     Route::put('empleados/{id}', [EmpleadoController::class, 'update']);
