@@ -2,6 +2,7 @@
 
 namespace App\Models\Workflow;
 
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -16,13 +17,21 @@ class WfInstancia extends Model
         'id_definicion',
         'id_modulo',
         'modulo_record_id',
+        'solicitante_id',
+        'contexto',
+        'consecutivo',
         'id_paso_actual',
         'estado',
+        'fecha_completado',
+        'fecha_rechazado',
     ];
 
     protected $casts = [
+        'contexto' => 'array',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
+        'fecha_completado' => 'datetime',
+        'fecha_rechazado' => 'datetime',
     ];
 
     const ESTADO_EN_PROGRESO = 'en_progreso';
@@ -43,6 +52,11 @@ class WfInstancia extends Model
     public function pasoActual()
     {
         return $this->belongsTo(WfPaso::class, 'id_paso_actual');
+    }
+
+    public function solicitante()
+    {
+        return $this->belongsTo(User::class, 'solicitante_id');
     }
 
     public function aprobaciones()
@@ -68,6 +82,11 @@ class WfInstancia extends Model
     public function scopeRechazados($query)
     {
         return $query->where('estado', self::ESTADO_RECHAZADO);
+    }
+
+    public function scopePorModuloYRecord($query, int $idModulo, int $recordId)
+    {
+        return $query->where('id_modulo', $idModulo)->where('modulo_record_id', $recordId);
     }
 
     public function estaEnProgreso(): bool
