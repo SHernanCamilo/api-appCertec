@@ -115,7 +115,40 @@ class WorkflowNotifier
         $usuarios = collect();
 
         foreach ($aprobadores as $aprobador) {
-            if ($aprobador->id_user) {
+            // Filtro por motor de reglas específico de cada aprobador
+            if (!$aprobador->evaluarCondiciones($contexto)) {
+                continue;
+            }
+
+            // Nueva estrategia: Aprobador fijo transversal
+            if ($aprobador->tipo_aprobador === 'USER' && $aprobador->id_user) {
+                $usuarios->push($aprobador->user);
+                continue;
+            }
+
+            // Nueva estrategia: Responsable de la Unidad Funcional (dinámico según el contexto del evento)
+            if ($aprobador->tipo_aprobador === 'RESPONSABLE_UF') {
+                $idUnidadFuncional = $contexto['id_unidad_funcional'] ?? null;
+                if ($idUnidadFuncional) {
+                    $usuariosUF = $this->obtenerResponsablesPorUnidadFuncional($idUnidadFuncional);
+                    $usuarios = $usuarios->merge($usuariosUF);
+                }
+                continue;
+            }
+
+            // Nueva estrategia: Aprobador por WfGrupo (cargos)
+            if ($aprobador->tipo_aprobador === 'RESPONSABLE_GRUPO' || $aprobador->tipo_aprobador === 'GRUPO') {
+                $idWfGrupo = $aprobador->id_grupo;
+                if ($idWfGrupo) {
+                    $idEmpresa = $contexto['id_empresa'] ?? null;
+                    $usuariosGrupo = $this->obtenerUsuariosPorWfGrupo($idWfGrupo, $idEmpresa);
+                    $usuarios = $usuarios->merge($usuariosGrupo);
+                }
+                continue;
+            }
+
+            // Estrategias Legacy de fallback (mezclado con lo de Hernan Camilo)
+            if ($aprobador->id_user && $aprobador->tipo_aprobador !== 'USER') {
                 $contextUfId = (int)($contexto['id_unidad_funcional'] ?? 0);
                 if ($aprobador->id_unidad_funcional !== null) {
                     $cfgUfId = (int)$aprobador->id_unidad_funcional;
@@ -134,7 +167,7 @@ class WorkflowNotifier
             }
 
             // UF fija en config, o 0 = UF del contexto del evento
-            if ($aprobador->id_unidad_funcional !== null) {
+            if ($aprobador->id_unidad_funcional !== null && $aprobador->tipo_aprobador !== 'RESPONSABLE_UF') {
                 $ufId = (int)$aprobador->id_unidad_funcional;
                 $contextUfId = (int)($contexto['id_unidad_funcional'] ?? 0);
                 if ($ufId === 0) {
@@ -162,7 +195,8 @@ class WorkflowNotifier
                 continue;
             }
 
-            if ($aprobador->id_grupo) {
+            // Fallback legacy id_grupo si no es tipo GRUPO
+            if ($aprobador->id_grupo && !in_array($aprobador->tipo_aprobador, ['RESPONSABLE_GRUPO', 'GRUPO'])) {
                 $usuariosGrupo = $this->obtenerAprobadoresPorGrupo(
                     $aprobador->id_grupo,
                     $contexto,
@@ -176,7 +210,7 @@ class WorkflowNotifier
                 $usuariosPermiso = $this->obtenerAprobadoresPorPermiso(
                     $aprobador->permiso_codigo,
                     $contexto,
-                    $aprobador->alcance
+                    $aprobador->alcance ?? null
                 );
                 $usuarios = $usuarios->merge($usuariosPermiso);
                 continue;
@@ -314,7 +348,7 @@ class WorkflowNotifier
     }
 
     /**
-     * Obtiene aprobadores de una unidad funcional por rol.
+     * Obtiene aprobadores de una unidad funcional por rol. (Legacy)
      */
     private function obtenerAprobadoresPorUnidadFuncional(int $idUnidadFuncional, string $rol): \Illuminate\Support\Collection
     {
@@ -347,7 +381,7 @@ class WorkflowNotifier
      */
     public function obtenerResponsablesUnidadFuncional(int $idUnidadFuncional): \Illuminate\Support\Collection
     {
-        $personas = ConfigUnidadFunResponsable::where('id_unidad_funcional', $idUnidadFuncional)
+        $personas = \App\Models\Config\ConfigUnidadFunResponsable::where('id_unidad_funcional', $idUnidadFuncional)
             ->with('persona:id,email,numero_identificacion')
             ->get()
             ->pluck('persona')
@@ -384,7 +418,7 @@ class WorkflowNotifier
             return false;
         }
 
-        return ConfigUnidadFunResponsable::where('id_unidad_funcional', $idUnidadFuncional)
+        return \App\Models\Config\ConfigUnidadFunResponsable::where('id_unidad_funcional', $idUnidadFuncional)
             ->where('id_user', $empleadoId)
             ->exists();
     }
@@ -397,7 +431,7 @@ class WorkflowNotifier
             return null;
         }
 
-        $query = Empleado::query()->where('estado', true);
+        $query = \App\Models\Empleado::query()->where('estado', true);
 
         if (!empty($user->numero_identificacion)) {
             $empleado = (clone $query)
@@ -420,6 +454,52 @@ class WorkflowNotifier
         }
 
         return null;
+    }
+
+    /**
+     * Obtiene el Responsable actual de la ConfigUnidadFuncional.
+     */
+    private function obtenerResponsablesPorUnidadFuncional(int $idUnidadFuncional): \Illuminate\Support\Collection
+    {
+        try {
+            $responsables = \App\Models\Config\ConfigUnidadFunResponsable::where('id_unidad_funcional', $idUnidadFuncional)
+                ->with('usuario')
+                ->get();
+                
+            return $responsables->pluck('usuario')->filter();
+        } catch (\Exception $e) {
+            Log::warning("Error al obtener responsable UF", ['error' => $e->getMessage()]);
+            return collect();
+        }
+    }
+
+    /**
+     * Obtiene los usuarios que pertenecen a un WfGrupo (basado en sus cargos).
+     */
+    private function obtenerUsuariosPorWfGrupo(int $idWfGrupo, ?int $idEmpresa = null): \Illuminate\Support\Collection
+    {
+        try {
+            $grupo = \App\Models\Workflow\WfGrupo::with('cargos')->find($idWfGrupo);
+            if (!$grupo || $grupo->cargos->isEmpty()) {
+                return collect();
+            }
+
+            $cargosIds = $grupo->cargos->pluck('id_cargo');
+
+            $query = \App\Models\Empleado::whereIn('id_cargo', $cargosIds)
+                ->where('estado', true)
+                ->whereNotNull('user_id')
+                ->with('user');
+
+            if ($idEmpresa) {
+                $query->where('id_empresa', $idEmpresa);
+            }
+
+            return $query->get()->pluck('user')->filter();
+        } catch (\Exception $e) {
+            Log::warning("Error al obtener usuarios por WfGrupo", ['error' => $e->getMessage()]);
+            return collect();
+        }
     }
 
     /**

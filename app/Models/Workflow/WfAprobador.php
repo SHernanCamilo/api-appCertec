@@ -23,6 +23,7 @@ class WfAprobador extends Model
     protected $fillable = [
         'id_paso',
         'id_user',
+        'tipo_aprobador',
         'id_unidad_funcional',
         'prefijo_sucursal',
         'id_sede',
@@ -30,11 +31,13 @@ class WfAprobador extends Model
         'permiso_codigo',
         'alcance',
         'es_suplente',
+        'condiciones',
         'estado',
     ];
 
     protected $casts = [
         'es_suplente' => 'boolean',
+        'condiciones' => 'array',
         'estado' => 'boolean',
     ];
 
@@ -84,5 +87,24 @@ class WfAprobador extends Model
             $q->where('id_sede', $idSede)
               ->orWhereNull('id_sede');
         });
+    }
+
+    /**
+     * Evalúa si las condiciones dinámicas (JSON) de este aprobador se cumplen para el contexto del evento.
+     */
+    public function evaluarCondiciones(array $contexto): bool
+    {
+        if (empty($this->condiciones)) {
+            return true;
+        }
+
+        foreach ($this->condiciones as $campo => $valor) {
+            // Si el contexto no tiene el campo, o su valor es diferente, no aplica
+            if (!array_key_exists($campo, $contexto) || $contexto[$campo] != $valor) {
+                return false;
+            }
+        }
+        
+        return true;
     }
 }

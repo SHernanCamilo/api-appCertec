@@ -4,6 +4,7 @@ namespace App\Models\Workflow;
 
 use App\Models\Empresa;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
  * Definición de un flujo de aprobación.
@@ -49,6 +50,11 @@ class WfDefinicion extends Model
     public function instancias()
     {
         return $this->hasMany(WfInstancia::class, 'id_definicion');
+    }
+
+    public function unidadesFuncionales(): BelongsToMany
+    {
+        return $this->belongsToMany(\App\Models\Turnos\ConfigUnidadFuncional::class, 'wf_definicion_unidad_funcional', 'id_definicion', 'id_unidad_funcional');
     }
 
     public function scopeActivos($query)

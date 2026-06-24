@@ -4,6 +4,7 @@ namespace App\Models\Turnos;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use App\Models\Sede;
 use App\Models\Empresa;
 
@@ -38,6 +39,16 @@ class ConfigUnidadFuncional extends Model
     public function sede(): BelongsTo
     {
         return $this->belongsTo(Sede::class, 'id_sede');
+    }
+
+    public function grupos(): BelongsToMany
+    {
+        return $this->belongsToMany(\App\Models\Turnos\CtGrupo::class, 'humtal_ct_grupo_unidad_funcional', 'id_unidad_funcional', 'id_grupo');
+    }
+
+    public function flujos(): BelongsToMany
+    {
+        return $this->belongsToMany(\App\Models\Workflow\WfDefinicion::class, 'wf_definicion_unidad_funcional', 'id_unidad_funcional', 'id_definicion');
     }
 
     public function scopeActivas($query)
