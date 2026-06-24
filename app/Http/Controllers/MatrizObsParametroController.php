@@ -476,14 +476,6 @@ class MatrizObsParametroController extends Controller
             $page = $request->input('page', 1);
             $perPage = $request->input('per_page', 10);
 
-            \Log::info('getEquiposPorFiltro - Parámetros recibidos:', [
-                'tipo' => $tipo,
-                'ubicacion' => $ubicacion,
-                'empresa_id' => $empresaId,
-                'sucursal_id' => $sucursalId,
-                'sede_id' => $sedeId
-            ]);
-
             $query = \DB::table('matzobs_activos_c as ac')
                 ->leftJoin('matzobs_activos_d as ad', 'ac.id', '=', 'ad.activo_c_id')
                 ->leftJoin('ent_empresas as e', 'ac.id_empresa', '=', 'e.id')
@@ -543,7 +535,7 @@ class MatrizObsParametroController extends Controller
                 }
             }
 
-            // Filtros adicionales
+            // Filtros adicionales (exactos sobre FK indexadas: vía rápida)
             if ($empresaId) {
                 $query->where('ac.id_empresa', $empresaId);
             }
@@ -553,18 +545,18 @@ class MatrizObsParametroController extends Controller
             if ($sedeId) {
                 $query->where('ac.id_sede', $sedeId);
             }
+            // Equipos sin empresa asignada (barra "Sin empresa" de la gráfica)
+            if ($request->boolean('sin_empresa')) {
+                $query->whereNull('ac.id_empresa');
+            }
 
-            // Paginación
-            $total = $query->count();
-            
-            \Log::info('getEquiposPorFiltro - Total encontrado:', ['total' => $total]);
-            
+            // Paginación. El conteo usa un clon sin ORDER BY para no rehacer el filesort.
+            $total = (clone $query)->count();
+
             $equipos = $query->orderBy('ac.puntaje', 'desc')
                 ->skip(($page - 1) * $perPage)
                 ->take($perPage)
                 ->get();
-
-            \Log::info('getEquiposPorFiltro - Equipos recuperados:', ['count' => $equipos->count()]);
 
             return response()->json([
                 'success' => true,

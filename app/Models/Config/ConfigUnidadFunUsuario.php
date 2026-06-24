@@ -2,7 +2,7 @@
 
 namespace App\Models\Config;
 
-use App\Models\User;
+use App\Models\Empleado;
 use Illuminate\Database\Eloquent\Model;
 
 class ConfigUnidadFunUsuario extends Model
@@ -24,8 +24,8 @@ class ConfigUnidadFunUsuario extends Model
         return $this->belongsTo(ConfigUnidadFuncional::class, 'id_unidad_funcional');
     }
 
-    public function usuario()
+    public function persona()
     {
-        return $this->belongsTo(User::class, 'id_user');
+        return $this->belongsTo(Empleado::class, 'id_user');
     }
 }

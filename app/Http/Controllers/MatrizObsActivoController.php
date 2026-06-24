@@ -12,6 +12,101 @@ use Illuminate\Support\Facades\DB;
 class MatrizObsActivoController extends Controller
 {
     /**
+     * Nombre calificado de la tabla principal (evita ambigüedad en consultas con JOIN)
+     */
+    private const TABLA = 'matzobs_activos_c';
+
+    /**
+     * Aplicar el filtro de permisos del usuario sobre la consulta.
+     * Si el usuario no tiene empresas asignadas, puede ver todos los activos.
+     */
+    private function aplicarFiltrosPermisos($query, $user): void
+    {
+        if (!$user->empresas || $user->empresas->count() === 0) {
+            return;
+        }
+
+        $query->where(function ($q) use ($user) {
+            foreach ($user->empresas as $empresa) {
+                $pivot = $empresa->pivot;
+                $empresaId = $empresa->id;
+                $sucursalId = $pivot->id_sucursal ?? null;
+                $sedeId = $pivot->id_sede ?? null;
+                $recursivo = $pivot->recursivo ?? false;
+
+                if ($recursivo && !$sucursalId) {
+                    // Empresa completa: todas las sucursales y sedes
+                    $q->orWhere(self::TABLA . '.id_empresa', $empresaId);
+                } elseif ($recursivo && $sucursalId) {
+                    // Sucursal completa: todas las sedes de esa sucursal
+                    $q->orWhere(function ($sq) use ($empresaId, $sucursalId) {
+                        $sq->where(self::TABLA . '.id_empresa', $empresaId)
+                           ->where(self::TABLA . '.id_sucursal', $sucursalId);
+                    });
+                } else {
+                    // Asignación específica
+                    $q->orWhere(function ($sq) use ($empresaId, $sucursalId, $sedeId) {
+                        $sq->where(self::TABLA . '.id_empresa', $empresaId);
+                        if ($sucursalId) {
+                            $sq->where(self::TABLA . '.id_sucursal', $sucursalId);
+                        }
+                        if ($sedeId) {
+                            $sq->where(self::TABLA . '.id_sede', $sedeId);
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    /**
+     * Aplicar los filtros provenientes del request (empresa/sucursal/sede/agente/búsqueda).
+     */
+    private function aplicarFiltrosRequest($query, Request $request): void
+    {
+        if ($request->filled('empresa_id')) {
+            $query->where(self::TABLA . '.id_empresa', $request->empresa_id);
+        }
+
+        if ($request->filled('sucursal_id')) {
+            $query->where(self::TABLA . '.id_sucursal', $request->sucursal_id);
+        }
+
+        if ($request->filled('sede_id')) {
+            $query->where(self::TABLA . '.id_sede', $request->sede_id);
+        }
+
+        if ($request->filled('agente')) {
+            $query->where(self::TABLA . '.agente', 'like', '%' . $request->agente . '%');
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where(self::TABLA . '.nombre_equipo', 'like', "%{$search}%")
+                  ->orWhere(self::TABLA . '.agente', 'like', "%{$search}%")
+                  ->orWhere(self::TABLA . '.placa', 'like', "%{$search}%")
+                  ->orWhere(self::TABLA . '.serial', 'like', "%{$search}%");
+            });
+        }
+    }
+
+    /**
+     * Expresiones SQL de conteo condicional por estado de obsolescencia.
+     * Umbrales: óptimo >= 100, funcional 60-100, potencializar 0-60, obsoleto null/0.
+     */
+    private function expresionesConteoPorEstado(string $col = 'puntaje'): string
+    {
+        return "
+            COUNT(*) as total,
+            SUM(CASE WHEN {$col} >= 100 THEN 1 ELSE 0 END) as optimo,
+            SUM(CASE WHEN {$col} >= 60 AND {$col} < 100 THEN 1 ELSE 0 END) as funcional,
+            SUM(CASE WHEN {$col} > 0 AND {$col} < 60 THEN 1 ELSE 0 END) as potencialmente,
+            SUM(CASE WHEN {$col} IS NULL OR {$col} = 0 THEN 1 ELSE 0 END) as obsoleto
+        ";
+    }
+
+    /**
      * Obtener activos según permisos del usuario
      * Si el usuario tiene empresas asignadas, filtra por esas empresas
      * Si tiene recursivo=true, incluye sucursales y sedes
@@ -33,68 +128,8 @@ class MatrizObsActivoController extends Controller
             
             $query = MatrizObsActivoC::with(['detalle', 'empresa', 'sucursal', 'sede']);
 
-            // Si el usuario tiene empresas asignadas, filtrar por permisos
-            if ($user->empresas && $user->empresas->count() > 0) {
-                $query->where(function($q) use ($user) {
-                    foreach ($user->empresas as $empresa) {
-                        $pivot = $empresa->pivot;
-                        $empresaId = $empresa->id;
-                        $sucursalId = $pivot->id_sucursal ?? null;
-                        $sedeId = $pivot->id_sede ?? null;
-                        $recursivo = $pivot->recursivo ?? false;
-
-                        if ($recursivo && !$sucursalId) {
-                            // Empresa completa: todas las sucursales y sedes
-                            $q->orWhere('id_empresa', $empresaId);
-                        } elseif ($recursivo && $sucursalId) {
-                            // Sucursal completa: todas las sedes de esa sucursal
-                            $q->orWhere(function($sq) use ($empresaId, $sucursalId) {
-                                $sq->where('id_empresa', $empresaId)
-                                   ->where('id_sucursal', $sucursalId);
-                            });
-                        } else {
-                            // Asignación específica
-                            $q->orWhere(function($sq) use ($empresaId, $sucursalId, $sedeId) {
-                                $sq->where('id_empresa', $empresaId);
-                                if ($sucursalId) {
-                                    $sq->where('id_sucursal', $sucursalId);
-                                }
-                                if ($sedeId) {
-                                    $sq->where('id_sede', $sedeId);
-                                }
-                            });
-                        }
-                    }
-                });
-            }
-            // Si no tiene empresas asignadas, puede ver todos los activos
-
-            // Aplicar filtros adicionales
-            if ($request->has('empresa_id')) {
-                $query->where('id_empresa', $request->empresa_id);
-            }
-
-            if ($request->has('sucursal_id')) {
-                $query->where('id_sucursal', $request->sucursal_id);
-            }
-
-            if ($request->has('sede_id')) {
-                $query->where('id_sede', $request->sede_id);
-            }
-
-            if ($request->has('agente')) {
-                $query->where('agente', 'like', '%' . $request->agente . '%');
-            }
-
-            if ($request->has('search')) {
-                $search = $request->search;
-                $query->where(function($q) use ($search) {
-                    $q->where('nombre_equipo', 'like', "%{$search}%")
-                      ->orWhere('agente', 'like', "%{$search}%")
-                      ->orWhere('placa', 'like', "%{$search}%")
-                      ->orWhere('serial', 'like', "%{$search}%");
-                });
-            }
+            $this->aplicarFiltrosPermisos($query, $user);
+            $this->aplicarFiltrosRequest($query, $request);
 
             // Paginación
             $perPage = $request->get('per_page', 10);
@@ -251,6 +286,194 @@ class MatrizObsActivoController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener estadísticas',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Datos agregados para el dashboard (conteos por estado, por tipo y por ubicación).
+     * Reemplaza el cálculo en cliente que traía todos los registros (per_page=9999).
+     */
+    public function dashboard(Request $request): JsonResponse
+    {
+        try {
+            $user = Auth::user();
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Usuario no autenticado'
+                ], 401);
+            }
+
+            $user->load('empresas');
+
+            // ── Conteo por estado de obsolescencia ──────────────────────────
+            $estadoQuery = MatrizObsActivoC::query();
+            $this->aplicarFiltrosPermisos($estadoQuery, $user);
+            $this->aplicarFiltrosRequest($estadoQuery, $request);
+
+            $estadoRow = $estadoQuery->selectRaw($this->expresionesConteoPorEstado(self::TABLA . '.puntaje'))->first();
+
+            $estadisticasPorEstado = [
+                'optimo'         => (int) ($estadoRow->optimo ?? 0),
+                'funcional'      => (int) ($estadoRow->funcional ?? 0),
+                'potencialmente' => (int) ($estadoRow->potencialmente ?? 0),
+                'obsoleto'       => (int) ($estadoRow->obsoleto ?? 0),
+            ];
+            $totalActivos = (int) ($estadoRow->total ?? 0);
+
+            // ── Conteo por tipo de equipo (detalle) ─────────────────────────
+            $tipoQuery = MatrizObsActivoC::query()
+                ->leftJoin('matzobs_activos_d', 'matzobs_activos_d.activo_c_id', '=', self::TABLA . '.id');
+            $this->aplicarFiltrosPermisos($tipoQuery, $user);
+            $this->aplicarFiltrosRequest($tipoQuery, $request);
+
+            $estadisticasPorTipo = $tipoQuery
+                ->selectRaw("COALESCE(NULLIF(matzobs_activos_d.tipo, ''), 'Sin tipo') as tipo, " . $this->expresionesConteoPorEstado(self::TABLA . '.puntaje'))
+                ->groupBy('tipo')
+                ->orderByDesc('total')
+                ->get()
+                ->map(fn ($row) => [
+                    'tipo'           => $row->tipo,
+                    'total'          => (int) $row->total,
+                    'optimo'         => (int) $row->optimo,
+                    'funcional'      => (int) $row->funcional,
+                    'potencialmente' => (int) $row->potencialmente,
+                    'obsoleto'       => (int) $row->obsoleto,
+                ]);
+
+            // ── Conteo por ubicación ────────────────────────────────────────
+            // Sin empresa seleccionada: agrupar por empresa.
+            // Con empresa seleccionada: agrupar por empresa + sucursal.
+            $agruparPorEmpresa = !$request->filled('empresa_id');
+
+            if ($agruparPorEmpresa) {
+                $ubicacionExpr = "COALESCE(ent_empresas.nombre, 'Sin empresa')";
+                $groupCols     = [self::TABLA . '.id_empresa'];
+                $selectIds     = self::TABLA . '.id_empresa as empresa_id';
+            } else {
+                $ubicacionExpr = "CASE WHEN config_ubi_sucursales.nombre IS NOT NULL "
+                    . "THEN CONCAT(COALESCE(ent_empresas.nombre, 'Sin empresa'), ' - ', config_ubi_sucursales.nombre) "
+                    . "ELSE COALESCE(ent_empresas.nombre, 'Sin empresa') END";
+                $groupCols     = [self::TABLA . '.id_empresa', self::TABLA . '.id_sucursal'];
+                $selectIds     = self::TABLA . '.id_empresa as empresa_id, ' . self::TABLA . '.id_sucursal as sucursal_id';
+            }
+
+            $ubicacionQuery = MatrizObsActivoC::query()
+                ->leftJoin('ent_empresas', 'ent_empresas.id', '=', self::TABLA . '.id_empresa')
+                ->leftJoin('config_ubi_sucursales', 'config_ubi_sucursales.id', '=', self::TABLA . '.id_sucursal');
+            $this->aplicarFiltrosPermisos($ubicacionQuery, $user);
+            $this->aplicarFiltrosRequest($ubicacionQuery, $request);
+
+            $estadisticasPorUbicacion = $ubicacionQuery
+                ->selectRaw("{$selectIds}, {$ubicacionExpr} as ubicacion, " . $this->expresionesConteoPorEstado(self::TABLA . '.puntaje'))
+                ->groupBy(array_merge($groupCols, [DB::raw($ubicacionExpr)]))
+                ->orderByDesc('total')
+                ->get()
+                ->map(fn ($row) => [
+                    'ubicacion'    => $row->ubicacion,
+                    'empresa_id'   => $row->empresa_id !== null ? (int) $row->empresa_id : null,
+                    'sucursal_id'  => (!$agruparPorEmpresa && isset($row->sucursal_id) && $row->sucursal_id !== null) ? (int) $row->sucursal_id : null,
+                    'total'        => (int) $row->total,
+                    'distribucion' => [
+                        'optimo'         => (int) $row->optimo,
+                        'funcional'      => (int) $row->funcional,
+                        'potencialmente' => (int) $row->potencialmente,
+                        'obsoleto'       => (int) $row->obsoleto,
+                    ],
+                ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_activos'              => $totalActivos,
+                    'estadisticas_por_estado'    => $estadisticasPorEstado,
+                    'estadisticas_por_tipo'      => $estadisticasPorTipo,
+                    'estadisticas_por_ubicacion' => $estadisticasPorUbicacion,
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener los datos del dashboard',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Opciones para los dropdowns de filtros (empresa/sucursal/sede),
+     * derivadas únicamente de los activos a los que el usuario tiene acceso.
+     * Reemplaza la carga de todos los registros (per_page=9999) para llenar selects.
+     *
+     * Parámetros: tipo=empresa|sucursal|sede, empresa_id?, sucursal_id?
+     */
+    public function opcionesFiltros(Request $request): JsonResponse
+    {
+        try {
+            $user = Auth::user();
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Usuario no autenticado'
+                ], 401);
+            }
+
+            $user->load('empresas');
+
+            $tipo = $request->get('tipo', 'empresa');
+
+            $query = MatrizObsActivoC::query();
+            $this->aplicarFiltrosPermisos($query, $user);
+
+            if ($tipo === 'sucursal') {
+                if ($request->filled('empresa_id')) {
+                    $query->where(self::TABLA . '.id_empresa', $request->empresa_id);
+                }
+                $data = $query
+                    ->join('config_ubi_sucursales', 'config_ubi_sucursales.id', '=', self::TABLA . '.id_sucursal')
+                    ->whereNotNull(self::TABLA . '.id_sucursal')
+                    ->distinct()
+                    ->selectRaw(self::TABLA . '.id_sucursal as id, config_ubi_sucursales.nombre as nombre')
+                    ->orderBy('nombre')
+                    ->get();
+            } elseif ($tipo === 'sede') {
+                if ($request->filled('empresa_id')) {
+                    $query->where(self::TABLA . '.id_empresa', $request->empresa_id);
+                }
+                if ($request->filled('sucursal_id')) {
+                    $query->where(self::TABLA . '.id_sucursal', $request->sucursal_id);
+                }
+                $data = $query
+                    ->join('config_ubi_sede', 'config_ubi_sede.id', '=', self::TABLA . '.id_sede')
+                    ->whereNotNull(self::TABLA . '.id_sede')
+                    ->distinct()
+                    ->selectRaw(self::TABLA . '.id_sede as id, config_ubi_sede.nombre as nombre')
+                    ->orderBy('nombre')
+                    ->get();
+            } else {
+                $data = $query
+                    ->join('ent_empresas', 'ent_empresas.id', '=', self::TABLA . '.id_empresa')
+                    ->whereNotNull(self::TABLA . '.id_empresa')
+                    ->distinct()
+                    ->selectRaw(self::TABLA . '.id_empresa as id, ent_empresas.nombre as nombre')
+                    ->orderBy('nombre')
+                    ->get();
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $data
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener las opciones de filtro',
                 'error' => $e->getMessage()
             ], 500);
         }

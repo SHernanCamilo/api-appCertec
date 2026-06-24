@@ -9,11 +9,12 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Aprobadores parametrizables por paso.
- * Soporta 4 estrategias:
+ * Soporta 5 estrategias:
  *   1. Aprobador fijo (id_user)
  *   2. Aprobador por unidad funcional (dinámico)
  *   3. Aprobador por prefijo de sucursal (dinámico)
  *   4. Aprobador por grupo (dinámico)
+ *   5. Aprobador por permiso (permiso_codigo -> seg_permisos.codigo)
  */
 class WfAprobador extends Model
 {
@@ -26,6 +27,8 @@ class WfAprobador extends Model
         'prefijo_sucursal',
         'id_sede',
         'id_grupo',
+        'permiso_codigo',
+        'alcance',
         'es_suplente',
         'estado',
     ];

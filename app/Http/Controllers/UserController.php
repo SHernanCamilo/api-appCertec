@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 
@@ -35,6 +36,39 @@ class UserController extends Controller
         });
 
         return response()->json($users);
+    }
+
+    /**
+     * Usuarios con permisos asignados a una empresa
+     */
+    public function porEmpresa(string $empresaId): JsonResponse
+    {
+        try {
+            $users = User::with(['rolesCustom', 'empresas'])
+                ->whereHas('empresas', function ($query) use ($empresaId) {
+                    $query->where('ent_empresas.id', $empresaId);
+                })
+                ->where('estado', 1)
+                ->orderBy('name')
+                ->get()
+                ->map(function ($user) {
+                    return [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'cargo' => $user->cargo,
+                        'email' => $user->email,
+                        'estado' => $user->estado,
+                        'empresas' => $user->empresas,
+                    ];
+                });
+
+            return response()->json($users, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Error al obtener usuarios de la empresa',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**

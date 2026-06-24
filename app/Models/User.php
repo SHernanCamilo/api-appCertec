@@ -135,6 +135,46 @@ class User extends Authenticatable implements JWTSubject
     }
 
     /**
+     * Scope: usuarios que poseen un permiso por su código (seg_permisos.codigo)
+     * a través de la cadena Rol -> Perfil -> Permiso.
+     *
+     * Usado por el motor de flujos para resolver aprobadores por permiso
+     * (ej: 'apro-evento', 'auto-evento', 'digi-evento').
+     *
+     * @param string   $codigo         Código del permiso en seg_permisos
+     * @param int|null $empresaId      Si se indica, limita a usuarios vinculados a esa empresa
+     * @param bool     $incluirAdmins  Si true, los roles con es_admin también califican
+     */
+    public function scopeConPermiso($query, string $codigo, ?int $empresaId = null, bool $incluirAdmins = true)
+    {
+        return $query->where('users.estado', 1)
+            ->where(function ($q) use ($codigo, $incluirAdmins) {
+                $q->whereHas('rolesCustom', function ($rol) use ($codigo) {
+                    $rol->where('seg_roles_custom.estado', true)
+                        ->whereHas('perfiles', function ($perfil) use ($codigo) {
+                            $perfil->where('seg_perfiles.estado', true)
+                                ->whereHas('permisos', function ($permiso) use ($codigo) {
+                                    $permiso->where('seg_permisos.codigo', $codigo)
+                                        ->where('seg_permisos.estado', true);
+                                });
+                        });
+                });
+
+                if ($incluirAdmins) {
+                    $q->orWhereHas('rolesCustom', function ($rol) {
+                        $rol->where('seg_roles_custom.estado', true)
+                            ->where('seg_roles_custom.es_admin', true);
+                    });
+                }
+            })
+            ->when($empresaId, function ($q, $id) {
+                $q->whereHas('empresas', function ($empresa) use ($id) {
+                    $empresa->where('ent_empresas.id', $id);
+                });
+            });
+    }
+
+    /**
      * Verificar si el usuario está activo
      */
     public function estaActivo(): bool

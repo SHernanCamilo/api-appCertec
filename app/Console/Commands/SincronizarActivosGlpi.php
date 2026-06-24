@@ -701,20 +701,94 @@ class SincronizarActivosGlpi extends Command
         DB::beginTransaction();
 
         try {
-            // Verificar si ya existe
-            $existingC = MatzobsActivosC::where('id_activo_glpi', $computer['id'])->first();
-
-            // Extraer datos para tabla C (datos generales)
+            // Extraer datos para tabla C (datos generales) PRIMERO para obtener el nombre
             $activoC = $this->mapActivoC($computer, $stats);
             
             // Extraer datos para tabla D (detalles técnicos)
             $activoD = $this->mapActivoD($computer);
             
+            // VERIFICACIÓN CRÍTICA: Buscar primero por nombre_equipo para evitar duplicados
+            $existingByName = MatzobsActivosC::where('nombre_equipo', $activoC['nombre_equipo'])->first();
+            
+            // Luego verificar por ID de GLPI
+            $existingById = MatzobsActivosC::where('id_activo_glpi', $computer['id'])->first();
+            
+            // Determinar el registro existente a usar
+            $existingC = null;
+            
+            if ($existingByName && $existingById && $existingByName->id !== $existingById->id) {
+                // CONFLICTO: Existe un activo con el mismo nombre pero diferente ID GLPI
+                Log::channel('glpi_sync')->error("CONFLICTO DETECTADO: Activo duplicado por nombre", [
+                    'nombre_equipo' => $activoC['nombre_equipo'],
+                    'id_glpi_nuevo' => $computer['id'],
+                    'id_glpi_existente_por_nombre' => $existingByName->id_activo_glpi,
+                    'id_glpi_existente_por_id' => $existingById->id_activo_glpi,
+                    'accion' => 'Actualizando el registro existente por nombre y marcando conflicto'
+                ]);
+                
+                // Usar el registro que coincide por nombre (prioridad al nombre único)
+                $existingC = $existingByName;
+                
+                // Actualizar el ID de GLPI del registro existente por nombre
+                $activoC['id_activo_glpi'] = $computer['id'];
+                
+            } elseif ($existingByName) {
+                // Existe por nombre, usar ese registro
+                $existingC = $existingByName;
+                
+                // Actualizar el ID de GLPI si es diferente
+                if ($existingByName->id_activo_glpi != $computer['id']) {
+                    Log::channel('glpi_sync')->warning("Actualizando ID GLPI para activo existente", [
+                        'nombre_equipo' => $activoC['nombre_equipo'],
+                        'id_glpi_anterior' => $existingByName->id_activo_glpi,
+                        'id_glpi_nuevo' => $computer['id']
+                    ]);
+                    $activoC['id_activo_glpi'] = $computer['id'];
+                }
+                
+            } elseif ($existingById) {
+                // Existe por ID GLPI, usar ese registro
+                $existingC = $existingById;
+                
+                // Verificar si el nombre cambió
+                if ($existingById->nombre_equipo !== $activoC['nombre_equipo']) {
+                    Log::channel('glpi_sync')->info("Nombre de equipo cambió en GLPI", [
+                        'id_glpi' => $computer['id'],
+                        'nombre_anterior' => $existingById->nombre_equipo,
+                        'nombre_nuevo' => $activoC['nombre_equipo']
+                    ]);
+                }
+            }
+            
+            // Si hay un registro existente por ID pero con nombre diferente, verificar que no cause duplicado
+            if ($existingById && $existingById->nombre_equipo !== $activoC['nombre_equipo']) {
+                $conflictByNewName = MatzobsActivosC::where('nombre_equipo', $activoC['nombre_equipo'])
+                    ->where('id', '!=', $existingById->id)
+                    ->first();
+                    
+                if ($conflictByNewName) {
+                    Log::channel('glpi_sync')->error("CONFLICTO: El nuevo nombre ya existe en otro registro", [
+                        'id_glpi' => $computer['id'],
+                        'nombre_nuevo' => $activoC['nombre_equipo'],
+                        'registro_conflicto_id' => $conflictByNewName->id,
+                        'registro_conflicto_glpi_id' => $conflictByNewName->id_activo_glpi,
+                        'accion' => 'Omitiendo actualización para evitar duplicado'
+                    ]);
+                    
+                    DB::rollback();
+                    return 'skipped';
+                }
+            }
+            
             // LOG TEMPORAL: Verificar valores
             Log::channel('glpi_sync')->info("Valores extraídos", [
                 'id_glpi' => $computer['id'],
+                'nombre_equipo' => $activoC['nombre_equipo'],
                 'usuario_glpi' => $activoC['usuario_glpi'],
-                'sistema_operativo' => $activoD['sistema_operativo']
+                'sistema_operativo' => $activoD['sistema_operativo'],
+                'existing_by_name' => $existingByName ? $existingByName->id : null,
+                'existing_by_id' => $existingById ? $existingById->id : null,
+                'selected_existing' => $existingC ? $existingC->id : null
             ]);
 
             if ($existingC) {
@@ -729,6 +803,7 @@ class SincronizarActivosGlpi extends Command
                         $existingC->serial !== $activoC['serial'] ||
                         $existingC->ubicacion !== $activoC['ubicacion'] ||
                         $existingC->usuario_glpi !== $activoC['usuario_glpi'] ||
+                        $existingC->id_activo_glpi != $activoC['id_activo_glpi'] || // Verificar cambio de ID GLPI
                         // Verificar si han pasado más días de los configurados desde la última sincronización
                         !$existingC->date_u_sincronizacion || 
                         $existingC->date_u_sincronizacion->diffInDays(now()) >= $syncDays
@@ -739,7 +814,7 @@ class SincronizarActivosGlpi extends Command
                     DB::rollback();
                     Log::channel('glpi_sync')->debug("Activo omitido - sin cambios recientes", [
                         'id_glpi' => $computer['id'],
-                        'nombre' => $computer['name'],
+                        'nombre' => $activoC['nombre_equipo'],
                         'ultima_sync' => $existingC->date_u_sincronizacion,
                         'dias_desde_sync' => $existingC->date_u_sincronizacion ? $existingC->date_u_sincronizacion->diffInDays(now()) : 'nunca',
                         'sync_days_config' => $syncDays
@@ -751,6 +826,7 @@ class SincronizarActivosGlpi extends Command
                 DB::table('matzobs_activos_c')
                     ->where('id', $existingC->id)
                     ->update([
+                        'id_activo_glpi' => $activoC['id_activo_glpi'], // Asegurar que se actualice el ID GLPI
                         'usuario_glpi' => $activoC['usuario_glpi'],
                         'nombre_equipo' => $activoC['nombre_equipo'],
                         'id_empresa' => $activoC['id_empresa'],
@@ -793,12 +869,28 @@ class SincronizarActivosGlpi extends Command
                 
                 Log::channel('glpi_sync')->info("Activo actualizado", [
                     'id_glpi' => $computer['id'],
-                    'nombre' => $computer['name']
+                    'nombre' => $activoC['nombre_equipo'],
+                    'id_local' => $existingC->id
                 ]);
                 
                 DB::commit();
                 return 'updated';
             } else {
+                // ANTES DE CREAR: Verificación final de duplicados por nombre
+                $finalCheck = MatzobsActivosC::where('nombre_equipo', $activoC['nombre_equipo'])->first();
+                if ($finalCheck) {
+                    Log::channel('glpi_sync')->error("DUPLICADO DETECTADO en verificación final", [
+                        'nombre_equipo' => $activoC['nombre_equipo'],
+                        'id_glpi_nuevo' => $computer['id'],
+                        'registro_existente_id' => $finalCheck->id,
+                        'registro_existente_glpi_id' => $finalCheck->id_activo_glpi,
+                        'accion' => 'Omitiendo creación'
+                    ]);
+                    
+                    DB::rollback();
+                    return 'skipped';
+                }
+                
                 // Crear nuevos registros usando DB directo
                 $activoCId = DB::table('matzobs_activos_c')->insertGetId([
                     'id_activo_glpi' => $activoC['id_activo_glpi'],
@@ -837,7 +929,7 @@ class SincronizarActivosGlpi extends Command
                 
                 Log::channel('glpi_sync')->info("Activo creado", [
                     'id_glpi' => $computer['id'],
-                    'nombre' => $computer['name'],
+                    'nombre' => $activoC['nombre_equipo'],
                     'id_local' => $activoCId
                 ]);
                 

@@ -3,6 +3,7 @@
 namespace App\Models\Config;
 
 use App\Models\Empresa;
+use App\Models\Empleado;
 use App\Models\Sede;
 use App\Models\Sucursal;
 use App\Models\User;
@@ -47,7 +48,7 @@ class ConfigUnidadFuncional extends Model
     public function usuarios()
     {
         return $this->belongsToMany(
-            User::class,
+            Empleado::class,
             'config_unidades_fun_usuarios',
             'id_unidad_funcional',
             'id_user'
@@ -57,7 +58,7 @@ class ConfigUnidadFuncional extends Model
     public function responsables()
     {
         return $this->belongsToMany(
-            User::class,
+            Empleado::class,
             'config_unidades_fun_responsable',
             'id_unidad_funcional',
             'id_user'
