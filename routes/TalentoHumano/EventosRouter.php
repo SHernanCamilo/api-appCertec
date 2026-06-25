@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\TalentoHumano\EventNovedadController;
 use App\Http\Controllers\TalentoHumano\EventSolicitudController;
+use App\Http\Controllers\TalentoHumano\WfGrupoUfController;
 
 /**
  * Rutas del módulo de Eventos - Talento Humano
@@ -32,6 +33,16 @@ Route::get('/flujos/catalogo', [EventSolicitudController::class, 'catalogoFlujos
 Route::get('/flujos/configuracion-unidad', [EventSolicitudController::class, 'configuracionFlujoUnidad']);
 Route::post('/flujos/configuracion-unidad', [EventSolicitudController::class, 'guardarConfiguracionFlujoUnidad']);
 
+// ─── Grupos de UF (motor de reglas / flujos) ─────────────────────────────────
+Route::prefix('grupos')->group(function () {
+    Route::get('/',           [WfGrupoUfController::class, 'index']);
+    Route::get('/{id}',       [WfGrupoUfController::class, 'show']);
+    Route::post('/',          [WfGrupoUfController::class, 'store']);
+    Route::put('/{id}',       [WfGrupoUfController::class, 'update']);
+    Route::post('/{id}/flujo',[WfGrupoUfController::class, 'asignarFlujo']);
+    Route::delete('/{id}',    [WfGrupoUfController::class, 'destroy']);
+});
+
 // ─── Catálogo de Novedades ────────────────────────────────────────────────────
 Route::prefix('novedades')->group(function () {
     Route::get('/',        [EventNovedadController::class, 'index']);
@@ -51,3 +62,4 @@ Route::prefix('novedad-cargo')->group(function () {
 // ─── Consultas auxiliares ─────────────────────────────────────────────────────
 Route::get('/novedades-aplicables', [EventNovedadController::class, 'novedadesAplicables']);
 Route::get('/cargos',               [EventNovedadController::class, 'getCargos']);
+

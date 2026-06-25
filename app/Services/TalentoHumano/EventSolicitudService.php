@@ -678,6 +678,12 @@ class EventSolicitudService
                 $contexto['id_sucursal'] = $uf->id_sucursal;
                 $contexto['id_sede'] = $uf->id_sede;
             }
+
+            // Buscar grupo de workflow al que pertenece la UF
+            $grupo = \App\Models\Workflow\WfGrupo::obtenerGrupoPorUnidadFuncional($ufId, $empresaId);
+            if ($grupo) {
+                $contexto['id_grupo'] = $grupo->id;
+            }
         }
 
         return $contexto;
