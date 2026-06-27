@@ -57,6 +57,8 @@ class UserController extends Controller
                         'name' => $user->name,
                         'cargo' => $user->cargo,
                         'email' => $user->email,
+                        'tipo_identificacion' => $user->tipo_identificacion,
+                        'numero_identificacion' => $user->numero_identificacion,
                         'estado' => $user->estado,
                         'empresas' => $user->empresas,
                     ];
@@ -849,25 +851,6 @@ class UserController extends Controller
                 }
             }
         });
-    }
-    public function porEmpresa($empresaId)
-    {
-        $usuarios = User::whereHas('empresas', function ($q) use ($empresaId) {
-            $q->where('ent_empresas.id', $empresaId);
-        })
-        ->where('estado', 1)
-        ->get()
-        ->map(function ($user) {
-            return [
-                'id'     => $user->id,
-                'name'   => $user->name,
-                'email'  => $user->email,
-                'cargo'  => $user->cargo,
-                'estado' => $user->estado,
-            ];
-        });
-
-        return response()->json($usuarios);
     }
 
 }

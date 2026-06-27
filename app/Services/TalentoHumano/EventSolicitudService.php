@@ -11,6 +11,7 @@ use App\Models\Workflow\WfAprobador;
 use App\Models\Workflow\WfDefinicion;
 use App\Models\Workflow\WfInstancia;
 use App\Models\Workflow\WfModulo;
+use App\Models\Workflow\WfGrupo;
 use App\Models\Workflow\WfRegla;
 use App\Services\SecuenciaNumericaService;
 use App\Services\Workflow\WorkflowResolver;
@@ -21,6 +22,8 @@ use Illuminate\Support\Facades\Log;
 
 class EventSolicitudService
 {
+    private const MSG_UF_NO_PARAMETRIZADA = 'Unidad Funcional No parametrizada para eventos';
+
     public function __construct(
         private readonly SecuenciaNumericaService $secuenciaNumericaService,
         private readonly WorkflowResolver $workflowResolver,
@@ -64,6 +67,12 @@ class EventSolicitudService
 
         if (!$this->empleadoEnUnidadesResponsable($userId, (int)$data['empleado_id'], $empresaId)) {
             throw new \RuntimeException('El empleado seleccionado no pertenece a sus unidades funcionales a cargo.');
+        }
+
+        $contexto = $this->construirContextoEvento($data);
+        $validacion = $this->validarParametrizacionEventos($contexto);
+        if (!$validacion['ok']) {
+            throw new \RuntimeException($validacion['mensaje']);
         }
 
         $moduloId = $this->resolverModuloEventosId();
@@ -120,7 +129,10 @@ class EventSolicitudService
                 'empresa_id'           => $empresaId,
             ], $solicitud->id);
 
-            $flujo = $this->workflowResolver->resolverFlujo('eventos', $contexto);
+            $flujo = $this->resolverFlujoParametrizadoEventos($contexto);
+            if (!$flujo) {
+                throw new \RuntimeException(self::MSG_UF_NO_PARAMETRIZADA);
+            }
 
             $instancia = $this->workflowExecutor->iniciarFlujo(
                 $flujo,
@@ -251,38 +263,159 @@ class EventSolicitudService
     }
 
     /**
-     * Previsualiza el flujo que aplicaría a un evento según el contexto,
-     * sin crear nada. Devuelve null si no hay flujo configurado.
+     * Previsualiza el flujo parametrizado para la UF del empleado (UF individual o grupo WF).
      */
     public function previewFlujo(array $data): ?array
     {
         $contexto = $this->construirContextoEvento($data);
+        $ufFlujo = $this->resolverUnidadFuncionalFlujo($data, $contexto['id_empresa'] ?? null);
+        $uf = $ufFlujo ? ConfigUnidadFuncional::find($ufFlujo) : null;
 
-        try {
-            $flujo = $this->workflowResolver->resolverFlujo('eventos', $contexto);
+        $ufPayload = $uf ? [
+            'id'     => $uf->id,
+            'codigo' => $uf->codigo,
+            'nombre' => $uf->nombre,
+        ] : null;
 
+        $validacion = $this->validarParametrizacionEventos($contexto);
+        if (!$validacion['ok']) {
             return [
-                'codigo' => $flujo->codigo,
-                'nombre' => $flujo->nombre,
-                'pasos'  => $flujo->pasos()->activos()->ordenados()->get()
-                    ->map(function ($p) use ($contexto) {
-                        $intervinientes = $this->workflowNotifier->resolverAprobadoresParaPaso($p, $contexto);
-
-                        return [
-                            'orden'               => $p->orden,
-                            'nombre_paso'         => $p->nombre_paso,
-                            'rol_aprobador'       => $p->rol_aprobador,
-                            'intervinientes'      => $intervinientes->map(fn ($u) => [
-                                'id'     => $u->id,
-                                'nombre' => $u->name,
-                            ])->values()->all(),
-                            'intervinientes_texto' => $this->workflowNotifier->nombresIntervinientes($intervinientes),
-                        ];
-                    })->values()->all(),
+                'parametrizada'          => false,
+                'mensaje'                => $validacion['mensaje'],
+                'unidad_funcional_flujo' => $ufPayload,
+                'pasos'                  => [],
             ];
-        } catch (\Throwable $e) {
+        }
+
+        $flujo = $validacion['flujo'];
+
+        return [
+            'parametrizada'          => true,
+            'codigo'                 => $flujo->codigo,
+            'nombre'                 => $flujo->nombre,
+            'unidad_funcional_flujo' => $ufPayload,
+            'modo_parametrizacion'   => $contexto['modo_parametrizacion_eventos'] ?? null,
+            'pasos'                  => $flujo->pasos()->activos()->ordenados()->get()
+                ->map(function ($p) use ($contexto) {
+                    $intervinientes = $this->workflowNotifier->resolverAprobadoresParaPaso($p, $contexto);
+
+                    return [
+                        'orden'                => $p->orden,
+                        'nombre_paso'          => $p->nombre_paso,
+                        'rol_aprobador'        => $p->rol_aprobador,
+                        'intervinientes'       => $intervinientes->map(fn ($u) => [
+                            'id'     => $u->id,
+                            'nombre' => $u->name,
+                        ])->values()->all(),
+                        'intervinientes_texto' => $this->workflowNotifier->nombresIntervinientes($intervinientes),
+                    ];
+                })->values()->all(),
+        ];
+    }
+
+    /**
+     * Valida que la UF del empleado tenga flujo y responsables parametrizados (UF o grupo WF).
+     */
+    public function validarParametrizacionEventos(array $contexto): array
+    {
+        $ufId = $contexto['id_unidad_funcional'] ?? null;
+        if (!$ufId) {
+            return ['ok' => false, 'mensaje' => self::MSG_UF_NO_PARAMETRIZADA];
+        }
+
+        $flujo = $this->resolverFlujoParametrizadoEventos($contexto);
+        if (!$flujo) {
+            return ['ok' => false, 'mensaje' => self::MSG_UF_NO_PARAMETRIZADA];
+        }
+
+        $pasos = $flujo->relationLoaded('pasos')
+            ? $flujo->pasos
+            : $flujo->pasos()->activos()->ordenados()->get();
+
+        if ($pasos->isEmpty()) {
+            return ['ok' => false, 'mensaje' => self::MSG_UF_NO_PARAMETRIZADA];
+        }
+
+        foreach ($pasos as $paso) {
+            $intervinientes = $this->workflowNotifier->resolverAprobadoresParaPaso($paso, $contexto);
+            if ($intervinientes->isEmpty()) {
+                return ['ok' => false, 'mensaje' => self::MSG_UF_NO_PARAMETRIZADA];
+            }
+        }
+
+        return ['ok' => true, 'mensaje' => null, 'flujo' => $flujo];
+    }
+
+    /**
+     * Flujo de eventos asignado explícitamente por UF o por grupo WF.
+     */
+    private function resolverFlujoParametrizadoEventos(array $contexto): ?WfDefinicion
+    {
+        $ufId = (int)($contexto['id_unidad_funcional'] ?? 0);
+        if ($ufId <= 0) {
             return null;
         }
+
+        $withPasos = fn ($q) => $q->with(['pasos' => fn ($p) => $p->where('estado', true)->orderBy('orden')]);
+
+        $reglaUf = WfRegla::query()
+            ->activos()
+            ->whereRaw("JSON_EXTRACT(condiciones, '$.id_unidad_funcional') = ?", [$ufId])
+            ->whereHas('definicion', fn ($q) => $this->scopeFlujoEventosActivo($q))
+            ->with(['definicion' => $withPasos])
+            ->orderBy('prioridad')
+            ->first();
+
+        if ($reglaUf?->definicion) {
+            return $reglaUf->definicion;
+        }
+
+        $grupoId = (int)($contexto['id_grupo'] ?? 0);
+        if ($grupoId <= 0) {
+            return null;
+        }
+
+        $reglaGrupo = WfRegla::query()
+            ->activos()
+            ->whereRaw("JSON_EXTRACT(condiciones, '$.id_grupo') = ?", [$grupoId])
+            ->whereHas('definicion', fn ($q) => $this->scopeFlujoEventosActivo($q))
+            ->with(['definicion' => $withPasos])
+            ->orderBy('prioridad')
+            ->first();
+
+        return $reglaGrupo?->definicion;
+    }
+
+    private function scopeFlujoEventosActivo($query): void
+    {
+        $query->where('estado', true)
+            ->whereHas('modulo', fn ($m) => $m->where('codigo', 'eventos'));
+    }
+
+    private function resolverModoParametrizacionEventos(int $ufId, ?int $empresaId): ?string
+    {
+        $tieneReglaUf = WfRegla::query()
+            ->activos()
+            ->whereRaw("JSON_EXTRACT(condiciones, '$.id_unidad_funcional') = ?", [$ufId])
+            ->whereHas('definicion', fn ($q) => $this->scopeFlujoEventosActivo($q))
+            ->exists();
+
+        if ($tieneReglaUf) {
+            return 'uf';
+        }
+
+        $grupo = WfGrupo::obtenerGrupoPorUnidadFuncional($ufId, $empresaId);
+        if (!$grupo) {
+            return null;
+        }
+
+        $tieneReglaGrupo = WfRegla::query()
+            ->activos()
+            ->whereRaw("JSON_EXTRACT(condiciones, '$.id_grupo') = ?", [$grupo->id])
+            ->whereHas('definicion', fn ($q) => $this->scopeFlujoEventosActivo($q))
+            ->exists();
+
+        return $tieneReglaGrupo ? 'grupo' : null;
     }
 
     /**
@@ -312,8 +445,9 @@ class EventSolicitudService
         );
 
         $query = EventHoraExtra::with([
-            'empleado:id,nombre',
+            'empleado:id,nombre,numero_identificacion',
             'novedad:id,codigo,descripcion',
+            'empleadoCubre:id,nombre',
         ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
           ->select('event_horas_extra.*', 'uf.nombre as unidad_funcional')
           ->whereIn('event_horas_extra.id', $recordIds);
@@ -475,8 +609,8 @@ class EventSolicitudService
                 ->whereNotNull('id_user')
                 ->where('estado', true)
                 ->get(['id_paso', 'id_user'])
-                ->keyBy('id_paso')
-                ->map(fn ($r) => (int) $r->id_user)
+                ->groupBy('id_paso')
+                ->map(fn ($items) => $items->pluck('id_user')->map(fn ($id) => (int) $id)->values()->all())
                 ->all();
         }
 
@@ -504,9 +638,9 @@ class EventSolicitudService
             $this->desactivarReglasUnidad($unidadFuncionalId);
             $this->activarReglaUnidadEnFlujo($flujo->id, $unidadFuncionalId);
 
-            $responsablesMap = collect($responsables)
+            $responsablesGrouped = collect($responsables)
                 ->filter(fn ($r) => !empty($r['id_paso']) && !empty($r['id_user']))
-                ->keyBy(fn ($r) => (int) $r['id_paso']);
+                ->groupBy(fn ($r) => (int) $r['id_paso']);
 
             foreach ($flujo->pasos as $paso) {
                 WfAprobador::query()
@@ -515,18 +649,17 @@ class EventSolicitudService
                     ->where('estado', true)
                     ->update(['estado' => false]);
 
-                $cfg = $responsablesMap->get((int) $paso->id);
-                if (!$cfg) {
-                    continue;
+                $usersPaso = $responsablesGrouped->get((int) $paso->id, collect());
+                foreach ($usersPaso as $cfg) {
+                    WfAprobador::create([
+                        'id_paso'              => $paso->id,
+                        'tipo_aprobador'       => 'USER',
+                        'id_user'              => (int) $cfg['id_user'],
+                        'id_unidad_funcional'  => $unidadFuncionalId,
+                        'es_suplente'          => false,
+                        'estado'               => true,
+                    ]);
                 }
-
-                WfAprobador::create([
-                    'id_paso'              => $paso->id,
-                    'id_user'              => (int) $cfg['id_user'],
-                    'id_unidad_funcional'  => $unidadFuncionalId,
-                    'es_suplente'          => false,
-                    'estado'               => true,
-                ]);
             }
 
             return [
@@ -649,7 +782,9 @@ class EventSolicitudService
     }
 
     /**
-     * Contexto completo para resolver flujo e intervinientes (UF → empresa, sucursal, sede).
+     * Contexto para resolver flujo e intervinientes.
+     * El flujo aplica según la UF a la que pertenece el empleado;
+     * la UF del formulario (evento) se conserva aparte para registro.
      */
     private function construirContextoEvento(array $data, ?int $recordId = null): array
     {
@@ -659,34 +794,66 @@ class EventSolicitudService
             $empresaId = $this->resolverEmpresaId((int)$data['empleado_id']);
         }
 
-        $ufId = $this->resolveUnidadFuncionalId($data);
+        $ufEventoId = $this->resolveUnidadFuncionalId($data);
+        $ufFlujoId = $this->resolverUnidadFuncionalFlujo($data, $empresaId);
 
         $tipoNovedad = !empty($data['novedad_id'])
             ? optional(EventNovedad::find((int)$data['novedad_id']))->codigo
             : null;
 
         $contexto = [
-            'record_id'           => $recordId,
-            'id_empresa'          => $empresaId,
-            'id_unidad_funcional' => $ufId,
-            'tipo_novedad'        => $tipoNovedad,
+            'record_id'                  => $recordId,
+            'id_empresa'                 => $empresaId,
+            'id_unidad_funcional'        => $ufFlujoId,
+            'id_unidad_funcional_evento' => $ufEventoId,
+            'tipo_novedad'               => $tipoNovedad,
         ];
 
-        if ($ufId) {
-            $uf = ConfigUnidadFuncional::find($ufId);
+        if ($ufFlujoId) {
+            $uf = ConfigUnidadFuncional::find($ufFlujoId);
             if ($uf) {
                 $contexto['id_sucursal'] = $uf->id_sucursal;
                 $contexto['id_sede'] = $uf->id_sede;
             }
 
-            // Buscar grupo de workflow al que pertenece la UF
-            $grupo = \App\Models\Workflow\WfGrupo::obtenerGrupoPorUnidadFuncional($ufId, $empresaId);
+            $grupo = WfGrupo::obtenerGrupoPorUnidadFuncional($ufFlujoId, $empresaId);
             if ($grupo) {
                 $contexto['id_grupo'] = $grupo->id;
             }
+
+            $contexto['solo_aprobadores_parametrizados'] = true;
+            $contexto['modo_parametrizacion_eventos'] = $this->resolverModoParametrizacionEventos($ufFlujoId, $empresaId);
         }
 
         return $contexto;
+    }
+
+    /**
+     * UF del empleado (config_unidades_fun_usuarios) usada para el flujo de aprobación.
+     */
+    private function resolverUnidadFuncionalFlujo(array $data, ?int $empresaId = null): ?int
+    {
+        if (!empty($data['empleado_id'])) {
+            $ufEmpleado = $this->resolverUnidadFuncionalEmpleado((int)$data['empleado_id'], $empresaId);
+            if ($ufEmpleado) {
+                return $ufEmpleado;
+            }
+        }
+
+        return $this->resolveUnidadFuncionalId($data);
+    }
+
+    private function resolverUnidadFuncionalEmpleado(int $empleadoId, ?int $empresaId = null): ?int
+    {
+        $query = ConfigUnidadFuncional::query()
+            ->activas()
+            ->whereHas('usuarios', fn ($q) => $q->where('config_person_tercero.id', $empleadoId));
+
+        if ($empresaId) {
+            $query->where('id_empresa', $empresaId);
+        }
+
+        return $query->orderBy('nombre')->value('id');
     }
 
     private function enriquecerEventoConIntervinientes(EventHoraExtra $evento): EventHoraExtra

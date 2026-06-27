@@ -11,14 +11,13 @@ echo "=== PRUEBA 1: Crear Grupo 'Asistenciales Neiva' ===\n";
 
 // Buscar o crear el grupo
 $grupo = WfGrupo::firstOrCreate(
-    ['codigo' => 'ASIST_NEIVA'],
+    ['nombre' => 'Asistenciales Neiva', 'id_empresa' => null],
     [
-        'nombre'      => 'Asistenciales Neiva',
         'descripcion' => 'Grupo de UFs asistenciales de Neiva',
         'estado'      => true,
     ]
 );
-echo "✅ Grupo ID: {$grupo->id} | Código: {$grupo->codigo} | Nombre: {$grupo->nombre}\n";
+echo "✅ Grupo ID: {$grupo->id} | Nombre: {$grupo->nombre}\n";
 
 // Asignar UFs al grupo (primeras 5 activas como ejemplo)
 $ufs = DB::table('config_unidades_funcionales')
@@ -57,7 +56,7 @@ if ($ufs->isNotEmpty()) {
     $ufTest = $ufs->first();
     $grupoEncontrado = WfGrupo::obtenerGrupoPorUnidadFuncional($ufTest);
     if ($grupoEncontrado) {
-        echo "✅ UF #{$ufTest} pertenece al grupo: [{$grupoEncontrado->codigo}] {$grupoEncontrado->nombre}\n";
+        echo "✅ UF #{$ufTest} pertenece al grupo: {$grupoEncontrado->nombre}\n";
     } else {
         echo "❌ No se encontró grupo para UF #{$ufTest}\n";
     }
