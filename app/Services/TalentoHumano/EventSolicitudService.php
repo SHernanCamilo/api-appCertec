@@ -2,6 +2,7 @@
 
 namespace App\Services\TalentoHumano;
 
+use App\Models\Config\ConfigMotRechazo;
 use App\Models\Empleado;
 use App\Models\Modulo;
 use App\Models\Config\ConfigUnidadFuncional;
@@ -38,6 +39,7 @@ class EventSolicitudService
             'aprobador:id,nombre',
             'empleadoCubre:id,nombre',
             'novedad:id,codigo,descripcion',
+            'motivoRechazo:id,codigo,descriocion,id_modulo',
         ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
           ->select('event_horas_extra.*', 'uf.nombre as unidad_funcional');
 
@@ -263,7 +265,7 @@ class EventSolicitudService
     }
 
     /**
-     * Previsualiza el flujo parametrizado para la UF del empleado (UF individual o grupo WF).
+     * Previsualiza el flujo parametrizado para la UF donde se realizará el evento.
      */
     public function previewFlujo(array $data): ?array
     {
@@ -314,7 +316,7 @@ class EventSolicitudService
     }
 
     /**
-     * Valida que la UF del empleado tenga flujo y responsables parametrizados (UF o grupo WF).
+     * Valida que la UF del evento tenga flujo y responsables parametrizados (UF o grupo WF).
      */
     public function validarParametrizacionEventos(array $contexto): array
     {
@@ -448,9 +450,11 @@ class EventSolicitudService
             'empleado:id,nombre,numero_identificacion',
             'novedad:id,codigo,descripcion',
             'empleadoCubre:id,nombre',
+            'motivoRechazo:id,codigo,descriocion,id_modulo',
         ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
           ->select('event_horas_extra.*', 'uf.nombre as unidad_funcional')
-          ->whereIn('event_horas_extra.id', $recordIds);
+          ->whereIn('event_horas_extra.id', $recordIds)
+          ->where('event_horas_extra.estado', '!=', EventoEstadoMapper::ANULADO);
 
         if (!empty($filters['search'])) {
             $term = $filters['search'];
@@ -473,12 +477,90 @@ class EventSolicitudService
     }
 
     /**
+     * Lista los eventos que el usuario autenticado ya gestionó
+     * (aprobó o rechazó en cualquier paso), combinados en un solo listado.
+     */
+    public function listarGestionados(int $userId, array $filters = [])
+    {
+        $aprobaciones = \App\Models\Workflow\WfAprobacion::query()
+            ->with(['paso:id,nombre_paso'])
+            ->where('id_user', $userId)
+            ->whereIn('accion', [
+                \App\Models\Workflow\WfAprobacion::ACCION_APROBADO,
+                \App\Models\Workflow\WfAprobacion::ACCION_RECHAZADO,
+            ])
+            ->whereHas('instancia', fn ($q) => $q->whereHas('modulo', fn ($m) => $m->where('codigo', 'eventos')))
+            ->orderBy('fecha_accion', 'desc')
+            ->get();
+
+        if ($aprobaciones->isEmpty()) {
+            return EventHoraExtra::whereRaw('1 = 0')->paginate($filters['per_page'] ?? 50);
+        }
+
+        $instanciaIds = $aprobaciones->pluck('id_instancia')->unique()->all();
+        $recordPorInstancia = WfInstancia::whereIn('id', $instanciaIds)
+            ->pluck('modulo_record_id', 'id');
+
+        // Acción más reciente del usuario por cada evento.
+        $accionPorRecord = [];
+        foreach ($aprobaciones as $ap) {
+            $recordId = $recordPorInstancia[$ap->id_instancia] ?? null;
+            if (!$recordId || isset($accionPorRecord[$recordId])) {
+                continue;
+            }
+            $accionPorRecord[$recordId] = [
+                'accion'     => $ap->accion,
+                'paso'       => optional($ap->paso)->nombre_paso,
+                'fecha'      => $ap->fecha_accion,
+                'comentario' => $ap->comentario,
+            ];
+        }
+
+        $recordIds = array_keys($accionPorRecord);
+
+        $query = EventHoraExtra::with([
+            'empleado:id,nombre,numero_identificacion',
+            'novedad:id,codigo,descripcion',
+            'empleadoCubre:id,nombre',
+            'motivoRechazo:id,codigo,descriocion,id_modulo',
+        ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
+          ->select('event_horas_extra.*', 'uf.nombre as unidad_funcional')
+          ->whereIn('event_horas_extra.id', $recordIds);
+
+        if (!empty($filters['search'])) {
+            $term = $filters['search'];
+            $query->where(function ($q) use ($term) {
+                $q->whereHas('empleado', fn ($sub) => $sub->where('nombre', 'like', "%{$term}%"))
+                  ->orWhere('event_horas_extra.consecutivo', 'like', "%{$term}%");
+            });
+        }
+
+        $paginado = $query->orderBy('event_horas_extra.fecha_solicitud', 'desc')
+            ->paginate($filters['per_page'] ?? 50);
+
+        $paginado->getCollection()->transform(function ($evento) use ($accionPorRecord) {
+            $info = $accionPorRecord[$evento->id] ?? null;
+            $evento->mi_accion        = $info['accion'] ?? null;
+            $evento->mi_paso          = $info['paso'] ?? null;
+            $evento->mi_fecha_accion  = $info['fecha'] ?? null;
+            $evento->mi_comentario    = $info['comentario'] ?? null;
+            return $evento;
+        });
+
+        return $paginado;
+    }
+
+    /**
      * Aprueba el paso actual del evento y avanza el flujo.
      */
     public function aprobar(int $id, int $userId, ?string $comentario = null): EventHoraExtra
     {
         return DB::transaction(function () use ($id, $userId, $comentario) {
             $solicitud = EventHoraExtra::findOrFail($id);
+
+            if ((int) $solicitud->estado === EventoEstadoMapper::ANULADO) {
+                throw new \RuntimeException('El evento fue anulado y no puede aprobarse.');
+            }
 
             if (!$solicitud->wf_instancia_id) {
                 throw new \RuntimeException('El evento no tiene un flujo de aprobación asociado.');
@@ -501,25 +583,56 @@ class EventSolicitudService
     }
 
     /**
+     * Motivos de rechazo parametrizados para el módulo de eventos.
+     */
+    public function listarMotivosRechazo(): \Illuminate\Support\Collection
+    {
+        return ConfigMotRechazo::query()
+            ->where('id_modulo', $this->resolverModuloEventosId())
+            ->orderBy('codigo')
+            ->get(['id', 'codigo', 'descriocion', 'id_modulo']);
+    }
+
+    /**
      * Rechaza el evento y finaliza el flujo.
      */
-    public function rechazar(int $id, int $userId, string $motivo): EventHoraExtra
+    public function rechazar(int $id, int $userId, int $idMotivoRechazo, ?string $comentario = null): EventHoraExtra
     {
-        return DB::transaction(function () use ($id, $userId, $motivo) {
+        $motivoCatalogo = ConfigMotRechazo::query()
+            ->where('id', $idMotivoRechazo)
+            ->where('id_modulo', $this->resolverModuloEventosId())
+            ->first();
+
+        if (!$motivoCatalogo) {
+            throw new \RuntimeException('El motivo de rechazo seleccionado no es válido para este módulo.');
+        }
+
+        $motivoFlujo = trim($motivoCatalogo->codigo . ' - ' . $motivoCatalogo->descriocion);
+        $comentarioAdicional = trim((string)($comentario ?? ''));
+        if ($comentarioAdicional !== '') {
+            $motivoFlujo .= '. ' . $comentarioAdicional;
+        }
+
+        return DB::transaction(function () use ($id, $userId, $idMotivoRechazo, $motivoFlujo, $comentarioAdicional) {
             $solicitud = EventHoraExtra::findOrFail($id);
+
+            if ((int) $solicitud->estado === EventoEstadoMapper::ANULADO) {
+                throw new \RuntimeException('El evento fue anulado y no puede rechazarse.');
+            }
 
             if (!$solicitud->wf_instancia_id) {
                 throw new \RuntimeException('El evento no tiene un flujo de aprobación asociado.');
             }
 
-            $instancia = $this->workflowExecutor->rechazar($solicitud->wf_instancia_id, $userId, $motivo);
+            $instancia = $this->workflowExecutor->rechazar($solicitud->wf_instancia_id, $userId, $motivoFlujo);
 
             $solicitud->update([
-                'estado'          => EventoEstadoMapper::desdeInstancia($instancia),
-                'coment_aprobador' => $motivo,
+                'estado'             => EventoEstadoMapper::desdeInstancia($instancia),
+                'id_motivo_rechazo'  => $idMotivoRechazo,
+                'coment_aprobador'   => $comentarioAdicional !== '' ? $comentarioAdicional : null,
             ]);
 
-            return $solicitud->fresh();
+            return $solicitud->fresh(['motivoRechazo']);
         });
     }
 
@@ -544,7 +657,7 @@ class EventSolicitudService
     {
         $solicitud = EventHoraExtra::find($id);
 
-        if (!$solicitud || !$solicitud->wf_instancia_id) {
+        if (!$solicitud || (int) $solicitud->estado === EventoEstadoMapper::ANULADO || !$solicitud->wf_instancia_id) {
             return false;
         }
 
@@ -557,21 +670,38 @@ class EventSolicitudService
         return $this->workflowNotifier->esUsuarioAutorizado($userId, $instancia);
     }
 
-    public function actualizar(int $id, array $data): EventHoraExtra
+    public function actualizar(int $id, array $data, ?int $userId = null): EventHoraExtra
     {
-        $solicitud = EventHoraExtra::findOrFail($id);
-        $solicitud->update([
-            'id_user_nov'         => $data['empleado_id']       ?? $solicitud->id_user_nov,
-            'id_user_aprobador'   => $data['aprobador_id']      ?? $solicitud->id_user_aprobador,
-            'id_unidad_funcional' => $this->resolveUnidadFuncionalId($data, $solicitud->id_unidad_funcional),
-            'id_motivo_evento'    => $data['novedad_id']        ?? $solicitud->id_motivo_evento,
-            'id_user_cubre'       => $data['empleado_cubre_id'] ?? $solicitud->id_user_cubre,
-            'fecha_nov_ini'       => $data['fecha_inicial']     ?? $solicitud->fecha_nov_ini,
-            'fecha_nov_fin'       => $data['fecha_final']       ?? $solicitud->fecha_nov_fin,
-            'coment_solicitante'  => $data['descripcion']       ?? $solicitud->coment_solicitante,
-            'estado'              => array_key_exists('estado', $data) ? (int)$data['estado'] : $solicitud->estado,
-        ]);
-        return $solicitud->fresh();
+        return DB::transaction(function () use ($id, $data, $userId) {
+            $solicitud = EventHoraExtra::findOrFail($id);
+            $anular = array_key_exists('estado', $data)
+                && (int) $data['estado'] === EventoEstadoMapper::ANULADO;
+
+            $solicitud->update([
+                'id_user_nov'         => $data['empleado_id']       ?? $solicitud->id_user_nov,
+                'id_user_aprobador'   => $data['aprobador_id']      ?? $solicitud->id_user_aprobador,
+                'id_unidad_funcional' => $this->resolveUnidadFuncionalId($data, $solicitud->id_unidad_funcional),
+                'id_motivo_evento'    => $data['novedad_id']        ?? $solicitud->id_motivo_evento,
+                'id_user_cubre'       => $data['empleado_cubre_id'] ?? $solicitud->id_user_cubre,
+                'fecha_nov_ini'       => $data['fecha_inicial']     ?? $solicitud->fecha_nov_ini,
+                'fecha_nov_fin'       => $data['fecha_final']       ?? $solicitud->fecha_nov_fin,
+                'coment_solicitante'  => $data['descripcion']       ?? $solicitud->coment_solicitante,
+                'estado'              => array_key_exists('estado', $data) ? (int) $data['estado'] : $solicitud->estado,
+            ]);
+
+            if ($anular && $solicitud->wf_instancia_id && $userId) {
+                $instancia = WfInstancia::find($solicitud->wf_instancia_id);
+                if ($instancia && $instancia->estaEnProgreso()) {
+                    $this->workflowExecutor->cancelar(
+                        $solicitud->wf_instancia_id,
+                        $userId,
+                        'Solicitud anulada por el solicitante'
+                    );
+                }
+            }
+
+            return $solicitud->fresh();
+        });
     }
 
     public function eliminar(int $id): void
@@ -783,8 +913,7 @@ class EventSolicitudService
 
     /**
      * Contexto para resolver flujo e intervinientes.
-     * El flujo aplica según la UF a la que pertenece el empleado;
-     * la UF del formulario (evento) se conserva aparte para registro.
+     * El flujo aplica según la UF seleccionada en el formulario, que es donde se realizará el evento.
      */
     private function construirContextoEvento(array $data, ?int $recordId = null): array
     {
@@ -829,10 +958,18 @@ class EventSolicitudService
     }
 
     /**
-     * UF del empleado (config_unidades_fun_usuarios) usada para el flujo de aprobación.
+     * UF usada para el flujo de aprobación.
+     *
+     * La UF seleccionada en el formulario representa el lugar donde se realizará el evento;
+     * solo se usa la UF del empleado como respaldo para contextos legacy sin ese dato.
      */
     private function resolverUnidadFuncionalFlujo(array $data, ?int $empresaId = null): ?int
     {
+        $ufEvento = $this->resolveUnidadFuncionalId($data);
+        if ($ufEvento) {
+            return $ufEvento;
+        }
+
         if (!empty($data['empleado_id'])) {
             $ufEmpleado = $this->resolverUnidadFuncionalEmpleado((int)$data['empleado_id'], $empresaId);
             if ($ufEmpleado) {
@@ -840,7 +977,7 @@ class EventSolicitudService
             }
         }
 
-        return $this->resolveUnidadFuncionalId($data);
+        return null;
     }
 
     private function resolverUnidadFuncionalEmpleado(int $empleadoId, ?int $empresaId = null): ?int

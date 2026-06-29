@@ -14,6 +14,7 @@ use App\Http\Controllers\TalentoHumano\WfGrupoUfController;
 Route::prefix('solicitudes')->group(function () {
     Route::get('/',        [EventSolicitudController::class, 'index']);
     Route::get('/pendientes', [EventSolicitudController::class, 'pendientes']);
+    Route::get('/gestionados', [EventSolicitudController::class, 'gestionados']);
     Route::post('/',       [EventSolicitudController::class, 'store']);
 
     // Acciones de flujo
@@ -29,6 +30,7 @@ Route::get('/unidades-funcionales', [EventSolicitudController::class, 'unidadesF
 Route::get('/unidades-funcionales/responsable', [EventSolicitudController::class, 'unidadesFuncionalesResponsable']);
 Route::get('/empleados/mi-unidad', [EventSolicitudController::class, 'empleadosMiUnidad']);
 Route::get('/flujo-preview', [EventSolicitudController::class, 'flujoPreview']);
+Route::get('/motivos-rechazo', [EventSolicitudController::class, 'motivosRechazo']);
 Route::get('/flujos/catalogo', [EventSolicitudController::class, 'catalogoFlujos']);
 Route::get('/flujos/configuracion-unidad', [EventSolicitudController::class, 'configuracionFlujoUnidad']);
 Route::post('/flujos/configuracion-unidad', [EventSolicitudController::class, 'guardarConfiguracionFlujoUnidad']);
