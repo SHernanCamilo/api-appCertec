@@ -53,18 +53,30 @@ class PlantillaController extends Controller
     public function store(Request $request): JsonResponse
     {
         $request->validate([
-            'codigo'          => 'required|string|max:20|unique:humtal_ct_plantillas,codigo',
+            'codigo'          => 'required|string|max:20',
             'nombre'          => 'required|string|max:100',
             'hora_inicio'     => 'required|date_format:H:i',
             'hora_fin'        => 'required|date_format:H:i',
             'hora_inicio_2'   => 'nullable|date_format:H:i|required_with:hora_fin_2',
             'hora_fin_2'      => 'nullable|date_format:H:i|required_with:hora_inicio_2|after:hora_inicio_2',
-            'duracion_horas'  => 'required|numeric|min:0.5|max:24',
+            'duracion_horas'  => 'nullable|numeric|min:0.5|max:24',
             'es_nocturno'     => 'boolean',
             'color_hex'       => 'nullable|string|regex:/^#[0-9A-Fa-f]{6}$/',
             'id_empresa'      => 'nullable|integer|exists:ent_empresas,id',
             'estado'          => 'boolean',
         ]);
+
+        // Validar unicidad de codigo por empresa
+        $exists = CtPlantilla::where('codigo', $request->codigo)
+            ->where('id_empresa', $request->id_empresa)
+            ->exists();
+
+        if ($exists) {
+            return response()->json([
+                'success' => false,
+                'message' => 'El código ya existe para esta empresa.',
+            ], 422);
+        }
 
         try {
             // Validar que el primer rango esté antes del segundo si hay jornada partida
@@ -79,9 +91,9 @@ class PlantillaController extends Controller
 
             $plantilla = CtPlantilla::create($request->all());
 
-            // Recalcular duracion_horas automáticamente si no se envió o está incorrecta
+            // Calcular duracion_horas automáticamente
             $duracionCalculada = $plantilla->calcularDuracionTotal();
-            if (abs($plantilla->duracion_horas - $duracionCalculada) > 0.01) {
+            if (!$plantilla->duracion_horas || abs($plantilla->duracion_horas - $duracionCalculada) > 0.01) {
                 $plantilla->update(['duracion_horas' => $duracionCalculada]);
             }
 
@@ -126,7 +138,7 @@ class PlantillaController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $request->validate([
-            'codigo'         => "string|max:20|unique:humtal_ct_plantillas,codigo,{$id}",
+            'codigo'         => 'string|max:20',
             'nombre'         => 'string|max:100',
             'hora_inicio'    => 'date_format:H:i',
             'hora_fin'       => 'date_format:H:i',
@@ -138,6 +150,24 @@ class PlantillaController extends Controller
             'id_empresa'     => 'nullable|integer|exists:ent_empresas,id',
             'estado'         => 'boolean',
         ]);
+
+        // Validar unicidad de codigo por empresa (excluyendo el registro actual)
+        if ($request->filled('codigo')) {
+            $plantillaActual = CtPlantilla::findOrFail($id);
+            $idEmpresa = $request->id_empresa ?? $plantillaActual->id_empresa;
+
+            $exists = CtPlantilla::where('codigo', $request->codigo)
+                ->where('id_empresa', $idEmpresa)
+                ->where('id', '!=', $id)
+                ->exists();
+
+            if ($exists) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El código ya existe para esta empresa.',
+                ], 422);
+            }
+        }
 
         try {
             $plantilla = CtPlantilla::findOrFail($id);

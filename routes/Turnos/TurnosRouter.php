@@ -9,6 +9,7 @@ use App\Http\Controllers\Turnos\NovedadController;
 use App\Http\Controllers\Turnos\UnidadFuncionalController;
 use App\Http\Controllers\Turnos\FestivoController;
 use App\Http\Controllers\Turnos\CalculoHorasController;
+use App\Http\Controllers\Turnos\TurnosTerceroController;
 use App\Http\Controllers\CuadroTurnoPermisoController;
 
 /**
@@ -42,6 +43,17 @@ Route::middleware(['auth:api'])->group(function () {
     Route::get('unidades-funcionales/del-usuario', [UnidadFuncionalController::class, 'delUsuario']);
     Route::get('unidades-funcionales/{id}/empleados', [UnidadFuncionalController::class, 'empleados']);
     Route::apiResource('unidades-funcionales', UnidadFuncionalController::class);
+
+    // =========================================================================
+    // NAVEGACIÓN PARA SUPER_ADMIN: EMPRESA → SUCURSAL → SEDE → UNIDAD
+    // =========================================================================
+    Route::get('empresas/{empresaId}/sucursales', [UnidadFuncionalController::class, 'sucursalesPorEmpresa']);
+    Route::get('sucursales/{sucursalId}/sedes', [UnidadFuncionalController::class, 'sedesPorSucursal']);
+    Route::get('sucursales/{sucursalId}/unidades-terceros', [UnidadFuncionalController::class, 'unidadesTercerosPorSucursal']);
+    Route::get('sedes/{sedeId}/unidades-terceros', [UnidadFuncionalController::class, 'unidadesTercerosPorSede']);
+    Route::get('sedes/{sedeId}/empleados-terceros', [UnidadFuncionalController::class, 'empleadosTercerosPorSede']);
+    Route::get('empresas/{empresaId}/sedes', [UnidadFuncionalController::class, 'sedesPorEmpresa']);
+    Route::get('sedes/{empresaId}/{sedeId}/unidades', [UnidadFuncionalController::class, 'unidadesPorSede']);
 
     // =========================================================================
     // PLANTILLAS DE TURNO
@@ -106,6 +118,10 @@ Route::middleware(['auth:api'])->group(function () {
     Route::post('festivos', [FestivoController::class, 'store']);
     Route::put('festivos/{id}', [FestivoController::class, 'update']);
     Route::delete('festivos/{id}', [FestivoController::class, 'destroy']);
+    
+    // Nuevos endpoints para API externa
+    Route::post('festivos/sincronizar', [FestivoController::class, 'sincronizar']);
+    Route::get('festivos/test-conexion', [FestivoController::class, 'testConexion']);
 
     // =========================================================================
     // CÁLCULO DE HORAS (4 categorías: normales, nocturnas, festivas, festivas_nocturnas)
@@ -121,4 +137,14 @@ Route::middleware(['auth:api'])->group(function () {
     // Aprobación / rechazo
     Route::post('novedades/{id}/aprobar', [NovedadController::class, 'aprobar']);
     Route::post('novedades/{id}/rechazar', [NovedadController::class, 'rechazar']);
+
+    // =========================================================================
+    // TERCEROS: Mapeo + Asignación a Unidades Funcionales (CAPA ADICIONAL)
+    // =========================================================================
+    Route::get('unidades/{unidadId}/todos-empleados', [TurnosTerceroController::class, 'getEmpleadosPorUnidad']);
+    Route::post('unidades/{unidadId}/terceros', [TurnosTerceroController::class, 'asignarTercero']);
+    Route::delete('unidades/{unidadId}/terceros/{terceroId}', [TurnosTerceroController::class, 'desasignarTercero']);
+    Route::get('terceros/por-empresa/{empresaId}', [TurnosTerceroController::class, 'getTercerosPorEmpresa']);
+    Route::get('mapeo-unidades/pendientes/{empresaId}', [TurnosTerceroController::class, 'getUnidadesSinMapeo']);
+    Route::post('mapeo-unidades', [TurnosTerceroController::class, 'guardarMapeoUnidad']);
 });

@@ -10,11 +10,17 @@ use App\Models\Turnos\CtAsignacion;
 use App\Models\Turnos\CtPlantilla;
 use App\Models\Turnos\CtNovedad;
 use App\Models\Turnos\CtNovedadTipo;
+use App\Models\Turnos\CtFestivo;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 class CuadroTurnoService
 {
+    public function __construct()
+    {
+        // Sin inyecciones - el servicio solo lee de BD local
+    }
+
     // =========================================================================
     // GRUPOS
     // =========================================================================
@@ -576,11 +582,18 @@ class CuadroTurnoService
             $fechaInicio = Carbon::createFromDate($anio, $mes, 1)->startOfMonth()->toDateString();
             $fechaFin    = Carbon::createFromDate($anio, $mes, 1)->endOfMonth()->toDateString();
 
-            // Obtener datos del empleado desde users
-            $empleado = \DB::table('users')
+            // Obtener datos del empleado (primero en terceros, luego en users como fallback)
+            $empleado = \DB::table('config_person_tercero')
                 ->where('id', $idEmpleado)
-                ->select('id', 'name as nombre', 'email')
+                ->select('id', 'nombre', 'email')
                 ->first();
+
+            if (!$empleado) {
+                $empleado = \DB::table('users')
+                    ->where('id', $idEmpleado)
+                    ->select('id', 'name as nombre', 'email')
+                    ->first();
+            }
 
             $turnos = $this->obtenerTurnosEmpleado($idEmpleado, $anio, $mes);
             $festivos = $this->obtenerFestivosDelAnio($anio);
@@ -706,6 +719,7 @@ public function eliminarCuadroEmpleado(int $idEmpleado, int $anio, int $mes): ar
 
     /**
      * Obtener festivos de un año (público)
+     * Usa API externa con fallback a BD local
      */
     public function obtenerFestivosDelAnio(int $anio): array
     {
@@ -714,19 +728,27 @@ public function eliminarCuadroEmpleado(int $idEmpleado, int $anio, int $mes): ar
 
     /**
      * Obtener festivos de un año
+     * REFACTORIZADO: Solo lee de BD local (la API se sincroniza vía comando programado)
      */
     private function obtenerFestivos(int $anio): array
     {
         $inicioAnio = Carbon::createFromDate($anio, 1, 1)->startOfYear()->toDateString();
         $finAnio    = Carbon::createFromDate($anio, 12, 31)->endOfYear()->toDateString();
-        
-        $festivos = \App\Models\Turnos\CtFestivo::whereBetween('fecha', [$inicioAnio, $finAnio])->get();
-        return $festivos->map(function ($f) {
-            return [
-                'fecha'  => $f->fecha,
-                'nombre' => $f->nombre,
-            ];
-        })->toArray();
+
+        $festivos = CtFestivo::whereBetween('fecha', [$inicioAnio, $finAnio])
+            ->where('estado', true)
+            ->orderBy('fecha')
+            ->get();
+
+        if ($festivos->isEmpty()) {
+            \Log::warning("⚠️ No hay festivos cacheados para el año {$anio}. 
+                Ejecuta: php artisan festivos:sincronizar {$anio}");
+        }
+
+        return $festivos->map(fn($f) => [
+            'fecha'  => $f->fecha->format('Y-m-d'),
+            'nombre' => $f->nombre,
+        ])->toArray();
     }
 
     /**

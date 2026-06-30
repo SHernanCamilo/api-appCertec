@@ -6,14 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use App\Models\Sede;
 use App\Models\Empresa;
+use App\Models\Sucursal;
 
-/**
- * Unidad Funcional (departamento/área) de la organización.
- * Tabla: config_unidades_funcionales
- *
- * Estructura:
- *   - id, codigo, nombre, id_empresa (FK ent_empresas), id_sede (FK config_ubi_sede), estado
- */
 class ConfigUnidadFuncional extends Model
 {
     protected $table = 'config_unidades_funcionales';
@@ -22,6 +16,7 @@ class ConfigUnidadFuncional extends Model
         'codigo',
         'nombre',
         'id_empresa',
+        'id_sucursal',
         'id_sede',
         'estado',
     ];
@@ -33,6 +28,11 @@ class ConfigUnidadFuncional extends Model
     public function empresa(): BelongsTo
     {
         return $this->belongsTo(Empresa::class, 'id_empresa');
+    }
+
+    public function sucursal(): BelongsTo
+    {
+        return $this->belongsTo(Sucursal::class, 'id_sucursal');
     }
 
     public function sede(): BelongsTo

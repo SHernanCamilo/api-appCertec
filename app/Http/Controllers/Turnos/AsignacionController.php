@@ -44,7 +44,7 @@ class AsignacionController extends Controller
     {
         $request->validate([
             'id_cuadro' => 'required|integer|exists:humtal_ct_cuadro,id',
-            'id_empleado' => 'required|integer|exists:users,id',
+            'id_empleado' => 'required|integer|exists:config_person_tercero,id',
             'fecha' => 'required|date',
             'id_plantilla' => 'nullable|integer|exists:humtal_ct_plantillas,id',
             'es_descanso' => 'boolean',
@@ -53,8 +53,28 @@ class AsignacionController extends Controller
             'hora_fin_override' => 'nullable|date_format:H:i',
             'observacion' => 'nullable|string|max:255',
         ]);
+
+        // SEGURIDAD: Validar que el usuario tiene acceso al cuadro
+        $cuadro = CtCuadro::findOrFail($request->id_cuadro);
+        if ($cuadro->id_unidad_funcional) {
+            $accessControl = new \App\Services\Turnos\AccessControlService(auth()->user());
+            if (!$accessControl->tieneAccesoUnidad($cuadro->id_unidad_funcional)) {
+                return response()->json(['success' => false, 'message' => 'No tienes acceso a esta unidad.'], 403);
+            }
+        }
+
         try {
-            $asignacion = $this->service->asignarTurno($request->all());
+            $data = $request->all();
+            $data['creado_por'] = auth()->id();
+            
+            \Log::info('📝 ASIGNACIÓN CREADA', [
+                'user_id' => auth()->id(),
+                'user_name' => auth()->user()->name ?? 'N/A',
+                'id_empleado' => $data['id_empleado'] ?? null,
+                'fecha' => $data['fecha'] ?? null,
+            ]);
+
+            $asignacion = $this->service->asignarTurno($data);
             return response()->json([
                 'success' => true,
                 'message' => 'Asignación creada exitosamente.',
@@ -108,7 +128,17 @@ class AsignacionController extends Controller
                     ], 422);
                 }
             }
-            $asignacion->update($request->all());
+            $data = $request->all();
+            $data['actualizado_por'] = auth()->id();
+
+            \Log::info('✏️ ASIGNACIÓN ACTUALIZADA', [
+                'user_id' => auth()->id(),
+                'user_name' => auth()->user()->name ?? 'N/A',
+                'id_asignacion' => $id,
+                'cambios' => $data,
+            ]);
+
+            $asignacion->update($data);
             return response()->json([
                 'success' => true,
                 'message' => 'Asignación actualizada.',
@@ -130,12 +160,29 @@ class AsignacionController extends Controller
         try {
             $asignacion = CtAsignacion::findOrFail($id);
             $cuadro = CtCuadro::findOrFail($asignacion->id_cuadro);
+
+            // SEGURIDAD: Validar acceso del usuario a la unidad
+            if ($cuadro->id_unidad_funcional) {
+                $accessControl = new \App\Services\Turnos\AccessControlService(auth()->user());
+                if (!$accessControl->tieneAccesoUnidad($cuadro->id_unidad_funcional)) {
+                    return response()->json(['success' => false, 'message' => 'No tienes acceso a esta unidad.'], 403);
+                }
+            }
+
             if (!$cuadro->esBorrador()) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Solo se pueden eliminar asignaciones en cuadros en estado borrador.'
                 ], 422);
             }
+            \Log::info('🗑️ ASIGNACIÓN ELIMINADA', [
+                'user_id' => auth()->id(),
+                'user_name' => auth()->user()->name ?? 'N/A',
+                'id_asignacion' => $id,
+                'id_empleado' => $asignacion->id_empleado,
+                'fecha' => $asignacion->fecha,
+            ]);
+
             $asignacion->delete();
             return response()->json(['success' => true, 'message' => 'Asignación eliminada.']);
         } catch (\Exception $e) {
@@ -200,6 +247,11 @@ class AsignacionController extends Controller
      */
     public function ensureCuadroUnidad(Request $request): JsonResponse
     {
+        // Si viene id_empleado, crear cuadro por empleado directamente
+        if ($request->filled('id_empleado')) {
+            return $this->ensureCuadroEmpleado($request);
+        }
+
         $request->validate([
             'id_unidad' => 'required|integer|exists:config_unidades_funcionales,id',
             'anio' => 'required|integer|min:2020|max:2100',
@@ -211,73 +263,33 @@ class AsignacionController extends Controller
             $anio = (int) $request->input('anio');
             $mes = (int) $request->input('mes');
 
-            // ───────────────────────────────────────────────────────────
-            // PASO 1: Obtener información de la unidad funcional
-            // ───────────────────────────────────────────────────────────
-            $unidad = \App\Models\Config\ConfigUnidadFuncional::findOrFail($idUnidad);
-
-            // ───────────────────────────────────────────────────────────
-            // PASO 2: Buscar o crear el grupo para esta unidad
-            // ───────────────────────────────────────────────────────────
-            $grupo = \App\Models\Turnos\CtGrupo::where('id_unidad_funcional', $idUnidad)
-                ->where('estado', true)
-                ->first();
-
-            if (!$grupo) {
-                // Si no existe grupo activo para esta unidad, crear uno
-                $usuario = auth()->user();
-                $grupo = \App\Models\Turnos\CtGrupo::create([
-                    'codigo' => $unidad->codigo . '_' . time(),
-                    'nombre' => $unidad->nombre,
-                    'descripcion' => 'Grupo generado automáticamente para cuadro de turnos',
-                    'id_empresa' => $unidad->id_empresa,
-                    'id_sede' => $unidad->id_sede,
-                    'id_unidad_funcional' => $idUnidad,
-                    'estado' => true,
-                ]);
-
-                \Log::info('Grupo creado automáticamente', [
-                    'id_grupo' => $grupo->id,
-                    'id_unidad' => $idUnidad,
-                    'nombre' => $grupo->nombre
-                ]);
-            }
-
-            // ───────────────────────────────────────────────────────────
-            // PASO 3: Buscar o crear el cuadro para este grupo/mes/año
-            // ───────────────────────────────────────────────────────────
-            $cuadro = CtCuadro::where('id_grupo', $grupo->id)
+            // Buscar cuadro existente por unidad funcional + mes + año
+            $cuadro = CtCuadro::where('id_unidad_funcional', $idUnidad)
                 ->where('anio', $anio)
                 ->where('mes', $mes)
                 ->first();
 
             if (!$cuadro) {
-                $usuario = auth()->user();
                 $cuadro = CtCuadro::create([
-                    'id_grupo' => $grupo->id,
+                    'id_unidad_funcional' => $idUnidad,
                     'anio' => $anio,
                     'mes' => $mes,
                     'estado' => 'borrador',
-                    'creado_por' => $usuario->id ?? 0
+                    'creado_por' => auth()->id(),
                 ]);
 
-                \Log::info('Cuadro de turnos creado', [
+                \Log::info('Cuadro de turnos creado (por unidad funcional)', [
                     'id_cuadro' => $cuadro->id,
-                    'id_grupo' => $grupo->id,
                     'id_unidad' => $idUnidad,
                     'anio' => $anio,
                     'mes' => $mes
                 ]);
             }
 
-            // ───────────────────────────────────────────────────────────
-            // PASO 4: Retornar respuesta con todos los datos
-            // ───────────────────────────────────────────────────────────
             return response()->json([
                 'success' => true,
                 'data' => [
                     'id_cuadro' => $cuadro->id,
-                    'id_grupo' => $grupo->id,
                     'id_unidad' => $idUnidad,
                     'anio' => $anio,
                     'mes' => $mes,
@@ -293,6 +305,91 @@ class AsignacionController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al asegurar cuadro: ' . $e->getMessage()
+            ], 422);
+        }
+    }
+
+    /**
+     * Asegura que existe un cuadro para un empleado (busca/crea la unidad funcional)
+     */
+    private function ensureCuadroEmpleado(Request $request): JsonResponse
+    {
+        $request->validate([
+            'id_empleado' => 'required|integer',
+            'anio' => 'required|integer|min:2020|max:2100',
+            'mes' => 'required|integer|min:1|max:12'
+        ]);
+
+        try {
+            $idEmpleado = (int) $request->input('id_empleado');
+            $anio = (int) $request->input('anio');
+            $mes = (int) $request->input('mes');
+
+            // Obtener datos del tercero para saber su unidad y empresa
+            $tercero = \DB::table('config_person_tercero')->find($idEmpleado);
+            
+            if (!$tercero) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Empleado no encontrado en terceros'
+                ], 404);
+            }
+
+            $nombreUnidad = $tercero->unidad;
+            $idEmpresa = $tercero->id_empresa;
+
+            if (!$nombreUnidad || !$idEmpresa) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El empleado no tiene unidad o empresa asignada'
+                ], 422);
+            }
+
+            // Buscar o crear la unidad funcional
+            $unidad = \App\Models\Turnos\ConfigUnidadFuncional::firstOrCreate(
+                [
+                    'nombre' => $nombreUnidad,
+                    'id_empresa' => $idEmpresa,
+                ],
+                [
+                    'codigo' => strtoupper(str_replace(' ', '-', substr($nombreUnidad, 0, 20))) . '-' . $idEmpresa,
+                    'estado' => true,
+                ]
+            );
+
+            // Buscar o crear cuadro por unidad funcional
+            $cuadro = CtCuadro::where('id_unidad_funcional', $unidad->id)
+                ->where('anio', $anio)
+                ->where('mes', $mes)
+                ->first();
+
+            if (!$cuadro) {
+                $cuadro = CtCuadro::create([
+                    'id_unidad_funcional' => $unidad->id,
+                    'anio' => $anio,
+                    'mes' => $mes,
+                    'estado' => 'borrador',
+                    'creado_por' => auth()->id(),
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id_cuadro' => $cuadro->id,
+                    'id_unidad_funcional' => $unidad->id,
+                    'anio' => $cuadro->anio,
+                    'mes' => $cuadro->mes,
+                    'estado' => $cuadro->estado,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Error en ensureCuadroEmpleado', [
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al asegurar cuadro del empleado: ' . $e->getMessage()
             ], 422);
         }
     }

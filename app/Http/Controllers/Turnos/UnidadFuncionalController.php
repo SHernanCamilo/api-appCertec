@@ -15,10 +15,14 @@ class UnidadFuncionalController extends Controller
     public function index(Request $request): JsonResponse
     {
         try {
-            $query = ConfigUnidadFuncional::with(['empresa', 'sede']);
+            $query = ConfigUnidadFuncional::with(['empresa', 'sucursal', 'sede']);
 
             if ($request->filled('id_empresa')) {
                 $query->porEmpresa((int) $request->id_empresa);
+            }
+
+            if ($request->filled('id_sucursal')) {
+                $query->where('id_sucursal', (int) $request->id_sucursal);
             }
 
             if ($request->filled('id_sede')) {
@@ -97,18 +101,23 @@ class UnidadFuncionalController extends Controller
                 ] : null,
             ]);
 
-            // Transformar para asegurar que empresa y sede se incluyen
+            // Transformar para asegurar que empresa, sucursal y sede se incluyen
             $unidadesFormateadas = $unidades->map(function($unidad) {
                 return [
                     'id' => $unidad->id,
                     'codigo' => $unidad->codigo,
                     'nombre' => $unidad->nombre,
                     'id_empresa' => $unidad->id_empresa,
+                    'id_sucursal' => $unidad->id_sucursal,
                     'id_sede' => $unidad->id_sede,
                     'estado' => $unidad->estado,
                     'empresa' => $unidad->empresa ? [
                         'id' => $unidad->empresa->id,
                         'nombre' => $unidad->empresa->nombre,
+                    ] : null,
+                    'sucursal' => $unidad->sucursal ? [
+                        'id' => $unidad->sucursal->id,
+                        'nombre' => $unidad->sucursal->nombre,
                     ] : null,
                     'sede' => $unidad->sede ? [
                         'id' => $unidad->sede->id,
@@ -238,14 +247,14 @@ class UnidadFuncionalController extends Controller
                 ], 403);
             }
 
-            // Construir query según el nivel de acceso
+            // Construir query: ahora id_user apunta a config_person_tercero
             $query = \DB::table('config_unidades_fun_usuarios as cfu')
-                ->join('users', 'cfu.id_user', '=', 'users.id')
+                ->join('config_person_tercero', 'cfu.id_user', '=', 'config_person_tercero.id')
                 ->where('cfu.id_unidad_funcional', $id)
                 ->select(
                     'cfu.id_user as id',
-                    'users.name as nombre',
-                    'users.email',
+                    'config_person_tercero.nombre',
+                    'config_person_tercero.email',
                     'cfu.id_unidad_funcional as id_unidad',
                     \DB::raw('CASE 
                         WHEN cfu.id_user IN (
@@ -269,7 +278,7 @@ class UnidadFuncionalController extends Controller
 
             $empleados = $query
                 ->orderBy('es_responsable', 'DESC')
-                ->orderBy('users.name', 'ASC')
+                ->orderBy('config_person_tercero.nombre', 'ASC')
                 ->get();
 
             return response()->json([
@@ -287,6 +296,275 @@ class UnidadFuncionalController extends Controller
                 'error' => $e->getMessage(),
             ]);
 
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener empleados: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/turnos/empresas/{id}/sucursales
+     */
+    public function sucursalesPorEmpresa(int $empresaId): JsonResponse
+    {
+        try {
+            $user = auth()->user();
+            $accessControl = new \App\Services\Turnos\AccessControlService($user);
+
+            if (!$accessControl->tieneAccesoEmpresa($empresaId)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No tienes acceso a esta empresa',
+                ], 403);
+            }
+
+            $sucursales = $accessControl->getSucursalesPorEmpresa($empresaId);
+
+            return response()->json([
+                'success' => true,
+                'data' => $sucursales,
+                'empresa_id' => $empresaId,
+                'total' => $sucursales->count(),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener sucursales: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/turnos/sucursales/{id}/sedes
+     */
+    public function sedesPorSucursal(int $sucursalId): JsonResponse
+    {
+        try {
+            $user = auth()->user();
+            $accessControl = new \App\Services\Turnos\AccessControlService($user);
+
+            $sedes = $accessControl->getSedesPorSucursal($sucursalId);
+
+            return response()->json([
+                'success' => true,
+                'data' => $sedes,
+                'sucursal_id' => $sucursalId,
+                'total' => $sedes->count(),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener sedes: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/turnos/sucursales/{sucursalId}/unidades-terceros?id_empresa=X
+     * 
+     * Cuando una sucursal NO tiene sedes, busca las unidades funcionales
+     * directamente usando los TAGs de esa sucursal en matzobs_agentes
+     */
+    public function unidadesTercerosPorSucursal(Request $request, int $sucursalId): JsonResponse
+    {
+        try {
+            $empresaId = (int) $request->query('id_empresa');
+            
+            if (!$empresaId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Se requiere el parámetro id_empresa',
+                ], 422);
+            }
+
+            // Obtener TODOS los tags de la sucursal (filtrando por empresa + sucursal)
+            $tags = \DB::table('matzobs_agentes')
+                ->where('matzobs_agentes.id_empresa', $empresaId)
+                ->where('matzobs_agentes.id_sucursal', $sucursalId)
+                ->whereNotNull('matzobs_agentes.tag')
+                ->select('matzobs_agentes.tag')
+                ->distinct()
+                ->pluck('tag')
+                ->toArray();
+
+            if (empty($tags)) {
+                return response()->json([
+                    'success' => true,
+                    'data' => [],
+                    'message' => 'No se encontraron tags para esta sucursal',
+                    'debug' => ['sucursal_id' => $sucursalId, 'empresa_id' => $empresaId],
+                ]);
+            }
+
+            // Buscar unidades en config_person_tercero que coincidan con los tags
+            $query = \DB::table('config_person_tercero')
+                ->where('id_empresa', $empresaId)
+                ->where('estado', true)
+                ->whereNotNull('unidad')
+                ->where('unidad', '!=', '');
+
+            $query->where(function($q) use ($tags) {
+                foreach ($tags as $tag) {
+                    $q->orWhere('unidad', 'LIKE', "%-{$tag}");
+                    $q->orWhere('unidad', 'LIKE', "%- {$tag}");
+                    $q->orWhere('unidad', 'LIKE', "% - {$tag}");
+                    $q->orWhere('unidad', 'LIKE', "{$tag}-%");
+                    $q->orWhere('unidad', 'LIKE', "{$tag} -%");
+                    $q->orWhere('unidad', 'LIKE', "{$tag} - %");
+                }
+            });
+
+            $unidades = $query->select('unidad')
+                ->distinct()
+                ->orderBy('unidad')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $unidades,
+                'sucursal_id' => $sucursalId,
+                'empresa_id' => $empresaId,
+                'tags' => $tags,
+                'total' => $unidades->count(),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener unidades por sucursal: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/turnos/sedes/{sedeId}/unidades-terceros?id_empresa=X
+     * 
+     * Obtiene las unidades funcionales DISTINCT del campo 'unidad' de config_person_tercero
+     * filtrando por el TAG de la sede
+     */
+    public function unidadesTercerosPorSede(Request $request, int $sedeId): JsonResponse
+    {
+        try {
+            $user = auth()->user();
+            $accessControl = new \App\Services\Turnos\AccessControlService($user);
+
+            $empresaId = (int) $request->query('id_empresa');
+            
+            if (!$empresaId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Se requiere el parámetro id_empresa',
+                ], 422);
+            }
+
+            // Obtener TODOS los tags de la sede (puede haber más de uno)
+            $tags = \DB::table('matzobs_agentes')
+                ->where('matzobs_agentes.id_sede', $sedeId)
+                ->whereNotNull('matzobs_agentes.tag')
+                ->select('matzobs_agentes.tag')
+                ->distinct()
+                ->pluck('tag')
+                ->toArray();
+
+            if (empty($tags)) {
+                return response()->json([
+                    'success' => true,
+                    'data' => [],
+                    'message' => 'No se encontraron tags para esta sede',
+                    'debug' => ['sede_id' => $sedeId],
+                ]);
+            }
+
+            // Buscar unidades que contengan CUALQUIERA de los tags (prefijo o sufijo)
+            $query = \DB::table('config_person_tercero')
+                ->where('id_empresa', $empresaId)
+                ->where('estado', true)
+                ->whereNotNull('unidad')
+                ->where('unidad', '!=', '');
+
+            $query->where(function($q) use ($tags) {
+                foreach ($tags as $tag) {
+                    // Buscar como sufijo: "ADMISION-NVA" o "ADMISION - NVA"
+                    $q->orWhere('unidad', 'LIKE', "%-{$tag}");
+                    $q->orWhere('unidad', 'LIKE', "%- {$tag}");
+                    $q->orWhere('unidad', 'LIKE', "% - {$tag}");
+                    // Buscar como prefijo: "CMI-GERENCIA" o "CMI - GERENCIA"
+                    $q->orWhere('unidad', 'LIKE', "{$tag}-%");
+                    $q->orWhere('unidad', 'LIKE', "{$tag} -%");
+                    $q->orWhere('unidad', 'LIKE', "{$tag} - %");
+                }
+            });
+
+            $unidades = $query->select('unidad')
+                ->distinct()
+                ->orderBy('unidad')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $unidades,
+                'sede_id' => $sedeId,
+                'total' => $unidades->count(),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener unidades: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/turnos/sedes/{sedeId}/empleados-terceros?id_empresa=X&unidad=Y
+     * 
+     * Obtiene empleados de config_person_tercero filtrando por el TAG de la sede
+     * Si se pasa 'unidad', filtra por esa unidad exacta
+     */
+    public function empleadosTercerosPorSede(Request $request, int $sedeId): JsonResponse
+    {
+        try {
+            $user = auth()->user();
+            $accessControl = new \App\Services\Turnos\AccessControlService($user);
+
+            $empresaId = (int) $request->query('id_empresa');
+            $unidad = $request->query('unidad');
+            
+            if (!$empresaId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Se requiere el parámetro id_empresa',
+                ], 422);
+            }
+
+            if (!$accessControl->tieneAccesoEmpresa($empresaId)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No tienes acceso a esta empresa',
+                ], 403);
+            }
+
+            // Si se pasa unidad exacta, filtrar por ella
+            if ($unidad) {
+                $empleados = \DB::table('config_person_tercero')
+                    ->where('id_empresa', $empresaId)
+                    ->where('estado', true)
+                    ->where('unidad', $unidad)
+                    ->select('id', 'nombre', 'email', 'unidad', 'numero_identificacion')
+                    ->orderBy('nombre')
+                    ->get();
+            } else {
+                $empleados = $accessControl->getEmpleadosTercerosPorSede($empresaId, $sedeId);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $empleados,
+                'sede_id' => $sedeId,
+                'empresa_id' => $empresaId,
+                'total' => $empleados->count(),
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Error en empleadosTercerosPorSede:', ['error' => $e->getMessage()]);
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener empleados: ' . $e->getMessage(),

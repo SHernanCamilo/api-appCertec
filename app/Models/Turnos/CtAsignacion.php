@@ -22,6 +22,8 @@ class CtAsignacion extends Model{
         'hora_inicio_override_2',
         'hora_fin_override_2',
         'observacion',
+        'creado_por',
+        'actualizado_por',
     ];
 
     protected $casts = [

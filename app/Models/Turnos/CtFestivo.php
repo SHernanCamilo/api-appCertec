@@ -13,6 +13,8 @@ class CtFestivo extends Model
         'fecha',
         'nombre',
         'descripcion',
+        'tipo',
+        'origen',
         'estado',
     ];
 

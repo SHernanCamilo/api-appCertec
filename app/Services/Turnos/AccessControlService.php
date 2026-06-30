@@ -5,6 +5,7 @@ namespace App\Services\Turnos;
 use App\Models\User;
 use App\Models\Turnos\ConfigUnidadFuncional;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Collection as SupportCollection;
 
 /**
  * Servicio de Control de Acceso para Turnos
@@ -134,7 +135,7 @@ class AccessControlService
      */
     private function getUnidadesSuperAdmin(): Collection
     {
-        return ConfigUnidadFuncional::with(['empresa', 'sede'])
+        return ConfigUnidadFuncional::with(['empresa', 'sucursal', 'sede'])
             ->where('estado', true)
             ->orderBy('nombre')
             ->get();
@@ -145,7 +146,7 @@ class AccessControlService
      */
     private function getUnidadesTransversal(): Collection
     {
-        return ConfigUnidadFuncional::with(['empresa', 'sede'])
+        return ConfigUnidadFuncional::with(['empresa', 'sucursal', 'sede'])
             ->where('estado', true)
             ->orderBy('nombre')
             ->get();
@@ -156,7 +157,7 @@ class AccessControlService
      */
     private function getUnidadesEmpresaAdmin(): Collection
     {
-        return ConfigUnidadFuncional::with(['empresa', 'sede'])
+        return ConfigUnidadFuncional::with(['empresa', 'sucursal', 'sede'])
             ->whereIn('id_empresa', $this->empresasAsignadas)
             ->where('estado', true)
             ->orderBy('nombre')
@@ -205,9 +206,89 @@ class AccessControlService
     }
 
     /**
+     * Obtiene sucursales de una empresa (basado en matzobs_agentes)
+     */
+    public function getSucursalesPorEmpresa(int $empresaId): SupportCollection
+    {
+        if (!$this->tieneAccesoEmpresa($empresaId)) {
+            return collect();
+        }
+
+        return collect(
+            \DB::table('matzobs_agentes')
+                ->where('matzobs_agentes.id_empresa', $empresaId)
+                ->whereNotNull('matzobs_agentes.id_sucursal')
+                ->join('config_ubi_sucursales', 'matzobs_agentes.id_sucursal', '=', 'config_ubi_sucursales.id')
+                ->select('config_ubi_sucursales.id', 'config_ubi_sucursales.nombre')
+                ->distinct()
+                ->orderBy('config_ubi_sucursales.nombre')
+                ->get()
+        );
+    }
+
+    /**
+     * Obtiene sedes de una sucursal (basado en matzobs_agentes, incluye tag)
+     */
+    public function getSedesPorSucursal(int $sucursalId): SupportCollection
+    {
+        return collect(
+            \DB::table('matzobs_agentes')
+                ->where('matzobs_agentes.id_sucursal', $sucursalId)
+                ->whereNotNull('matzobs_agentes.id_sede')
+                ->join('config_ubi_sede', 'matzobs_agentes.id_sede', '=', 'config_ubi_sede.id')
+                ->select('config_ubi_sede.id', 'config_ubi_sede.nombre', 'matzobs_agentes.tag')
+                ->distinct()
+                ->orderBy('config_ubi_sede.nombre')
+                ->get()
+        );
+    }
+
+    /**
+     * Obtiene empleados (terceros) por sede usando el TAG/nemotecnia
+     */
+    public function getEmpleadosTercerosPorSede(int $empresaId, int $sedeId): SupportCollection
+    {
+        // Obtener todos los tags de la sede desde matzobs_agentes
+        $tags = \DB::table('matzobs_agentes')
+            ->where('matzobs_agentes.id_sede', $sedeId)
+            ->whereNotNull('matzobs_agentes.tag')
+            ->distinct()
+            ->pluck('tag')
+            ->toArray();
+
+        if (empty($tags)) {
+            return collect();
+        }
+
+        // Buscar terceros cuya unidad contenga cualquiera de los tags
+        $query = \DB::table('config_person_tercero')
+            ->where('id_empresa', $empresaId)
+            ->where('estado', true)
+            ->whereNotNull('unidad')
+            ->where('unidad', '!=', '');
+
+        $query->where(function($q) use ($tags) {
+            foreach ($tags as $tag) {
+                $q->orWhere('unidad', 'LIKE', "%-{$tag}");
+                $q->orWhere('unidad', 'LIKE', "%- {$tag}");
+                $q->orWhere('unidad', 'LIKE', "% - {$tag}");
+                $q->orWhere('unidad', 'LIKE', "{$tag}-%");
+                $q->orWhere('unidad', 'LIKE', "{$tag} -%");
+                $q->orWhere('unidad', 'LIKE', "{$tag} - %");
+            }
+        });
+
+        return collect(
+            $query->select('id', 'nombre', 'email', 'unidad', 'numero_identificacion')
+                ->orderBy('nombre')
+                ->get()
+        );
+    }
+
+    /**
      * Obtiene sedes disponibles según el nivel de acceso y empresa seleccionada
      */
-    public function getSedesPorEmpresa(int $empresaId): Collection
+    public function getSedesPorEmpresa(int $empresaId): SupportCollection
     {
         // Validar que el usuario tiene acceso a esta empresa
         if (!$this->tieneAccesoEmpresa($empresaId)) {
@@ -233,7 +314,7 @@ class AccessControlService
     {
         // Validar que el usuario tiene acceso a esta empresa
         if (!$this->tieneAccesoEmpresa($empresaId)) {
-            return collect();
+            return new Collection();
         }
 
         $query = ConfigUnidadFuncional::with(['empresa', 'sede'])

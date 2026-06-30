@@ -18,6 +18,7 @@ class CtCuadro extends Model
 
     protected $fillable = [
         'id_grupo',
+        'id_unidad_funcional',
         'id_empleado',
         'anio',
         'mes',
