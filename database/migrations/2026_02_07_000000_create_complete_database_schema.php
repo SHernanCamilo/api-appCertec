@@ -326,7 +326,7 @@ return new class extends Migration
                 $table->boolean('recursivo')->default(false);
                 $table->timestamps();
                 
-                $table->unique(['user_id', 'empresa_id']);
+                $table->unique(['user_id', 'empresa_id', 'id_sucursal', 'id_sede'], 'seg_empresa_user_user_empresa_sucursal_sede_unique');
                 $table->index('id_sucursal');
                 $table->index('id_sede');
             });

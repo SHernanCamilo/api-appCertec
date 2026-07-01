@@ -9,10 +9,12 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Aprobadores parametrizables por paso.
- * Soporta 3 estrategias:
+ * Soporta 5 estrategias:
  *   1. Aprobador fijo (id_user)
  *   2. Aprobador por unidad funcional (dinámico)
  *   3. Aprobador por prefijo de sucursal (dinámico)
+ *   4. Aprobador por grupo (dinámico)
+ *   5. Aprobador por permiso (permiso_codigo -> seg_permisos.codigo)
  */
 class WfAprobador extends Model
 {
@@ -21,15 +23,21 @@ class WfAprobador extends Model
     protected $fillable = [
         'id_paso',
         'id_user',
+        'tipo_aprobador',
         'id_unidad_funcional',
         'prefijo_sucursal',
         'id_sede',
+        'id_grupo',
+        'permiso_codigo',
+        'alcance',
         'es_suplente',
+        'condiciones',
         'estado',
     ];
 
     protected $casts = [
         'es_suplente' => 'boolean',
+        'condiciones' => 'array',
         'estado' => 'boolean',
     ];
 
@@ -53,6 +61,11 @@ class WfAprobador extends Model
         return $this->belongsTo(Sede::class, 'id_sede');
     }
 
+    public function grupo()
+    {
+        return $this->belongsTo(WfGrupo::class, 'id_grupo');
+    }
+
     public function scopeActivos($query)
     {
         return $query->where('estado', true);
@@ -74,5 +87,24 @@ class WfAprobador extends Model
             $q->where('id_sede', $idSede)
               ->orWhereNull('id_sede');
         });
+    }
+
+    /**
+     * Evalúa si las condiciones dinámicas (JSON) de este aprobador se cumplen para el contexto del evento.
+     */
+    public function evaluarCondiciones(array $contexto): bool
+    {
+        if (empty($this->condiciones)) {
+            return true;
+        }
+
+        foreach ($this->condiciones as $campo => $valor) {
+            // Si el contexto no tiene el campo, o su valor es diferente, no aplica
+            if (!array_key_exists($campo, $contexto) || $contexto[$campo] != $valor) {
+                return false;
+            }
+        }
+        
+        return true;
     }
 }

@@ -206,6 +206,12 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obsolescenc
 Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obs-activos')->group(function () {
     // Estadísticas
     Route::get('/estadisticas', [App\Http\Controllers\MatrizObsActivoController::class, 'getEstadisticas']);
+
+    // Datos agregados para el dashboard (conteos por estado/tipo/ubicación)
+    Route::get('/dashboard', [App\Http\Controllers\MatrizObsActivoController::class, 'dashboard']);
+
+    // Opciones para los dropdowns de filtros (empresa/sucursal/sede)
+    Route::get('/filtros', [App\Http\Controllers\MatrizObsActivoController::class, 'opcionesFiltros']);
     
     // Activos por permisos del usuario
     Route::get('/por-permisos', [App\Http\Controllers\MatrizObsActivoController::class, 'getActivosPorPermisos']);

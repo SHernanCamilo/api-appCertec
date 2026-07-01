@@ -4,6 +4,7 @@ namespace App\Models\Turnos;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use App\Models\Empresa;
@@ -44,6 +45,11 @@ class CtGrupo extends Model
     public function unidadFuncional(): BelongsTo
     {
         return $this->belongsTo(\App\Models\Turnos\ConfigUnidadFuncional::class, 'id_unidad_funcional');
+    }
+
+    public function unidadesFuncionales(): BelongsToMany
+    {
+        return $this->belongsToMany(\App\Models\Turnos\ConfigUnidadFuncional::class, 'humtal_ct_grupo_unidad_funcional', 'id_grupo', 'id_unidad_funcional');
     }
 
     /**
@@ -100,6 +106,8 @@ class CtGrupo extends Model
 
     public function scopePorUnidadFuncional($query, int $idUnidadFuncional)
     {
-        return $query->where('id_unidad_funcional', $idUnidadFuncional);
+        return $query->whereHas('unidadesFuncionales', function ($q) use ($idUnidadFuncional) {
+            $q->where('config_unidades_funcionales.id', $idUnidadFuncional);
+        });
     }
 }
