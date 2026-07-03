@@ -17,6 +17,11 @@ class Kernel extends ConsoleKernel
             ->everyMinute()
             ->withoutOverlapping()
             ->runInBackground();
+
+        // Sincronizar festivos el 1° de cada mes a las 02:00 (+ próximo año)
+        $schedule->command('festivos:sincronizar --next')
+            ->monthlyOn(1, '02:00')
+            ->withoutOverlapping();
     }
 
     /**

@@ -12,6 +12,7 @@ class Empleado extends Model
     protected $table = 'config_person_tercero';
 
     protected $fillable = [
+        'id_user',
         'id_empresa',
         'id_cargo',
         'numero_identificacion',

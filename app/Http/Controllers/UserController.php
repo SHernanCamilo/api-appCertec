@@ -600,6 +600,9 @@ class UserController extends Controller
      */
     public function sincronizarUsuariosTenant(Request $request)
     {
+        // Permitir hasta 5 minutos para sincronización masiva
+        set_time_limit(300);
+        
         try {
             // Verificar permisos (solo usuarios autenticados por ahora)
             $user = auth()->user();
@@ -852,5 +855,46 @@ class UserController extends Controller
             }
         });
     }
+    public function tercerosYUsuariosPorEmpresa($empresaId)
+    {
+        // UNION: Terceros + Users (deduplicados por numero_identificacion)
+        $resultados = \DB::select("
+            SELECT t.id, t.nombre AS name, t.email, t.numero_identificacion, 'tercero' AS tipo
+            FROM config_person_tercero t
+            WHERE t.id_empresa = ? AND t.estado = 1
 
+            UNION
+
+            SELECT u.id, u.name, u.email, u.numero_identificacion, 'user' AS tipo
+            FROM users u
+            INNER JOIN seg_empresa_user seu ON u.id = seu.user_id
+            WHERE seu.empresa_id = ?
+            AND (u.estado = 1 OR u.estado = true)
+            AND (u.numero_identificacion IS NULL 
+                 OR u.numero_identificacion = ''
+                 OR u.numero_identificacion NOT IN (
+                     SELECT numero_identificacion 
+                     FROM config_person_tercero 
+                     WHERE id_empresa = ? 
+                     AND numero_identificacion IS NOT NULL
+                     AND numero_identificacion != ''
+                 ))
+
+            ORDER BY name ASC
+        ", [$empresaId, $empresaId, $empresaId]);
+
+        // Formatear respuesta compatible con el frontend
+        $formatted = collect($resultados)->map(function ($item) {
+            return [
+                'id'     => $item->id,
+                'name'   => $item->name,
+                'email'  => $item->email,
+                'cargo'  => null,
+                'estado' => true,
+                'tipo'   => $item->tipo,
+            ];
+        });
+
+        return response()->json($formatted);
+    }
 }

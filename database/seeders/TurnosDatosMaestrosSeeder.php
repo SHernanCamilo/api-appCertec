@@ -71,6 +71,18 @@ class TurnosDatosMaestrosSeeder extends Seeder
                 'created_at' => now(),
                 'updated_at' => now(),
             ],
+            [
+                'codigo' => 'HEX',
+                'nombre' => 'Horas Extra',
+                'descripcion' => 'Horas adicionales al turno programado',
+                'afecta_turno' => false,
+                'requiere_reemplazo' => false,
+                'requiere_aprobacion' => true,
+                'color_hex' => '#F97316',
+                'estado' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
         ];
 
         foreach ($novedadTipos as $tipo) {

@@ -45,4 +45,9 @@ return [
         'timeout' => env('GLPI_TIMEOUT', 30),
     ],
 
+    'festivos' => [
+        'key' => env('FESTIVOS_API_KEY'),
+        'provider' => env('FESTIVOS_PROVIDER', 'festivos_com_co'),
+    ],
+
 ];

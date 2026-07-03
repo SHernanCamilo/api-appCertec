@@ -66,6 +66,21 @@ return [
         ],
 
         // ─────────────────────────────────────────────────────────────────
+        // ERP INDIGO777 (Órdenes de Compra)
+        // ─────────────────────────────────────────────────────────────────
+        'sqlsrv_indigo' => [
+            'driver'         => 'sqlsrv',
+            'host'           => env('MSSQL_PURCHASEORDER_HOST', '192.168.10.9'),
+            'port'           => env('MSSQL_PURCHASEORDER_PORT', '1433'),
+            'database'       => env('MSSQL_PURCHASEORDER_DB', 'INDIGO777'),
+            'username'       => env('MSSQL_PURCHASEORDER_USER', 'Pr_Genesis'),
+            'password'       => env('MSSQL_PURCHASEORDER_PASS', 'Genesis2021#'),
+            'charset'        => 'utf8',
+            'prefix'         => '',
+            'prefix_indexes' => true,
+        ],
+
+        // ─────────────────────────────────────────────────────────────────
         // Microsoft Fabric / LH_MEDILASER_ANALYTICS
         // Autenticación: Service Principal (OAuth2 AAD)
         // El FabricService obtiene el token AAD y lo inyecta en la conexión

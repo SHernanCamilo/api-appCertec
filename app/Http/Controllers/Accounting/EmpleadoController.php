@@ -341,7 +341,7 @@ class EmpleadoController extends Controller
             // Obtener todas las asignaciones de estos empleados en el mes
             $idsEmpleados = $empleados->pluck('id')->toArray();
 
-            $asignaciones = \App\Models\Turnos\CtAsignacion::with(['plantilla'])
+            $asignaciones = \App\Models\TalentoHumano\CuadroTurnos\CtAsignacion::with(['plantilla'])
                 ->whereIn('id_empleado', $idsEmpleados)
                 ->whereBetween('fecha', [$fechaInicio, $fechaFin])
                 ->get()

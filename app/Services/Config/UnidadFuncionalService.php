@@ -30,7 +30,7 @@ class UnidadFuncionalService
     public function buscarPorCodigo(string $codigo, int $empresaId, User $user): ?ConfigUnidadFuncional
     {
         return ConfigUnidadFuncional::query()
-            ->with(['empresa:id,nombre,prefijo', 'sucursal:id,nombre', 'sede:id,nombre', 'usuarios:id,nombre,email,numero_identificacion', 'responsables:id,nombre,email,numero_identificacion'])
+            ->with(['empresa:id,nombre,prefijo', 'sucursal:id,nombre', 'sede:id,nombre', 'usuarios:id,nombre,email', 'responsables:id,name,email'])
             ->accessibleByUser($user)
             ->where('id_empresa', $empresaId)
             ->where('codigo', $codigo)
@@ -40,7 +40,7 @@ class UnidadFuncionalService
     public function obtener(int $id, User $user): ConfigUnidadFuncional
     {
         return ConfigUnidadFuncional::query()
-            ->with(['empresa:id,nombre,prefijo', 'sucursal:id,nombre', 'sede:id,nombre', 'usuarios:id,nombre,email,numero_identificacion', 'responsables:id,nombre,email,numero_identificacion'])
+            ->with(['empresa:id,nombre,prefijo', 'sucursal:id,nombre', 'sede:id,nombre', 'usuarios:id,nombre,email', 'responsables:id,name,email'])
             ->accessibleByUser($user)
             ->findOrFail($id);
     }
@@ -126,15 +126,15 @@ class UnidadFuncionalService
                 'id' => $unidad->sede->id,
                 'nombre' => $unidad->sede->nombre,
             ] : null,
-            'usuarios_autorizados' => $unidad->usuarios->map(fn (Empleado $persona) => [
-                'id_user' => $persona->id,
-                'codigo' => $persona->numero_identificacion ?: str_pad((string) $persona->id, 3, '0', STR_PAD_LEFT),
-                'nombre' => $persona->nombre,
+            'usuarios_autorizados' => $unidad->usuarios->map(fn ($empleado) => [
+                'id_user' => $empleado->id,
+                'codigo' => str_pad((string) $empleado->id, 3, '0', STR_PAD_LEFT),
+                'nombre' => $empleado->nombre,
             ])->values()->all(),
-            'jefes_encargados' => $unidad->responsables->map(fn (Empleado $persona) => [
-                'id_user' => $persona->id,
-                'codigo' => $persona->numero_identificacion ?: str_pad((string) $persona->id, 3, '0', STR_PAD_LEFT),
-                'nombre' => $persona->nombre,
+            'jefes_encargados' => $unidad->responsables->map(fn ($user) => [
+                'id_user' => $user->id,
+                'codigo' => str_pad((string) $user->id, 3, '0', STR_PAD_LEFT),
+                'nombre' => $user->name,
             ])->values()->all(),
             'created_at' => $unidad->created_at,
             'updated_at' => $unidad->updated_at,
@@ -155,18 +155,23 @@ class UnidadFuncionalService
         $unidad->usuarios()->sync($ids);
     }
 
-    private function syncResponsables(ConfigUnidadFuncional $unidad, array $personIds): void
+    private function syncResponsables(ConfigUnidadFuncional $unidad, array $terceroIds): void
     {
-        $ids = collect($personIds)
+        $ids = collect($terceroIds)
             ->filter(fn ($id) => $id !== null && $id !== '')
             ->map(fn ($id) => (int) $id)
             ->unique()
             ->values()
             ->all();
 
-        $this->validarPersonasEmpresa($ids, (int) $unidad->id_empresa);
+        // Traducir IDs de terceros a IDs de users usando config_person_tercero.id_user
+        $userIds = DB::table('config_person_tercero')
+            ->whereIn('id', $ids)
+            ->whereNotNull('id_user')
+            ->pluck('id_user')
+            ->toArray();
 
-        $unidad->responsables()->sync($ids);
+        $unidad->responsables()->sync($userIds);
     }
 
     private function validarPersonasEmpresa(array $personIds, int $empresaId): void

@@ -48,7 +48,7 @@ class ConfigUnidadFuncional extends Model
     public function usuarios()
     {
         return $this->belongsToMany(
-            Empleado::class,
+            \App\Models\Empleado::class,
             'config_unidades_fun_usuarios',
             'id_unidad_funcional',
             'id_user'
@@ -58,11 +58,21 @@ class ConfigUnidadFuncional extends Model
     public function responsables()
     {
         return $this->belongsToMany(
-            Empleado::class,
+            \App\Models\User::class,
             'config_unidades_fun_responsable',
             'id_unidad_funcional',
             'id_user'
         )->withTimestamps();
+    }
+
+    public function grupos()
+    {
+        return $this->belongsToMany(\App\Models\TalentoHumano\CuadroTurnos\CtGrupo::class, 'humtal_ct_grupo_unidad_funcional', 'id_unidad_funcional', 'id_grupo');
+    }
+
+    public function flujos()
+    {
+        return $this->belongsToMany(\App\Models\Workflow\WfDefinicion::class, 'wf_definicion_unidad_funcional', 'id_unidad_funcional', 'id_definicion');
     }
 
     public function scopeActivas(Builder $query): Builder
