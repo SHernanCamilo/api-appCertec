@@ -277,9 +277,9 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('workflow')->group(
     require __DIR__ . '/Workflow/WorkflowRouter.php';
 });
 
-// Rutas de Cuadro de Turnos → routes/Turnos/TurnosRouter.php
+// Rutas de Cuadro de Turnos → routes/TalentoHumano/CuadroTurnos/CuadroTurnosRouter.php
 Route::middleware(['auth:api', 'check.user.active'])->prefix('turnos')->group(function () {
-    require __DIR__ . '/Turnos/TurnosRouter.php';
+    require __DIR__ . '/TalentoHumano/CuadroTurnos/CuadroTurnosRouter.php';
 });
 
 // Rutas de Microsoft Fabric / Analytics → routes/Fabric/FabricRouter.php
@@ -389,4 +389,9 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('config/secuencias'
         Route::put('/{detalleId}',   [App\Http\Controllers\Config\SecDetalleController::class, 'update']);
         Route::delete('/{detalleId}',[App\Http\Controllers\Config\SecDetalleController::class, 'destroy']);
     });
+});
+
+// ─── Rutas de Inventario (Migración JadeInventory) ───────────────────────────
+Route::middleware(['auth:api', 'check.user.active'])->prefix('inventario')->group(function () {
+    require __DIR__ . '/Inventory/InventoryRouter.php';
 });

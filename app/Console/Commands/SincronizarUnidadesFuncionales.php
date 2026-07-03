@@ -4,7 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use App\Models\ConfigPersonTercero;
-use App\Models\Turnos\ConfigUnidadFuncional;
+use App\Models\Config\ConfigUnidadFuncional;
 use Illuminate\Support\Str;
 
 /**

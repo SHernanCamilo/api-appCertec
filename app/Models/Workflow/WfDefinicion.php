@@ -54,7 +54,7 @@ class WfDefinicion extends Model
 
     public function unidadesFuncionales(): BelongsToMany
     {
-        return $this->belongsToMany(\App\Models\Turnos\ConfigUnidadFuncional::class, 'wf_definicion_unidad_funcional', 'id_definicion', 'id_unidad_funcional');
+        return $this->belongsToMany(\App\Models\Config\ConfigUnidadFuncional::class, 'wf_definicion_unidad_funcional', 'id_definicion', 'id_unidad_funcional');
     }
 
     public function scopeActivos($query)
