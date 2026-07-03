@@ -320,6 +320,28 @@ class EventSolicitudController extends Controller
         }
     }
 
+    public function gestionados(Request $request): JsonResponse
+    {
+        try {
+            $user = auth('api')->user();
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Usuario no autenticado'], 401);
+            }
+
+            $paginado = $this->service->listarGestionados($user->id, $request->all());
+            return response()->json([
+                'success'      => true,
+                'data'         => $paginado->items(),
+                'total'        => $paginado->total(),
+                'current_page' => $paginado->currentPage(),
+                'per_page'     => $paginado->perPage(),
+                'last_page'    => $paginado->lastPage(),
+            ]);
+        } catch (\Exception $e) {
+            return $this->error('Error al listar eventos gestionados', $e);
+        }
+    }
+
     public function aprobar(Request $request, int $id): JsonResponse
     {
         $request->validate(['comentario' => 'nullable|string']);

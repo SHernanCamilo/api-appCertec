@@ -13,6 +13,7 @@ use App\Models\Empresa;
 use App\Models\Rol;
 use App\Models\Sucursal;
 use App\Models\Sede;
+use App\Models\UserGrup;
 
 class User extends Authenticatable implements JWTSubject
 {
@@ -116,6 +117,14 @@ class User extends Authenticatable implements JWTSubject
     public function sede()
     {
         return $this->belongsTo(Sede::class, 'id_sede');
+    }
+
+    /**
+     * Grupos/permisos del tenant (vistas BD, departamento, etc.)
+     */
+    public function usersGrups()
+    {
+        return $this->hasMany(UserGrup::class, 'id_user');
     }
 
     /**
