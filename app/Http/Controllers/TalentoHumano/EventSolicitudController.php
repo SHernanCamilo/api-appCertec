@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\TalentoHumano;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Services\TalentoHumano\EventSolicitudService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -43,7 +44,7 @@ class EventSolicitudController extends Controller
     {
         try {
             $user = auth('api')->user();
-            if (!$user) {
+            if (!$user instanceof User) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Usuario no autenticado',
@@ -286,7 +287,7 @@ class EventSolicitudController extends Controller
                 ], 403);
             }
 
-            $solicitud = $this->service->actualizar($id, $request->all());
+            $solicitud = $this->service->actualizar($id, $request->all(), $user->id);
             return response()->json([
                 'success' => true,
                 'message' => 'Solicitud actualizada',
@@ -319,6 +320,28 @@ class EventSolicitudController extends Controller
         }
     }
 
+    public function gestionados(Request $request): JsonResponse
+    {
+        try {
+            $user = auth('api')->user();
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Usuario no autenticado'], 401);
+            }
+
+            $paginado = $this->service->listarGestionados($user->id, $request->all());
+            return response()->json([
+                'success'      => true,
+                'data'         => $paginado->items(),
+                'total'        => $paginado->total(),
+                'current_page' => $paginado->currentPage(),
+                'per_page'     => $paginado->perPage(),
+                'last_page'    => $paginado->lastPage(),
+            ]);
+        } catch (\Exception $e) {
+            return $this->error('Error al listar eventos gestionados', $e);
+        }
+    }
+
     public function aprobar(Request $request, int $id): JsonResponse
     {
         $request->validate(['comentario' => 'nullable|string']);
@@ -347,7 +370,10 @@ class EventSolicitudController extends Controller
 
     public function rechazar(Request $request, int $id): JsonResponse
     {
-        $request->validate(['motivo' => 'required|string|min:3']);
+        $request->validate([
+            'id_motivo_rechazo' => 'required|integer|exists:config_mot_rechazo,id',
+            'comentario'        => 'nullable|string|max:500',
+        ]);
 
         try {
             $user = auth('api')->user();
@@ -358,7 +384,12 @@ class EventSolicitudController extends Controller
                 ], 403);
             }
 
-            $solicitud = $this->service->rechazar($id, $user->id, $request->input('motivo'));
+            $solicitud = $this->service->rechazar(
+                $id,
+                $user->id,
+                (int) $request->input('id_motivo_rechazo'),
+                $request->input('comentario')
+            );
             return response()->json([
                 'success' => true,
                 'message' => 'Evento rechazado',
@@ -368,6 +399,18 @@ class EventSolicitudController extends Controller
             return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
         } catch (\Exception $e) {
             return $this->error('Error al rechazar el evento', $e);
+        }
+    }
+
+    public function motivosRechazo(): JsonResponse
+    {
+        try {
+            return response()->json([
+                'success' => true,
+                'data'    => $this->service->listarMotivosRechazo(),
+            ]);
+        } catch (\Exception $e) {
+            return $this->error('Error al listar motivos de rechazo', $e);
         }
     }
 

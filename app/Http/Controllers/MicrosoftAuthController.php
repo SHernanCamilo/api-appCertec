@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use App\Models\AllowedDomain;
 use App\Services\SidebarService;
+use App\Services\Tenant\UserGrupSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Laravel\Socialite\Facades\Socialite;
@@ -14,10 +15,12 @@ use Illuminate\Support\Str;
 class MicrosoftAuthController extends Controller
 {
     protected $sidebarService;
+    protected $userGrupSyncService;
 
-    public function __construct(SidebarService $sidebarService)
+    public function __construct(SidebarService $sidebarService, UserGrupSyncService $userGrupSyncService)
     {
         $this->sidebarService = $sidebarService;
+        $this->userGrupSyncService = $userGrupSyncService;
     }
 
     /**
@@ -95,12 +98,14 @@ class MicrosoftAuthController extends Controller
         
         // Obtener módulos del sidebar con permisos básicos
         $sidebar = $this->sidebarService->getSidebarModules($user);
+        $tenantSync = $this->userGrupSyncService->syncFromAzureOnLogin($user);
         
         \Log::info('🔐 Login con Microsoft exitoso:', [
             'user' => $user->name,
             'roles' => $user->rolesCustom->pluck('nombre')->toArray(),
             'permisos_count' => count($permisosUnicos),
-            'modulos_sidebar' => count($sidebar)
+            'modulos_sidebar' => count($sidebar),
+            'users_grups_count' => count($tenantSync['users_grups']),
         ]);
         
         return [
@@ -124,9 +129,14 @@ class MicrosoftAuthController extends Controller
                 'empresas' => $user->empresas,
                 'sucursal' => $user->sucursal,
                 'sede' => $user->sede,
-                'permissions' => $permisosUnicos
+                'permissions' => $permisosUnicos,
+                'users_grups' => $tenantSync['users_grups'],
             ],
-            'sidebar' => $sidebar
+            'sidebar' => $sidebar,
+            'tenant_sync' => [
+                'synced' => $tenantSync['synced'],
+                'error'  => $tenantSync['error'],
+            ],
         ];
     }
 

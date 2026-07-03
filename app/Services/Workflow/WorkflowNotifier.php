@@ -98,6 +98,10 @@ class WorkflowNotifier
      */
     public function resolverAprobadoresParaPaso(\App\Models\Workflow\WfPaso $paso, array $contexto): \Illuminate\Support\Collection
     {
+        if (!empty($contexto['solo_aprobadores_parametrizados'])) {
+            return $this->resolverAprobadoresParametrizadosEventos($paso, $contexto);
+        }
+
         $aprobadores = WfAprobador::where('id_paso', $paso->id)
             ->activos()
             ->titulares()
@@ -218,6 +222,41 @@ class WorkflowNotifier
         }
 
         return $usuarios->filter()->unique('id')->values();
+    }
+
+    /**
+     * Solo responsables explícitos parametrizados por UF o por grupo WF (módulo eventos).
+     */
+    private function resolverAprobadoresParametrizadosEventos(
+        \App\Models\Workflow\WfPaso $paso,
+        array $contexto
+    ): \Illuminate\Support\Collection {
+        $modo = $contexto['modo_parametrizacion_eventos'] ?? null;
+        $ufId = (int)($contexto['id_unidad_funcional'] ?? 0);
+        $grupoId = (int)($contexto['id_grupo'] ?? 0);
+
+        if (!$modo || ($modo === 'uf' && $ufId <= 0) || ($modo === 'grupo' && $grupoId <= 0)) {
+            return collect();
+        }
+
+        $aprobadores = WfAprobador::where('id_paso', $paso->id)
+            ->activos()
+            ->titulares()
+            ->whereNotNull('id_user')
+            ->with('user')
+            ->get();
+
+        $filtrados = $aprobadores->filter(function ($a) use ($modo, $ufId, $grupoId) {
+            if ($modo === 'uf') {
+                return (int)$a->id_unidad_funcional === $ufId;
+            }
+
+            $condGrupo = $a->condiciones['id_grupo'] ?? null;
+
+            return $condGrupo !== null && (int)$condGrupo === $grupoId;
+        });
+
+        return $filtrados->pluck('user')->filter()->unique('id')->values();
     }
 
     /**

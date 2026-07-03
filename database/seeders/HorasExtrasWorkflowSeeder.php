@@ -22,7 +22,6 @@ class HorasExtrasWorkflowSeeder extends Seeder
 
             // 2. Crear grupos de aprobación
             $grupoDirectivoId = DB::table('wf_grupos')->insertGetId([
-                'codigo' => 'directivo',
                 'nombre' => 'Directivo',
                 'descripcion' => 'Cargos directivos',
                 'id_empresa' => null,
@@ -32,7 +31,6 @@ class HorasExtrasWorkflowSeeder extends Seeder
             ]);
 
             $grupoAdministrativoId = DB::table('wf_grupos')->insertGetId([
-                'codigo' => 'administrativo',
                 'nombre' => 'Administrativo',
                 'descripcion' => 'Cargos administrativos',
                 'id_empresa' => null,

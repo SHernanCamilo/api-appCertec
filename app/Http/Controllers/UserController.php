@@ -57,6 +57,8 @@ class UserController extends Controller
                         'name' => $user->name,
                         'cargo' => $user->cargo,
                         'email' => $user->email,
+                        'tipo_identificacion' => $user->tipo_identificacion,
+                        'numero_identificacion' => $user->numero_identificacion,
                         'estado' => $user->estado,
                         'empresas' => $user->empresas,
                     ];
@@ -853,7 +855,7 @@ class UserController extends Controller
             }
         });
     }
-    public function porEmpresa($empresaId)
+    public function tercerosYUsuariosPorEmpresa($empresaId)
     {
         // UNION: Terceros + Users (deduplicados por numero_identificacion)
         $resultados = \DB::select("

@@ -34,6 +34,24 @@ if (empty($exists)) {
     echo "ℹ️  wf_grupo_unidades ya existe\n";
 }
 
+// 4. Eliminar columna codigo de wf_grupos (identificación por nombre)
+$colsGrupos = collect(DB::select('SHOW COLUMNS FROM wf_grupos'))->pluck('Field');
+if ($colsGrupos->contains('codigo')) {
+    DB::statement('ALTER TABLE wf_grupos DROP INDEX wf_grupos_codigo_unique');
+    DB::statement('ALTER TABLE wf_grupos DROP COLUMN codigo');
+    echo "✅ Eliminada columna codigo de wf_grupos\n";
+} else {
+    echo "ℹ️  wf_grupos.codigo ya fue eliminada\n";
+}
+
+$idx = collect(DB::select("SHOW INDEX FROM wf_grupos WHERE Key_name = 'wf_grupos_empresa_nombre_unique'"));
+if ($idx->isEmpty()) {
+    DB::statement('ALTER TABLE wf_grupos ADD UNIQUE KEY wf_grupos_empresa_nombre_unique (id_empresa, nombre)');
+    echo "✅ Índice único (id_empresa, nombre) en wf_grupos\n";
+} else {
+    echo "ℹ️  Índice wf_grupos_empresa_nombre_unique ya existe\n";
+}
+
 echo "\n=== Estado final de las tablas ===\n";
 $wfTables = ['wf_grupos', 'wf_grupo_cargos', 'wf_grupo_unidades', 'humtal_ct_grupos'];
 foreach ($wfTables as $tbl) {

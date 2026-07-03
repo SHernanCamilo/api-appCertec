@@ -6,22 +6,25 @@ use Illuminate\Support\Facades\Auth;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\SidebarService;
+use App\Services\Tenant\UserGrupSyncService;
 use Validator;
 
 
 class AuthController extends Controller
 {
     protected $sidebarService;
+    protected $userGrupSyncService;
 
     /**
      * Create a new AuthController instance.
      *
      * @return void
      */
-    public function __construct(SidebarService $sidebarService)
+    public function __construct(SidebarService $sidebarService, UserGrupSyncService $userGrupSyncService)
     {
         $this->middleware('auth:api', ['except' => ['login', 'register']]);
         $this->sidebarService = $sidebarService;
+        $this->userGrupSyncService = $userGrupSyncService;
     }
 
     /**
@@ -242,6 +245,7 @@ class AuthController extends Controller
 
             $permisosUnicos = $this->getUserPermissions($user);
             $sidebar        = $this->sidebarService->getSidebarModules($user);
+            $tenantSync     = $this->userGrupSyncService->syncFromAzureOnLogin($user);
 
             // Obtener sedes según el rol del usuario (4-tier logic)
             $sedes = $this->getSedesForUser($user);
@@ -266,9 +270,14 @@ class AuthController extends Controller
                     'sucursal'              => $user->sucursal,
                     'sede'                  => $user->sede,
                     'sedes'                 => $sedes,
-                    'permissions'           => $permisosUnicos
+                    'permissions'           => $permisosUnicos,
+                    'users_grups'           => $tenantSync['users_grups'],
                 ],
-                'sidebar' => $sidebar
+                'sidebar' => $sidebar,
+                'tenant_sync' => [
+                    'synced' => $tenantSync['synced'],
+                    'error'  => $tenantSync['error'],
+                ],
             ]);
         }
 

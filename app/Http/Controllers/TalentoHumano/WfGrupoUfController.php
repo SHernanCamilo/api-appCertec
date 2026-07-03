@@ -11,6 +11,7 @@ use App\Models\Workflow\WfRegla;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 /**
  * CRUD de Grupos de UF para el motor de flujos.
@@ -28,7 +29,7 @@ class WfGrupoUfController extends Controller
             ->when($request->filled('empresa_id'), fn($q) => $q->where('id_empresa', (int)$request->empresa_id))
             ->when($request->filled('search'), function ($q) use ($request) {
                 $term = $request->search;
-                $q->where(fn($sq) => $sq->where('nombre', 'like', "%{$term}%")->orWhere('codigo', 'like', "%{$term}%"));
+                $q->where('nombre', 'like', "%{$term}%");
             })
             ->orderBy('nombre');
 
@@ -93,8 +94,7 @@ class WfGrupoUfController extends Controller
     public function store(Request $request): JsonResponse
     {
         $request->validate([
-            'codigo'                  => 'required|string|max:50|unique:wf_grupos,codigo',
-            'nombre'                  => 'required|string|max:150',
+            'nombre'                  => $this->reglaNombreUnico($request),
             'descripcion'             => 'nullable|string|max:255',
             'id_empresa'              => 'nullable|integer',
             'unidades_funcionales'    => 'required|array|min:1',
@@ -103,7 +103,6 @@ class WfGrupoUfController extends Controller
 
         return DB::transaction(function () use ($request) {
             $grupo = WfGrupo::create([
-                'codigo'      => $request->codigo,
                 'nombre'      => $request->nombre,
                 'descripcion' => $request->descripcion,
                 'id_empresa'  => $request->id_empresa,
@@ -130,7 +129,7 @@ class WfGrupoUfController extends Controller
         $grupo = WfGrupo::findOrFail($id);
 
         $request->validate([
-            'nombre'                  => 'sometimes|string|max:150',
+            'nombre'                  => $this->reglaNombreUnico($request, $id, false),
             'descripcion'             => 'nullable|string|max:255',
             'id_empresa'              => 'nullable|integer',
             'unidades_funcionales'    => 'sometimes|array|min:1',
@@ -162,7 +161,7 @@ class WfGrupoUfController extends Controller
     {
         $request->validate([
             'flujo_id'                    => 'required|integer',
-            'aprobadores'                 => 'required|array',
+            'aprobadores'                 => 'array',
             'aprobadores.*.id_paso'       => 'required|integer',
             'aprobadores.*.id_user'       => 'required|integer',
         ]);
@@ -233,6 +232,26 @@ class WfGrupoUfController extends Controller
     }
 
     // ─── Métodos privados ─────────────────────────────────────────────────────
+
+    private function reglaNombreUnico(Request $request, ?int $ignoreId = null, bool $required = true): array
+    {
+        $rule = Rule::unique('wf_grupos', 'nombre')->where(function ($query) use ($request) {
+            if ($request->filled('id_empresa')) {
+                $query->where('id_empresa', (int) $request->id_empresa);
+            } else {
+                $query->whereNull('id_empresa');
+            }
+        });
+
+        if ($ignoreId) {
+            $rule->ignore($ignoreId);
+        }
+
+        $rules = ['string', 'max:150', $rule];
+        array_unshift($rules, $required ? 'required' : 'sometimes');
+
+        return $rules;
+    }
 
     private function resolverFlujoGrupo(int $grupoId): ?WfDefinicion
     {

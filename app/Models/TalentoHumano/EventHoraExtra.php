@@ -61,6 +61,11 @@ class EventHoraExtra extends Model
         return $this->belongsTo(EventNovedad::class, 'id_motivo_evento');
     }
 
+    public function motivoRechazo()
+    {
+        return $this->belongsTo(\App\Models\Config\ConfigMotRechazo::class, 'id_motivo_rechazo');
+    }
+
     public function instancia()
     {
         return $this->belongsTo(\App\Models\Workflow\WfInstancia::class, 'wf_instancia_id');
