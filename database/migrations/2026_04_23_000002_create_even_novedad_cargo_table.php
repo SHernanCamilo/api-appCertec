@@ -38,7 +38,7 @@ return new class extends Migration
 
             // ── Foreign keys ──────────────────────────────────────────────────
             $table->foreign('novedad_id')
-                ->references('id')->on('even_novedades')
+                ->references('id')->on('event_novedades')
                 ->onDelete('cascade');
 
             $table->foreign('empresa_id')
