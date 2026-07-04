@@ -197,23 +197,10 @@ class FabricViewerController extends Controller
     // =========================================================================
 
     /**
-     * Exporta una vista a Excel y la devuelve como descarga.
-     * Valida acceso al esquema antes de exportar.
+     * Export SÍNCRONO — descarga directa (para archivos pequeños < 10k filas).
+     * Útil en desarrollo o para exports rápidos.
      *
      * POST /api/fabric/viewer/export
-     *
-     * Body:
-     * {
-     *   "schema_name": "in",
-     *   "view":        "VW_Inventory_Almacenes",
-     *   "columns":     [],          // [] = todas las columnas
-     *   "filters":     {"estado": "ACTIVO"},
-     *   "sort_col":    "codigo",
-     *   "sort_dir":    "asc",
-     *   "max_rows":    50000
-     * }
-     *
-     * Response: archivo .xlsx para descarga directa
      */
     public function export(Request $request): mixed
     {
@@ -255,6 +242,136 @@ class FabricViewerController extends Controller
         return response($result['content'], 200, [
             'Content-Type'        => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'Content-Disposition' => 'attachment; filename="' . $result['filename'] . '"',
+            'Cache-Control'       => 'no-store, no-cache',
+        ]);
+    }
+
+    // =========================================================================
+    // EXPORT A EXCEL — ASÍNCRONO (recomendado para producción/Apache)
+    // =========================================================================
+
+    /**
+     * Inicia un export en segundo plano (queue).
+     * Soporta formato 'gzip' (NDJSON comprimido, 10x más rápido) o 'excel' (.xlsx).
+     *
+     * POST /api/fabric/viewer/export/start
+     */
+    public function exportStart(Request $request): JsonResponse
+    {
+        $request->validate([
+            'schema_name' => 'required|string|max:20|alpha_dash',
+            'view'        => 'required|string|max:150|regex:/^[A-Za-z0-9_]+$/',
+            'columns'     => 'nullable|array',
+            'columns.*'   => 'string|max:100',
+            'filters'     => 'nullable|array',
+            'sort_col'    => 'nullable|string|max:100',
+            'sort_dir'    => 'nullable|in:asc,desc',
+            'max_rows'    => 'nullable|integer|min:1|max:1048576',
+            'format'      => 'nullable|in:gzip,excel',
+        ]);
+
+        $user   = auth()->user();
+        $schema = strtolower($request->schema_name);
+
+        // Validar acceso antes de encolar
+        if (!$this->gateway->tieneAccesoEsquema($user, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso al esquema '{$schema}'.",
+            ], 403);
+        }
+
+        $jobId = \App\Jobs\FabricExportJob::dispatch_and_track(
+            $user->id,
+            $schema,
+            $request->view,
+            [
+                'columns'  => $request->input('columns', []),
+                'filters'  => $request->input('filters', []),
+                'sort_col' => $request->input('sort_col', ''),
+                'sort_dir' => $request->input('sort_dir', 'asc'),
+                'max_rows' => $request->input('max_rows', 100000),
+                'format'   => $request->input('format', 'gzip'),
+            ]
+        );
+
+        return response()->json([
+            'success'    => true,
+            'job_id'     => $jobId,
+            'format'     => $request->input('format', 'gzip'),
+            'message'    => 'Export iniciado en segundo plano.',
+            'status_url' => "/api/fabric/viewer/export/status/{$jobId}",
+        ], 202);
+    }
+
+    /**
+     * Consulta el estado de un export en progreso.
+     *
+     * GET /api/fabric/viewer/export/status/{jobId}
+     *
+     * Response:
+     * { "status": "pending|processing|completed|failed", "filename": "...", "size": 123456 }
+     */
+    public function exportStatus(string $jobId): JsonResponse
+    {
+        $status = \App\Jobs\FabricExportJob::getStatus($jobId);
+
+        if ($status === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Export no encontrado o expirado.',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => $status,
+        ]);
+    }
+
+    /**
+     * Descarga el archivo Excel de un export completado.
+     *
+     * GET /api/fabric/viewer/export/download/{jobId}
+     *
+     * Response: archivo .xlsx
+     */
+    public function exportDownload(string $jobId): mixed
+    {
+        $status = \App\Jobs\FabricExportJob::getStatus($jobId);
+
+        if ($status === null || ($status['status'] ?? '') !== 'completed') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Export no completado o no encontrado.',
+            ], 404);
+        }
+
+        $path     = $status['path'] ?? null;
+        $filename = $status['filename'] ?? 'export.xlsx';
+        $format   = $status['format'] ?? 'gzip';
+
+        if (!$path || !\Illuminate\Support\Facades\Storage::disk('local')->exists($path)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Archivo no encontrado. Puede haber expirado.',
+            ], 410);
+        }
+
+        $content = \Illuminate\Support\Facades\Storage::disk('local')->get($path);
+
+        // Limpiar después de descargar
+        \App\Jobs\FabricExportJob::cleanup($jobId);
+
+        $contentType = $format === 'gzip'
+            ? 'application/gzip'
+            : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+        return response($content, 200, [
+            'Content-Type'        => $contentType,
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+            'Content-Length'      => strlen($content),
+            'X-Export-Format'     => $format,
             'Cache-Control'       => 'no-store, no-cache',
         ]);
     }

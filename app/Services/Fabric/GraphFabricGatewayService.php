@@ -5,6 +5,7 @@ namespace App\Services\Fabric;
 use App\Models\User;
 use App\Models\UserGrup;
 use App\Models\BiGrupo;
+use App\Services\Fabric\FabricCircuitBreaker;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -25,12 +26,14 @@ class GraphFabricGatewayService
     private string $baseUrl;
     private string $tokenAdmin;
     private int    $timeout;
+    private FabricCircuitBreaker $circuitBreaker;
 
     public function __construct()
     {
-        $this->baseUrl    = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-        $this->tokenAdmin = env('TOKEN_ADMIN', '');
-        $this->timeout    = (int) env('GRAPHQL_TIMEOUT', 15);
+        $this->baseUrl        = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
+        $this->tokenAdmin     = env('TOKEN_ADMIN', '');
+        $this->timeout        = (int) env('GRAPHQL_TIMEOUT', 15);
+        $this->circuitBreaker = new FabricCircuitBreaker();
     }
 
     // =========================================================================
@@ -353,6 +356,15 @@ class GraphFabricGatewayService
             ];
         }
 
+        // Circuit breaker: reject rápido si la API Py no responde
+        if (!$this->circuitBreaker->isAvailable()) {
+            return [
+                'success' => false,
+                'message' => 'Servicio temporalmente no disponible. Reintente en unos segundos.',
+                'code'    => 503,
+            ];
+        }
+
         $limit  = min((int)($options['limit'] ?? 50), 5000);
         $offset = max(0, (int)($options['offset'] ?? 0));
 
@@ -371,6 +383,15 @@ class GraphFabricGatewayService
             ]
         );
 
+        // Cache de queries: misma consulta exacta → respuesta cacheada 30s
+        $cacheKey = 'fabric_qry:' . md5(json_encode($payload));
+        $cacheTtl = (int) env('FABRIC_QUERY_CACHE_TTL', 30);
+
+        $cached = Cache::get($cacheKey);
+        if ($cached !== null) {
+            return $cached;
+        }
+
         $response = $this->post('/api/data/dynamic', $payload);
 
         if ($response === null) {
@@ -380,7 +401,7 @@ class GraphFabricGatewayService
             ];
         }
 
-        return [
+        $result = [
             'success' => true,
             'data'    => $response['items'] ?? $response,
             'meta'    => $response['page_info'] ?? [
@@ -390,20 +411,27 @@ class GraphFabricGatewayService
                 'has_next' => false,
             ],
         ];
+
+        // Solo cachear si hay datos válidos
+        if (!empty($result['data'])) {
+            Cache::put($cacheKey, $result, $cacheTtl);
+        }
+
+        return $result;
     }
 
     /**
-     * Exporta una vista a Excel.
-     * Retorna el contenido binario del archivo .xlsx o null si falla.
+     * Exporta una vista a Excel o NDJSON+Gzip.
      *
      * @param array $options [
      *   'columns'  => string[],
      *   'filters'  => array,
      *   'sort_col' => string,
      *   'sort_dir' => string,
-     *   'max_rows' => int,   // default 100000, max 1048576
+     *   'max_rows' => int,
+     *   'format'   => 'gzip'|'excel' (default: 'gzip' — 10x más rápido)
      * ]
-     * @return array{success: bool, content: ?string, filename: ?string, message: ?string}
+     * @return array{success: bool, content: ?string, filename: ?string, format: string, message: ?string}
      */
     public function exportViewExcel(User $user, string $schema, string $view, array $options = []): array
     {
@@ -417,9 +445,16 @@ class GraphFabricGatewayService
         }
 
         $payload = array_merge(
-            $this->userContextPayload($user),
             [
-                'token'       => $this->tokenAdmin,
+                'token'        => $this->tokenAdmin,
+                'user_context' => $this->userContextPayload($user),  // API Py export espera user_context
+            ],
+            [
+                // También enviar sueltos para compatibilidad con ambos endpoints
+                'grupos'      => $this->getGruposBd($user),
+                'department'  => $this->getDepartamento($user),
+                'user_email'  => $user->email,
+                'user_name'   => $user->name ?? $user->email,
                 'schema_name' => $schema,
                 'view'        => $view,
                 'columns'     => $options['columns'] ?? [],
@@ -427,18 +462,38 @@ class GraphFabricGatewayService
                 'sort_col'    => $options['sort_col'] ?? '',
                 'sort_dir'    => $options['sort_dir'] ?? 'asc',
                 'max_rows'    => min((int)($options['max_rows'] ?? 100000), 1048576),
+                'format'      => $options['format'] ?? 'gzip',
             ]
         );
 
         try {
             $exportTimeout = max($this->timeout, 300);
             $apiKey = env('GRAPHQL_API_KEY', '');
-            $req    = Http::timeout($exportTimeout)->acceptJson();
+            $req    = Http::timeout($exportTimeout)
+                         ->connectTimeout(10)
+                         ->acceptJson();
+
             if ($apiKey !== '') {
                 $req = $req->withHeaders(['X-API-Key' => $apiKey]);
             }
 
-            $response = $req->post($this->baseUrl . '/api/data/export/excel', $payload);
+            // Ambos endpoints requieren el token en el body (ya está en $payload)
+            $format   = $options['format'] ?? 'gzip';
+            $endpoint = $format === 'gzip'
+                ? '/api/data/export/start'
+                : '/api/data/export/excel';
+
+            Log::debug('GraphFabricGateway export payload', [
+                'endpoint' => $endpoint,
+                'token'    => substr($payload['token'] ?? '', 0, 10) . '...',
+                'grupos'   => $payload['grupos'] ?? 'MISSING',
+                'department' => $payload['department'] ?? 'MISSING',
+                'schema'   => $payload['schema_name'] ?? 'MISSING',
+                'view'     => $payload['view'] ?? 'MISSING',
+                'format'   => $payload['format'] ?? 'MISSING',
+            ]);
+
+            $response = $req->post($this->baseUrl . $endpoint, $payload);
 
             if ($response->failed()) {
                 Log::error('GraphFabricGateway export error', [
@@ -456,12 +511,14 @@ class GraphFabricGatewayService
             // Obtener nombre del archivo desde el header si está disponible
             $disposition = $response->header('Content-Disposition') ?? '';
             preg_match('/filename="?([^";]+)"?/', $disposition, $matches);
-            $filename = $matches[1] ?? "{$schema}_{$view}_" . date('Ymd_His') . '.xlsx';
+            $ext      = ($options['format'] ?? 'gzip') === 'gzip' ? '.ndjson.gz' : '.xlsx';
+            $filename = $matches[1] ?? "{$schema}_{$view}_" . date('Ymd_His') . $ext;
 
             return [
                 'success'  => true,
                 'content'  => $response->body(),
                 'filename' => $filename,
+                'format'   => $options['format'] ?? 'gzip',
                 'message'  => null,
             ];
         } catch (\Exception $e) {
@@ -509,9 +566,18 @@ class GraphFabricGatewayService
 
     private function post(string $path, array $body): ?array
     {
+        // Circuit breaker: verificar antes de intentar
+        if (!$this->circuitBreaker->isAvailable()) {
+            Log::warning('GraphFabricGateway: circuit breaker OPEN, request bloqueado', ['path' => $path]);
+            return null;
+        }
+
         try {
             $apiKey = env('GRAPHQL_API_KEY', '');
-            $req    = Http::timeout($this->timeout)->acceptJson();
+            $req    = Http::timeout($this->timeout)
+                         ->connectTimeout(10)  // Fabric puede tardar en responder
+                         ->acceptJson();
+
             if ($apiKey !== '') {
                 $req = $req->withHeaders(['X-API-Key' => $apiKey]);
             }
@@ -522,13 +588,31 @@ class GraphFabricGatewayService
                 Log::error('GraphFabricGateway POST error', [
                     'path'   => $path,
                     'status' => $response->status(),
-                    'body'   => $response->body(),
+                    'body'   => substr($response->body(), 0, 500),
                 ]);
+
+                // 5xx = problema del servidor Py → registrar fallo
+                if ($response->status() >= 500) {
+                    $this->circuitBreaker->recordFailure();
+                }
+
                 return null;
             }
 
+            // Éxito → resetear circuit breaker
+            $this->circuitBreaker->recordSuccess();
+
             return $response->json();
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            // Timeout o conexión rechazada → registrar fallo
+            $this->circuitBreaker->recordFailure();
+            Log::error('GraphFabricGateway connection failed', [
+                'path'  => $path,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
         } catch (\Exception $e) {
+            $this->circuitBreaker->recordFailure();
             Log::error('GraphFabricGateway POST exception', [
                 'path'  => $path,
                 'error' => $e->getMessage(),
