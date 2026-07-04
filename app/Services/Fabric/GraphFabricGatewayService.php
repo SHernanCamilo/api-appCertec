@@ -451,7 +451,7 @@ class GraphFabricGatewayService
             ],
             [
                 // También enviar sueltos para compatibilidad con ambos endpoints
-                'grupos'      => $this->getGruposBd($user),
+                'groups'      => $this->getGruposBd($user),
                 'department'  => $this->getDepartamento($user),
                 'user_email'  => $user->email,
                 'user_name'   => $user->name ?? $user->email,
@@ -486,7 +486,7 @@ class GraphFabricGatewayService
             Log::debug('GraphFabricGateway export payload', [
                 'endpoint' => $endpoint,
                 'token'    => substr($payload['token'] ?? '', 0, 10) . '...',
-                'grupos'   => $payload['grupos'] ?? 'MISSING',
+                'groups'   => $payload['groups'] ?? 'MISSING',
                 'department' => $payload['department'] ?? 'MISSING',
                 'schema'   => $payload['schema_name'] ?? 'MISSING',
                 'view'     => $payload['view'] ?? 'MISSING',
@@ -544,7 +544,7 @@ class GraphFabricGatewayService
     private function userContextPayload(User $user): array
     {
         return [
-            'grupos'      => $this->getGruposBd($user),
+            'groups'      => $this->getGruposBd($user),
             'department'  => $this->getDepartamento($user),
             'user_email'  => $user->email,
             'user_name'   => $user->name ?? $user->email,
