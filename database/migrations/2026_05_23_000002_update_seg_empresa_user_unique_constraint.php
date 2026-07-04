@@ -45,11 +45,12 @@ return new class extends Migration
             );
         });
 
-        // Recrear las FKs
-        Schema::table('seg_empresa_user', function (Blueprint $table) {
-            $table->foreign('user_id')->references('id')->on('users')->onDelete('cascade');
-            $table->foreign('empresa_id')->references('id')->on('ent_empresas')->onDelete('cascade');
-        });
+        // Recrear las FKs — asegurar que las columnas son BIGINT UNSIGNED antes
+        \DB::statement('ALTER TABLE seg_empresa_user MODIFY user_id BIGINT UNSIGNED NOT NULL');
+        \DB::statement('ALTER TABLE seg_empresa_user MODIFY empresa_id BIGINT UNSIGNED NOT NULL');
+
+        \DB::statement('ALTER TABLE seg_empresa_user ADD CONSTRAINT seg_empresa_user_user_id_foreign FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE');
+        \DB::statement('ALTER TABLE seg_empresa_user ADD CONSTRAINT seg_empresa_user_empresa_id_foreign FOREIGN KEY (empresa_id) REFERENCES ent_empresas(id) ON DELETE CASCADE');
     }
 
     /**
