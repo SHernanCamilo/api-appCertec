@@ -4,8 +4,11 @@ namespace App\Services\Fabric;
 
 use App\Models\User;
 use App\Models\UserGrup;
+use App\Models\BiGrupo;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Gateway genérico hacia la API Python Graph-Fabric.
@@ -15,10 +18,7 @@ use Illuminate\Support\Facades\Log;
  *   - Leer el departamento del usuario desde users_grups
  *   - Actuar como proxy seguro: validar que el usuario tiene acceso
  *     al esquema solicitado antes de reenviar la solicitud a la API Py
- *   - Reenviar solicitudes a la API Python usando TOKEN_ADMIN
- *
- * La API Python controla el filtrado por sede/sufijo internamente.
- * Laravel solo valida que el esquema solicitado esté en los grupos del usuario.
+ *   - Reenviar solicitudes a la API Python con TOKEN_ADMIN + contexto del usuario
  */
 class GraphFabricGatewayService
 {
@@ -92,8 +92,114 @@ class GraphFabricGatewayService
     }
 
     /**
-     * Verifica si el usuario tiene acceso a un esquema específico.
+     * Esquemas permitidos del usuario con nombre desde bi_grupos.
+     *
+     * @return array<int, array{schema: string, codigo: string, nombre: string}>
      */
+    public function getEsquemasCatalogoUsuario(User $user): array
+    {
+        $catalogo = $this->getCatalogoGrupos();
+        $result   = [];
+
+        foreach ($this->getGruposBd($user) as $grupoCodigo) {
+            $schema = $this->extractSchema($grupoCodigo);
+            if ($schema === '' || $schema === 'admin') {
+                continue;
+            }
+
+            $meta = $catalogo[strtoupper($grupoCodigo)] ?? null;
+
+            $result[] = [
+                'schema' => $schema,
+                'codigo' => $grupoCodigo,
+                'nombre' => $meta['descripcion'] ?? strtoupper($schema),
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Retorna metadatos del catálogo bi_grupos indexados por código.
+     *
+     * @return array<string, array{codigo: string, tipo: int, descripcion: ?string}>
+     */
+    public function getCatalogoGrupos(): array
+    {
+        if (!Schema::hasTable('bi_grupos')) {
+            return [];
+        }
+
+        return BiGrupo::query()
+            ->get(['codigo', 'tipo', 'descripcion'])
+            ->keyBy(fn (BiGrupo $g) => strtoupper($g->codigo))
+            ->map(fn (BiGrupo $g) => [
+                'codigo'      => $g->codigo,
+                'tipo'        => $g->tipo,
+                'descripcion' => $g->descripcion,
+            ])
+            ->all();
+    }
+
+    /**
+     * Enriquece la respuesta de vistas con labels del catálogo bi_grupos.
+     */
+    private function enrichViewsResponse(array $response, User $user): array
+    {
+        $catalogo = $this->getCatalogoGrupos();
+        $grupos   = $this->getGruposBd($user);
+
+        if (!isset($response['schemas']) || !is_array($response['schemas'])) {
+            return $response;
+        }
+
+        foreach ($response['schemas'] as &$schemaBlock) {
+            $schemaCode = strtoupper($schemaBlock['schema'] ?? '');
+            $grupoCode  = 'GG-BD-' . $schemaCode;
+            $meta       = $catalogo[$grupoCode] ?? null;
+
+            if ($meta) {
+                $schemaBlock['display'] = $meta['descripcion'];
+            }
+        }
+        unset($schemaBlock);
+
+        $response['grupos_catalogo'] = array_values(array_filter(
+            array_map(fn ($g) => $catalogo[strtoupper($g)] ?? null, $grupos)
+        ));
+
+        return $response;
+    }
+
+    /**
+     * Filtra los esquemas devueltos por Python según los grupos GG-BD-* del usuario.
+     * Evita mostrar esquemas (ej. ca, co) si Python respondió como admin nacional.
+     */
+    private function filterViewsByUserSchemas(array $response, User $user): array
+    {
+        $allowed = $this->getEsquemasPermitidos($user);
+
+        if (empty($allowed) || !isset($response['schemas']) || !is_array($response['schemas'])) {
+            return $response;
+        }
+
+        $allowedLower = array_map('strtolower', $allowed);
+
+        $response['schemas'] = array_values(array_filter(
+            $response['schemas'],
+            fn ($block) => in_array(strtolower($block['schema'] ?? ''), $allowedLower, true)
+        ));
+
+        $response['total_schemas'] = count($response['schemas']);
+        $response['total_views']   = array_sum(
+            array_map(fn ($block) => (int) ($block['view_count'] ?? count($block['views'] ?? [])), $response['schemas'])
+        );
+        $response['schemas_allowed'] = $allowed;
+        $response['user']              = $user->email;
+
+        return $response;
+    }
+
     public function tieneAccesoEsquema(User $user, string $schema): bool
     {
         $esquemas = $this->getEsquemasPermitidos($user);
@@ -106,15 +212,15 @@ class GraphFabricGatewayService
 
     /**
      * Obtiene las vistas de Fabric que el usuario puede ver.
-     * Envía los grupos GG-BD-* y el departamento a la API Python.
+     * Si $schema está definido, consulta solo ese esquema (mucho más rápido).
      *
      * POST /api/catalog/views en la API Py
      *
      * @return array
      */
-    public function getViewsForUser(User $user): array
+    public function getViewsForUser(User $user, ?string $schema = null, bool $forceRefresh = false): array
     {
-        $grupos      = $this->getGruposBd($user);
+        $grupos       = $this->getGruposBd($user);
         $departamento = $this->getDepartamento($user);
 
         if (empty($grupos)) {
@@ -125,11 +231,45 @@ class GraphFabricGatewayService
             ];
         }
 
-        $response = $this->post('/api/catalog/views', [
-            'token'      => $this->tokenAdmin,
-            'grupos'     => $grupos,
-            'department' => $departamento,
-        ]);
+        if ($schema !== null && !$this->tieneAccesoEsquema($user, $schema)) {
+            return [
+                'success' => false,
+                'message' => "Sin acceso al esquema '{$schema}'.",
+                'code'    => 403,
+                'data'    => [],
+            ];
+        }
+
+        $schemaKey = $schema ? strtolower($schema) : 'all';
+        $cacheKey  = sprintf(
+            'fabric_views:%d:%s:%s',
+            $user->id,
+            $schemaKey,
+            md5(($departamento ?? '') . implode(',', $grupos))
+        );
+
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
+        $response = Cache::get($cacheKey);
+
+        if ($response === null) {
+            $payload = array_merge(
+                $this->userContextPayload($user),
+                ['token' => $this->tokenAdmin]
+            );
+
+            if ($schema !== null) {
+                $payload['schema_name'] = strtolower($schema);
+            }
+
+            $response = $this->post('/api/catalog/views', $payload);
+
+            if ($response !== null) {
+                Cache::put($cacheKey, $response, 300);
+            }
+        }
 
         if ($response === null) {
             return [
@@ -140,11 +280,15 @@ class GraphFabricGatewayService
         }
 
         return [
-            'success'     => true,
-            'data'        => $response,
-            'grupos'      => $grupos,
-            'esquemas'    => $this->getEsquemasPermitidos($user),
-            'departamento' => $departamento,
+            'success'           => true,
+            'data'              => $this->filterViewsByUserSchemas(
+                $this->enrichViewsResponse($response, $user),
+                $user
+            ),
+            'grupos'            => $grupos,
+            'esquemas'          => $this->getEsquemasPermitidos($user),
+            'esquemas_catalogo' => $this->getEsquemasCatalogoUsuario($user),
+            'departamento'      => $departamento,
         ];
     }
 
@@ -164,11 +308,14 @@ class GraphFabricGatewayService
             ];
         }
 
-        $response = $this->post('/api/catalog/columns', [
-            'token'       => $this->tokenAdmin,
-            'schema_name' => $schema,
-            'view_name'   => $viewName,
-        ]);
+        $response = $this->post('/api/catalog/columns', array_merge(
+            $this->userContextPayload($user),
+            [
+                'token'       => $this->tokenAdmin,
+                'schema_name' => $schema,
+                'view_name'   => $viewName,
+            ]
+        ));
 
         if ($response === null) {
             return [
@@ -209,17 +356,20 @@ class GraphFabricGatewayService
         $limit  = min((int)($options['limit'] ?? 50), 5000);
         $offset = max(0, (int)($options['offset'] ?? 0));
 
-        $payload = [
-            'token'       => $this->tokenAdmin,
-            'schema_name' => $schema,
-            'view'        => $view,
-            'columns'     => $options['columns'] ?? [],
-            'filters'     => $options['filters'] ?? [],
-            'limit'       => $limit,
-            'offset'      => $offset,
-            'sort_col'    => $options['sort_col'] ?? '',
-            'sort_dir'    => $options['sort_dir'] ?? 'asc',
-        ];
+        $payload = array_merge(
+            $this->userContextPayload($user),
+            [
+                'token'       => $this->tokenAdmin,
+                'schema_name' => $schema,
+                'view'        => $view,
+                'columns'     => $options['columns'] ?? [],
+                'filters'     => $this->normalizeFilters($options['filters'] ?? []),
+                'limit'       => $limit,
+                'offset'      => $offset,
+                'sort_col'    => $options['sort_col'] ?? '',
+                'sort_dir'    => $options['sort_dir'] ?? 'asc',
+            ]
+        );
 
         $response = $this->post('/api/data/dynamic', $payload);
 
@@ -266,20 +416,24 @@ class GraphFabricGatewayService
             ];
         }
 
-        $payload = [
-            'token'       => $this->tokenAdmin,
-            'schema_name' => $schema,
-            'view'        => $view,
-            'columns'     => $options['columns'] ?? [],
-            'filters'     => $options['filters'] ?? [],
-            'sort_col'    => $options['sort_col'] ?? '',
-            'sort_dir'    => $options['sort_dir'] ?? 'asc',
-            'max_rows'    => min((int)($options['max_rows'] ?? 100000), 1048576),
-        ];
+        $payload = array_merge(
+            $this->userContextPayload($user),
+            [
+                'token'       => $this->tokenAdmin,
+                'schema_name' => $schema,
+                'view'        => $view,
+                'columns'     => $options['columns'] ?? [],
+                'filters'     => $this->normalizeFilters($options['filters'] ?? []),
+                'sort_col'    => $options['sort_col'] ?? '',
+                'sort_dir'    => $options['sort_dir'] ?? 'asc',
+                'max_rows'    => min((int)($options['max_rows'] ?? 100000), 1048576),
+            ]
+        );
 
         try {
+            $exportTimeout = max($this->timeout, 300);
             $apiKey = env('GRAPHQL_API_KEY', '');
-            $req    = Http::timeout($this->timeout)->acceptJson();
+            $req    = Http::timeout($exportTimeout)->acceptJson();
             if ($apiKey !== '') {
                 $req = $req->withHeaders(['X-API-Key' => $apiKey]);
             }
@@ -323,6 +477,35 @@ class GraphFabricGatewayService
     // =========================================================================
     // HTTP HELPERS
     // =========================================================================
+
+    /**
+     * Contexto del usuario autenticado para Graph-Fabric.
+     * Con TOKEN_ADMIN, Python usa estos datos en lugar del perfil admin hardcodeado.
+     *
+     * @return array{grupos: string[], department: ?string, user_email: string, user_name: string}
+     */
+    private function userContextPayload(User $user): array
+    {
+        return [
+            'grupos'      => $this->getGruposBd($user),
+            'department'  => $this->getDepartamento($user),
+            'user_email'  => $user->email,
+            'user_name'   => $user->name ?? $user->email,
+        ];
+    }
+
+    /**
+     * La API Python (FastAPI) exige filters como dict {}.
+     * Un array vacío [] en PHP se serializa como [] y provoca HTTP 422.
+     */
+    private function normalizeFilters(mixed $filters): object|array
+    {
+        if (!is_array($filters) || $filters === [] || array_is_list($filters)) {
+            return new \stdClass();
+        }
+
+        return $filters;
+    }
 
     private function post(string $path, array $body): ?array
     {

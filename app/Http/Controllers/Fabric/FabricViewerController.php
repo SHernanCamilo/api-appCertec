@@ -52,16 +52,24 @@ class FabricViewerController extends Controller
      */
     public function views(Request $request): JsonResponse
     {
-        $user = auth()->user();
+        $request->validate([
+            'schema_name' => 'nullable|string|max:20|alpha_dash',
+            'refresh'     => 'nullable|boolean',
+        ]);
 
-        $result = $this->gateway->getViewsForUser($user);
+        $user         = auth()->user();
+        $schema       = $request->input('schema_name');
+        $forceRefresh = $request->boolean('refresh');
+
+        $result = $this->gateway->getViewsForUser($user, $schema, $forceRefresh);
 
         if (!$result['success']) {
+            $code = $result['code'] ?? 200;
             return response()->json([
                 'success' => false,
                 'message' => $result['message'] ?? 'Error obteniendo vistas.',
                 'data'    => [],
-            ], 403);
+            ], $code === 403 ? 403 : 200);
         }
 
         return response()->json($result);
@@ -267,11 +275,13 @@ class FabricViewerController extends Controller
         $user = auth()->user();
 
         return response()->json([
-            'success'      => true,
-            'user'         => $user->email,
-            'grupos'       => $this->gateway->getGruposBd($user),
-            'esquemas'     => $this->gateway->getEsquemasPermitidos($user),
-            'departamento' => $this->gateway->getDepartamento($user),
+            'success'           => true,
+            'user'              => $user->email,
+            'grupos'            => $this->gateway->getGruposBd($user),
+            'esquemas'          => $this->gateway->getEsquemasPermitidos($user),
+            'esquemas_catalogo' => $this->gateway->getEsquemasCatalogoUsuario($user),
+            'departamento'      => $this->gateway->getDepartamento($user),
+            'catalogo'          => array_values($this->gateway->getCatalogoGrupos()),
         ]);
     }
 }
