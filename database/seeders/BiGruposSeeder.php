@@ -8,22 +8,33 @@ use Illuminate\Database\Seeder;
 class BiGruposSeeder extends Seeder
 {
     /**
-     * Catálogo de grupos Azure AD → esquemas Fabric.
-     * tipo 1 = acceso a esquema (GG-BD-*)
+     * Catálogo esquema Fabric → tipo de reporte.
+     * Códigos cortos (AA, CO…) — users_grups usa GG-BD-{codigo}.
+     *
+     * tipo 1 = asistenciales · 2 = financieros · 3 = administrativos
      */
     public function run(): void
     {
         $grupos = [
-            ['codigo' => 'GG-BD-IN', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'IN — Inventario'],
-            ['codigo' => 'GG-BD-CO', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'CO — Contabilidad'],
-            ['codigo' => 'GG-BD-DF', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'DF — Dirección Financiera'],
-            ['codigo' => 'GG-BD-AA', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'AA — Asistencial/Agendas médicas'],
-            ['codigo' => 'GG-BD-RA', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'RA — Radiología'],
-            ['codigo' => 'GG-BD-TH', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'TH — Talento Humano'],
-            ['codigo' => 'GG-BD-AU', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'AU — Auditoría'],
-            ['codigo' => 'GG-BD-QX', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'QX — Cirugías / Quirófanos'],
-            ['codigo' => 'GG-BD-HG', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'HG — Historias Clínicas'],
-            ['codigo' => 'GG-BD-CA', 'tipo' => BiGrupo::TIPO_ESQUEMA, 'descripcion' => 'CA — Cartera'],
+            ['codigo' => 'AA', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'AA — Atención Ambulatoria'],
+            ['codigo' => 'CA', 'tipo' => BiGrupo::TIPO_FINANCIERO, 'descripcion' => 'CA — Cartera'],
+            ['codigo' => 'CO', 'tipo' => BiGrupo::TIPO_FINANCIERO, 'descripcion' => 'CO — Contabilidad'],
+            ['codigo' => 'CP', 'tipo' => BiGrupo::TIPO_FINANCIERO, 'descripcion' => 'CP — Costos y Presupuestos'],
+            ['codigo' => 'DC', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'DC — Datos Comunes'],
+            ['codigo' => 'DF', 'tipo' => BiGrupo::TIPO_FINANCIERO, 'descripcion' => 'DF — Dirección Financiera'],
+            ['codigo' => 'DT', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'DT — Apoyo Diagnóstico y Terapéutico'],
+            ['codigo' => 'EX', 'tipo' => BiGrupo::TIPO_ADMINISTRATIVO, 'descripcion' => 'EX — Expedientes'],
+            ['codigo' => 'FR', 'tipo' => BiGrupo::TIPO_FINANCIERO, 'descripcion' => 'FR — Facturación y Radicación'],
+            ['codigo' => 'GD', 'tipo' => BiGrupo::TIPO_FINANCIERO, 'descripcion' => 'GD — Glosas y Devolución'],
+            ['codigo' => 'HG', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'HG — Historias Clínicas'],
+            ['codigo' => 'IN', 'tipo' => BiGrupo::TIPO_ADMINISTRATIVO, 'descripcion' => 'IN — Inventarios'],
+            ['codigo' => 'NO', 'tipo' => BiGrupo::TIPO_FINANCIERO, 'descripcion' => 'NO — Nómina'],
+            ['codigo' => 'PC', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'PC — Promoción y Prevención'],
+            ['codigo' => 'PT', 'tipo' => BiGrupo::TIPO_ADMINISTRATIVO, 'descripcion' => 'PT — Pagos y Tesorería'],
+            ['codigo' => 'QX', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'QX — Cirugías / Quirófanos'],
+            ['codigo' => 'RA', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'RA — Radiología'],
+            ['codigo' => 'RF', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'RF — Referencia y Contrarreferencia'],
+            ['codigo' => 'UG', 'tipo' => BiGrupo::TIPO_ASISTENCIAL, 'descripcion' => 'UG — Urgencias'],
         ];
 
         foreach ($grupos as $grupo) {

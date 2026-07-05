@@ -4,13 +4,17 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Modulo;
+use App\Services\SidebarService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 
 class ModuloController extends Controller
 {
+    public function __construct(
+        private SidebarService $sidebarService
+    ) {}
     /**
-     * Listar todos los módulos con estructura jerárquica
+     * Listar todos los m?dulos con estructura jer?rquica
      */
     public function index(Request $request)
     {
@@ -35,19 +39,19 @@ class ModuloController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al obtener módulos',
+                'message' => 'Error al obtener m?dulos',
                 'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Obtener estructura de árbol completa
+     * Obtener estructura de ?rbol completa
      */
     public function tree()
     {
         try {
-            // Cargar módulos raíz con todos sus hijos recursivamente
+            // Cargar m?dulos ra?z con todos sus hijos recursivamente
             $modulos = Modulo::raiz()
                 ->activos()
                 ->with(['hijos' => function($query) {
@@ -69,14 +73,14 @@ class ModuloController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al obtener árbol de módulos',
+                'message' => 'Error al obtener ?rbol de m?dulos',
                 'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Crear un nuevo módulo
+     * Crear un nuevo m?dulo
      */
     public function store(Request $request)
     {
@@ -95,14 +99,14 @@ class ModuloController extends Controller
             if ($validator->fails()) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Errores de validación',
+                    'message' => 'Errores de validaci?n',
                     'errors' => $validator->errors()
                 ], 422);
             }
 
             $data = $validator->validated();
 
-            // Calcular nivel automáticamente
+            // Calcular nivel autom?ticamente
             if (isset($data['id_modulo_padre'])) {
                 $padre = Modulo::find($data['id_modulo_padre']);
                 $data['nivel'] = $padre->nivel + 1;
@@ -112,22 +116,24 @@ class ModuloController extends Controller
 
             $modulo = Modulo::create($data);
 
+            $this->sidebarService->invalidateAllSidebarCache();
+
             return response()->json([
                 'success' => true,
-                'message' => 'Módulo creado exitosamente',
+                'message' => 'M?dulo creado exitosamente',
                 'data' => $modulo
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al crear módulo',
+                'message' => 'Error al crear m?dulo',
                 'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Mostrar un módulo específico
+     * Mostrar un m?dulo espec?fico
      */
     public function show($id)
     {
@@ -141,14 +147,14 @@ class ModuloController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Módulo no encontrado',
+                'message' => 'M?dulo no encontrado',
                 'error' => $e->getMessage()
             ], 404);
         }
     }
 
     /**
-     * Actualizar un módulo
+     * Actualizar un m?dulo
      */
     public function update(Request $request, $id)
     {
@@ -169,14 +175,14 @@ class ModuloController extends Controller
             if ($validator->fails()) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Errores de validación',
+                    'message' => 'Errores de validaci?n',
                     'errors' => $validator->errors()
                 ], 422);
             }
 
             $data = $validator->validated();
 
-            // Recalcular nivel si cambió el padre
+            // Recalcular nivel si cambi? el padre
             if (isset($data['id_modulo_padre'])) {
                 if ($data['id_modulo_padre']) {
                     $padre = Modulo::find($data['id_modulo_padre']);
@@ -188,22 +194,24 @@ class ModuloController extends Controller
 
             $modulo->update($data);
 
+            $this->sidebarService->invalidateAllSidebarCache();
+
             return response()->json([
                 'success' => true,
-                'message' => 'Módulo actualizado exitosamente',
+                'message' => 'M?dulo actualizado exitosamente',
                 'data' => $modulo
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al actualizar módulo',
+                'message' => 'Error al actualizar m?dulo',
                 'error' => $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Eliminar un módulo
+     * Eliminar un m?dulo
      */
     public function destroy($id)
     {
@@ -214,20 +222,22 @@ class ModuloController extends Controller
             if ($modulo->hijos()->count() > 0) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'No se puede eliminar un módulo que tiene submódulos'
+                    'message' => 'No se puede eliminar un m?dulo que tiene subm?dulos'
                 ], 400);
             }
 
             $modulo->delete();
 
+            $this->sidebarService->invalidateAllSidebarCache();
+
             return response()->json([
                 'success' => true,
-                'message' => 'Módulo eliminado exitosamente'
+                'message' => 'M?dulo eliminado exitosamente'
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al eliminar módulo',
+                'message' => 'Error al eliminar m?dulo',
                 'error' => $e->getMessage()
             ], 500);
         }

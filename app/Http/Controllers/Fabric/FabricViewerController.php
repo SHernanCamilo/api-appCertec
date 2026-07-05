@@ -55,13 +55,15 @@ class FabricViewerController extends Controller
         $request->validate([
             'schema_name' => 'nullable|string|max:20|alpha_dash',
             'refresh'     => 'nullable|boolean',
+            'tipo'        => 'nullable|integer|in:1,2,3',
         ]);
 
         $user         = auth()->user();
         $schema       = $request->input('schema_name');
         $forceRefresh = $request->boolean('refresh');
+        $tipo         = $request->filled('tipo') ? (int) $request->input('tipo') : null;
 
-        $result = $this->gateway->getViewsForUser($user, $schema, $forceRefresh);
+        $result = $this->gateway->getViewsForUser($user, $schema, $forceRefresh, $tipo);
 
         if (!$result['success']) {
             $code = $result['code'] ?? 200;
@@ -387,18 +389,24 @@ class FabricViewerController extends Controller
      *
      * GET /api/fabric/viewer/context
      */
-    public function context(): JsonResponse
+    public function context(\Illuminate\Http\Request $request): JsonResponse
     {
+        $request->validate([
+            'tipo' => 'nullable|integer|in:1,2,3',
+        ]);
+
         $user = auth()->user();
+        $tipo = $request->filled('tipo') ? (int) $request->query('tipo') : null;
 
         return response()->json([
             'success'           => true,
             'user'              => $user->email,
-            'grupos'            => $this->gateway->getGruposBd($user),
-            'esquemas'          => $this->gateway->getEsquemasPermitidos($user),
-            'esquemas_catalogo' => $this->gateway->getEsquemasCatalogoUsuario($user),
+            'grupos'            => $this->gateway->getGruposBd($user, $tipo),
+            'esquemas'          => $this->gateway->getEsquemasPermitidos($user, $tipo),
+            'esquemas_catalogo' => $this->gateway->getEsquemasCatalogoUsuario($user, $tipo),
             'departamento'      => $this->gateway->getDepartamento($user),
             'catalogo'          => array_values($this->gateway->getCatalogoGrupos()),
+            'tipo'              => $tipo,
         ]);
     }
 }

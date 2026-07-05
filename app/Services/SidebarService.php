@@ -14,7 +14,8 @@ class SidebarService
 
     public function getSidebarModules(User $user): array
     {
-        $cacheKey = "sidebar_user_{$user->id}";
+        $version  = (int) Cache::get('sidebar_cache_version', 1);
+        $cacheKey = "sidebar_user_{$user->id}_v{$version}";
 
         return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($user) {
             return $this->buildSidebar($user);
@@ -26,7 +27,16 @@ class SidebarService
      */
     public function clearCache(User $user): void
     {
-        Cache::forget("sidebar_user_{$user->id}");
+        $version = (int) Cache::get('sidebar_cache_version', 1);
+        Cache::forget("sidebar_user_{$user->id}_v{$version}");
+    }
+
+    /**
+     * Invalida el sidebar de todos los usuarios (llamar al cambiar módulos del menú)
+     */
+    public function invalidateAllSidebarCache(): void
+    {
+        Cache::increment('sidebar_cache_version');
     }
 
     private function buildSidebar(User $user): array

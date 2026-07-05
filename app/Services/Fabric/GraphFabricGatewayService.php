@@ -32,7 +32,7 @@ class GraphFabricGatewayService
     {
         $this->baseUrl        = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $this->tokenAdmin     = env('TOKEN_ADMIN', '');
-        $this->timeout        = (int) env('GRAPHQL_TIMEOUT', 15);
+        $this->timeout        = (int) env('GRAPHQL_TIMEOUT', 500);
         $this->circuitBreaker = new FabricCircuitBreaker();
     }
 
@@ -46,14 +46,61 @@ class GraphFabricGatewayService
      *
      * @return string[]
      */
-    public function getGruposBd(User $user): array
+    public function getGruposBd(User $user, ?int $tipo = null): array
     {
-        return UserGrup::where('id_user', $user->id)
+        $grupos = UserGrup::where('id_user', $user->id)
             ->where('tipo', UserGrup::TIPO_VISTA_BD)
             ->pluck('permiso')
             ->filter(fn ($g) => str_starts_with(strtoupper($g), 'GG-BD-'))
             ->values()
             ->all();
+
+        if ($tipo === null) {
+            return $grupos;
+        }
+
+        $catalogo = $this->getCatalogoGrupos();
+
+        return array_values(array_filter(
+            $grupos,
+            fn ($g) => $this->resolveGrupoTipo($g, $catalogo) === $tipo
+        ));
+    }
+
+    /**
+     * Busca metadatos del catálogo por código GG-BD-* o esquema corto (AA, CO…).
+     *
+     * @param  array<string, array{codigo: string, tipo: int, descripcion: ?string}>  $catalogo
+     * @return array{codigo: string, tipo: int, descripcion: ?string}|null
+     */
+    private function resolveGrupoCatalogo(string $grupo, array $catalogo): ?array
+    {
+        $upper = strtoupper(trim($grupo));
+
+        if (isset($catalogo[$upper])) {
+            return $catalogo[$upper];
+        }
+
+        $schema = strtoupper($this->extractSchema($upper));
+        if ($schema !== '') {
+            if (isset($catalogo[$schema])) {
+                return $catalogo[$schema];
+            }
+            $prefixed = 'GG-BD-' . $schema;
+            if (isset($catalogo[$prefixed])) {
+                return $catalogo[$prefixed];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, array{codigo: string, tipo: int, descripcion: ?string}>  $catalogo
+     */
+    private function resolveGrupoTipo(string $grupo, array $catalogo): ?int
+    {
+        return $this->resolveGrupoCatalogo($grupo, $catalogo)['tipo'] ?? null;
     }
 
     /**
@@ -84,9 +131,9 @@ class GraphFabricGatewayService
      *
      * @return string[]
      */
-    public function getEsquemasPermitidos(User $user): array
+    public function getEsquemasPermitidos(User $user, ?int $tipo = null): array
     {
-        return collect($this->getGruposBd($user))
+        return collect($this->getGruposBd($user, $tipo))
             ->map(fn ($g) => $this->extractSchema($g))
             ->filter()
             ->unique()
@@ -97,25 +144,29 @@ class GraphFabricGatewayService
     /**
      * Esquemas permitidos del usuario con nombre desde bi_grupos.
      *
-     * @return array<int, array{schema: string, codigo: string, nombre: string}>
+     * @return array<int, array{schema: string, codigo: string, nombre: string, tipo: ?int}>
      */
-    public function getEsquemasCatalogoUsuario(User $user): array
+    public function getEsquemasCatalogoUsuario(User $user, ?int $tipo = null): array
     {
         $catalogo = $this->getCatalogoGrupos();
         $result   = [];
 
-        foreach ($this->getGruposBd($user) as $grupoCodigo) {
+        foreach ($this->getGruposBd($user, $tipo) as $grupoCodigo) {
             $schema = $this->extractSchema($grupoCodigo);
             if ($schema === '' || $schema === 'admin') {
                 continue;
             }
 
             $meta = $catalogo[strtoupper($grupoCodigo)] ?? null;
+            if ($meta === null) {
+                $meta = $this->resolveGrupoCatalogo($grupoCodigo, $catalogo);
+            }
 
             $result[] = [
                 'schema' => $schema,
                 'codigo' => $grupoCodigo,
                 'nombre' => $meta['descripcion'] ?? strtoupper($schema),
+                'tipo'   => $meta['tipo'] ?? null,
             ];
         }
 
@@ -133,24 +184,39 @@ class GraphFabricGatewayService
             return [];
         }
 
-        return BiGrupo::query()
-            ->get(['codigo', 'tipo', 'descripcion'])
-            ->keyBy(fn (BiGrupo $g) => strtoupper($g->codigo))
-            ->map(fn (BiGrupo $g) => [
-                'codigo'      => $g->codigo,
-                'tipo'        => $g->tipo,
-                'descripcion' => $g->descripcion,
-            ])
-            ->all();
+        $index = [];
+
+        foreach (BiGrupo::query()->get(['codigo', 'tipo', 'descripcion']) as $grupo) {
+            $meta = [
+                'codigo'      => $grupo->codigo,
+                'tipo'        => $grupo->tipo,
+                'descripcion' => $grupo->descripcion,
+            ];
+
+            $codigo = strtoupper(trim($grupo->codigo));
+            $index[$codigo] = $meta;
+
+            if (str_starts_with($codigo, 'GG-BD-')) {
+                $schema = strtoupper($this->extractSchema($codigo));
+                if ($schema !== '') {
+                    $index[$schema]           = $meta;
+                    $index['GG-BD-' . $schema] = $meta;
+                }
+            } else {
+                $index['GG-BD-' . $codigo] = $meta;
+            }
+        }
+
+        return $index;
     }
 
     /**
      * Enriquece la respuesta de vistas con labels del catálogo bi_grupos.
      */
-    private function enrichViewsResponse(array $response, User $user): array
+    private function enrichViewsResponse(array $response, User $user, ?int $tipo = null): array
     {
         $catalogo = $this->getCatalogoGrupos();
-        $grupos   = $this->getGruposBd($user);
+        $grupos   = $this->getGruposBd($user, $tipo);
 
         if (!isset($response['schemas']) || !is_array($response['schemas'])) {
             return $response;
@@ -159,7 +225,7 @@ class GraphFabricGatewayService
         foreach ($response['schemas'] as &$schemaBlock) {
             $schemaCode = strtoupper($schemaBlock['schema'] ?? '');
             $grupoCode  = 'GG-BD-' . $schemaCode;
-            $meta       = $catalogo[$grupoCode] ?? null;
+            $meta       = $this->resolveGrupoCatalogo($grupoCode, $catalogo);
 
             if ($meta) {
                 $schemaBlock['display'] = $meta['descripcion'];
@@ -168,7 +234,7 @@ class GraphFabricGatewayService
         unset($schemaBlock);
 
         $response['grupos_catalogo'] = array_values(array_filter(
-            array_map(fn ($g) => $catalogo[strtoupper($g)] ?? null, $grupos)
+            array_map(fn ($g) => $this->resolveGrupoCatalogo($g, $catalogo), $grupos)
         ));
 
         return $response;
@@ -178,9 +244,9 @@ class GraphFabricGatewayService
      * Filtra los esquemas devueltos por Python según los grupos GG-BD-* del usuario.
      * Evita mostrar esquemas (ej. ca, co) si Python respondió como admin nacional.
      */
-    private function filterViewsByUserSchemas(array $response, User $user): array
+    private function filterViewsByUserSchemas(array $response, User $user, ?int $tipo = null): array
     {
-        $allowed = $this->getEsquemasPermitidos($user);
+        $allowed = $this->getEsquemasPermitidos($user, $tipo);
 
         if (empty($allowed) || !isset($response['schemas']) || !is_array($response['schemas'])) {
             return $response;
@@ -203,12 +269,6 @@ class GraphFabricGatewayService
         return $response;
     }
 
-    public function tieneAccesoEsquema(User $user, string $schema): bool
-    {
-        $esquemas = $this->getEsquemasPermitidos($user);
-        return in_array(strtolower($schema), $esquemas, true);
-    }
-
     // =========================================================================
     // ENDPOINTS DE LA API PYTHON
     // =========================================================================
@@ -221,20 +281,24 @@ class GraphFabricGatewayService
      *
      * @return array
      */
-    public function getViewsForUser(User $user, ?string $schema = null, bool $forceRefresh = false): array
+    public function getViewsForUser(User $user, ?string $schema = null, bool $forceRefresh = false, ?int $tipo = null): array
     {
-        $grupos       = $this->getGruposBd($user);
+        $grupos       = $this->getGruposBd($user, $tipo);
         $departamento = $this->getDepartamento($user);
 
         if (empty($grupos)) {
+            $mensaje = $tipo === null
+                ? 'El usuario no tiene grupos GG-BD-* asignados.'
+                : 'El usuario no tiene grupos asignados para este tipo de reporte.';
+
             return [
                 'success' => false,
-                'message' => 'El usuario no tiene grupos GG-BD-* asignados.',
+                'message' => $mensaje,
                 'data'    => [],
             ];
         }
 
-        if ($schema !== null && !$this->tieneAccesoEsquema($user, $schema)) {
+        if ($schema !== null && !$this->tieneAccesoEsquema($user, $schema, $tipo)) {
             return [
                 'success' => false,
                 'message' => "Sin acceso al esquema '{$schema}'.",
@@ -244,10 +308,12 @@ class GraphFabricGatewayService
         }
 
         $schemaKey = $schema ? strtolower($schema) : 'all';
+        $tipoKey   = $tipo ?? 'all';
         $cacheKey  = sprintf(
-            'fabric_views:%d:%s:%s',
+            'fabric_views:%d:%s:%s:%s',
             $user->id,
             $schemaKey,
+            $tipoKey,
             md5(($departamento ?? '') . implode(',', $grupos))
         );
 
@@ -285,14 +351,22 @@ class GraphFabricGatewayService
         return [
             'success'           => true,
             'data'              => $this->filterViewsByUserSchemas(
-                $this->enrichViewsResponse($response, $user),
-                $user
+                $this->enrichViewsResponse($response, $user, $tipo),
+                $user,
+                $tipo
             ),
             'grupos'            => $grupos,
-            'esquemas'          => $this->getEsquemasPermitidos($user),
-            'esquemas_catalogo' => $this->getEsquemasCatalogoUsuario($user),
+            'esquemas'          => $this->getEsquemasPermitidos($user, $tipo),
+            'esquemas_catalogo' => $this->getEsquemasCatalogoUsuario($user, $tipo),
             'departamento'      => $departamento,
+            'tipo'              => $tipo,
         ];
+    }
+
+    public function tieneAccesoEsquema(User $user, string $schema, ?int $tipo = null): bool
+    {
+        $esquemas = $this->getEsquemasPermitidos($user, $tipo);
+        return in_array(strtolower($schema), $esquemas, true);
     }
 
     /**

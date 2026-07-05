@@ -25,7 +25,7 @@ use Symfony\Component\HttpFoundation\Response;
 final class FabricRateLimiter
 {
     private const LIMITS = [
-        'views'   => ['max' => 10, 'decay' => 60],
+        'views'   => ['max' => 30, 'decay' => 60],
         'columns' => ['max' => 20, 'decay' => 60],
         'data'    => ['max' => 30, 'decay' => 60],
         'export'  => ['max' => 3,  'decay' => 60],
