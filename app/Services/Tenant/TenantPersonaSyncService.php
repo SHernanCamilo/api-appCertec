@@ -24,6 +24,14 @@ class TenantPersonaSyncService
         $cedula = trim((string) ($user->numero_identificacion ?? ''));
 
         if ($cedula === '') {
+            $terceroPorEmail = $user->email
+                ? Empleado::where('email', $user->email)->first()
+                : null;
+
+            if ($terceroPorEmail) {
+                return $this->vincularTerceroExistente($terceroPorEmail, $user, $tenantData, $usuarioCreaId);
+            }
+
             return ['accion' => 'omitido', 'motivo' => 'sin_numero_identificacion'];
         }
 
