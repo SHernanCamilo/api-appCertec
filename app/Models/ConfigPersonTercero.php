@@ -30,7 +30,8 @@ class ConfigPersonTercero extends Model
         'estado',
         'caso_glpi',
         'usuario_crea_id',
-        'usuario_actualiza_id'
+        'usuario_actualiza_id',
+        'id_user',
     ];
 
     /**

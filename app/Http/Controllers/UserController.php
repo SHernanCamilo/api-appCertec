@@ -3,13 +3,18 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\Tenant\TenantPersonaSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 
 class UserController extends Controller
 {
+    public function __construct(
+        private TenantPersonaSyncService $tenantPersonaSyncService
+    ) {}
     /**
      * Display a listing of users.
      */
@@ -613,6 +618,7 @@ class UserController extends Controller
             }
 
             $validator = Validator::make($request->all(), [
+                'id_empresa' => 'nullable|integer|exists:ent_empresas,id',
                 'usuarios' => 'required|array|min:1',
                 'usuarios.*.microsoft_id' => 'required|string',
                 'usuarios.*.name' => 'required|string|max:255',
@@ -632,33 +638,58 @@ class UserController extends Controller
             }
 
             $usuariosCreados = [];
+            $tercerosSync = [];
             $errores = [];
+            $idEmpresa = (int) (
+                $request->input('id_empresa')
+                ?? auth()->user()?->empresas()->value('ent_empresas.id')
+                ?? 1
+            );
 
             foreach ($request->usuarios as $userData) {
                 try {
-                    // Generar una contraseña aleatoria (no será usada ya que usan Microsoft Auth)
-                    $randomPassword = \Str::random(16);
-                    
-                    $newUser = User::create([
-                        'name' => $userData['name'],
-                        'email' => $userData['email'],
-                        'password' => Hash::make($randomPassword),
-                        'microsoft_id' => $userData['microsoft_id'],
-                        'auth_type' => 'microsoft',
-                        'cargo' => $userData['job_title'] ?? 'Usuario',
-                        'numero_identificacion' => $userData['office_location'] ?? null,
-                        'direccion' => $userData['postal_address'] ?? null,
-                        'telefono' => $userData['business_phone'] ?? null,
-                        'estado' => true,
-                        'email_verified_at' => now()
-                    ]);
+                    [$newUser, $terceroResult] = DB::transaction(function () use ($userData, $idEmpresa) {
+                        $randomPassword = \Str::random(16);
+
+                        $newUser = User::create([
+                            'name' => $userData['name'],
+                            'email' => $userData['email'],
+                            'password' => Hash::make($randomPassword),
+                            'microsoft_id' => $userData['microsoft_id'],
+                            'auth_type' => 'microsoft',
+                            'cargo' => $userData['job_title'] ?? 'Usuario',
+                            'numero_identificacion' => $userData['office_location'] ?? null,
+                            'direccion' => $userData['postal_address'] ?? null,
+                            'telefono' => $userData['business_phone'] ?? null,
+                            'estado' => true,
+                            'email_verified_at' => now(),
+                        ]);
+
+                        $terceroResult = $this->tenantPersonaSyncService->syncFromUser(
+                            $newUser,
+                            [
+                                'department' => $userData['department'] ?? null,
+                                'job_title'  => $userData['job_title'] ?? null,
+                            ],
+                            $idEmpresa,
+                            auth()->id()
+                        );
+
+                        return [$newUser, $terceroResult];
+                    });
 
                     $usuariosCreados[] = [
                         'id' => $newUser->id,
                         'name' => $newUser->name,
                         'email' => $newUser->email,
-                        'cargo' => $newUser->cargo
+                        'cargo' => $newUser->cargo,
+                        'tercero' => $terceroResult,
                     ];
+
+                    $tercerosSync[] = array_merge(
+                        ['email' => $newUser->email],
+                        $terceroResult
+                    );
 
                 } catch (\Exception $e) {
                     $errores[] = [
@@ -672,6 +703,7 @@ class UserController extends Controller
             \Log::info('Sincronización de usuarios del tenant:', [
                 'sincronizado_por' => auth()->user()->email,
                 'usuarios_creados' => count($usuariosCreados),
+                'terceros_sync' => $tercerosSync,
                 'errores' => count($errores),
                 'usuarios' => array_column($usuariosCreados, 'email')
             ]);
@@ -680,6 +712,7 @@ class UserController extends Controller
                 'message' => 'Sincronización completada',
                 'usuarios_creados' => $usuariosCreados,
                 'total_creados' => count($usuariosCreados),
+                'terceros_sync' => $tercerosSync,
                 'errores' => $errores,
                 'total_errores' => count($errores)
             ]);
