@@ -287,6 +287,11 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('fabric')->group(fu
     require __DIR__ . '/Fabric/FabricRouter.php';
 });
 
+// Rutas de Notificaciones (Interconsultas) → routes/Notificaciones/NotificacionesRouter.php
+Route::middleware(['auth:api', 'check.user.active'])->prefix('notificaciones')->group(function () {
+    require __DIR__ . '/Notificaciones/NotificacionesRouter.php';
+});
+
 // ─── Rutas de Talento Humano - Eventos ───────────────────────────────────────
 Route::middleware(['auth:api', 'check.user.active'])->prefix('talento-humano/eventos')->group(function () {
     require __DIR__ . '/TalentoHumano/EventosRouter.php';

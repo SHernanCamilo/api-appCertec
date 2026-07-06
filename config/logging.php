@@ -125,6 +125,14 @@ return [
             'replace_placeholders' => true,
         ],
 
+        'notificaciones' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/notificaciones.log'),
+            'level' => 'info',
+            'days' => 30,
+            'replace_placeholders' => true,
+        ],
+
         'null' => [
             'driver' => 'monolog',
             'handler' => NullHandler::class,

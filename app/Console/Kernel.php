@@ -2,6 +2,8 @@
 
 namespace App\Console;
 
+use App\Jobs\InterconsultaCheckJob;
+use App\Jobs\PendingEmailsWorkerJob;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 
@@ -21,6 +23,17 @@ class Kernel extends ConsoleKernel
         // Sincronizar festivos el 1° de cada mes a las 02:00 (+ próximo año)
         $schedule->command('festivos:sincronizar --next')
             ->monthlyOn(1, '02:00')
+            ->withoutOverlapping();
+
+        // ── Notificaciones de Interconsultas ─────────────────────────────────
+        // Consulta Fabric y envía emails de nuevas interconsultas cada 5 min
+        $schedule->job(new InterconsultaCheckJob)
+            ->everyFiveMinutes()
+            ->withoutOverlapping();
+
+        // Resuelve emails pendientes (DELIVERED/EXPIRED) cada 5 min
+        $schedule->job(new PendingEmailsWorkerJob)
+            ->everyFiveMinutes()
             ->withoutOverlapping();
     }
 

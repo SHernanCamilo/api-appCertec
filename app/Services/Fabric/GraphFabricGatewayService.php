@@ -606,6 +606,57 @@ class GraphFabricGatewayService
     }
 
     // =========================================================================
+    // CONSULTA COMO SISTEMA (JOBS INTERNOS)
+    // =========================================================================
+
+    /**
+     * Consulta directa como sistema (sin validar usuario).
+     * Usado por Jobs internos que necesitan datos de Fabric sin un request HTTP.
+     *
+     * @param string $schema Esquema de la vista (ej: 'ex')
+     * @param string $view   Nombre de la vista
+     * @param array  $options Opciones: columns, filters, limit, offset, sort_col, sort_dir
+     * @return array{success: bool, data: array, meta?: array, message?: string}
+     */
+    public function queryAsSystem(string $schema, string $view, array $options = []): array
+    {
+        $limit  = min((int)($options['limit'] ?? 500), 5000);
+        $offset = max(0, (int)($options['offset'] ?? 0));
+
+        $payload = [
+            'token'       => $this->tokenAdmin,
+            'groups'      => ['GG-BD-' . strtoupper($schema), 'GG-BD-ADMIN'],
+            'department'  => 'NAL-TIC NAL',  // NAL = Nacional, sin filtro de sede
+            'user_email'  => env('NOTIF_ADMIN_EMAIL', 'sistema@medilaser.com.co'),
+            'user_name'   => 'Sistema Notificaciones',
+            'schema_name' => $schema,
+            'view'        => $view,
+            'columns'     => $options['columns'] ?? [],
+            'filters'     => $this->normalizeFilters($options['filters'] ?? []),
+            'limit'       => $limit,
+            'offset'      => $offset,
+            'sort_col'    => $options['sort_col'] ?? '',
+            'sort_dir'    => $options['sort_dir'] ?? 'asc',
+        ];
+
+        if (!$this->circuitBreaker->isAvailable()) {
+            return ['success' => false, 'message' => 'Circuit breaker OPEN', 'data' => []];
+        }
+
+        $response = $this->post('/api/data/dynamic', $payload);
+
+        if ($response === null) {
+            return ['success' => false, 'message' => 'Error conectando a Graph-Fabric', 'data' => []];
+        }
+
+        return [
+            'success' => true,
+            'data'    => $response['items'] ?? [],
+            'meta'    => $response['page_info'] ?? ['total' => 0],
+        ];
+    }
+
+    // =========================================================================
     // HTTP HELPERS
     // =========================================================================
 
