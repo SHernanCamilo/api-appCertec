@@ -553,9 +553,9 @@ class GraphFabricGatewayService
 
             // Ambos endpoints requieren el token en el body (ya está en $payload)
             $format   = $options['format'] ?? 'gzip';
-            $endpoint = $format === 'gzip'
-                ? '/api/data/export/start'
-                : '/api/data/export/excel';
+            // Ambos formatos usan /api/data/export/excel — el campo 'format' en el body
+            // le indica a la API Py si devolver gzip o xlsx
+            $endpoint = '/api/data/export/excel';
 
             Log::debug('GraphFabricGateway export payload', [
                 'endpoint' => $endpoint,
