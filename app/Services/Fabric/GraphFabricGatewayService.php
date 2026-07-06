@@ -679,11 +679,36 @@ class GraphFabricGatewayService
     /**
      * La API Python (FastAPI) exige filters como dict {}.
      * Un array vacío [] en PHP se serializa como [] y provoca HTTP 422.
+     * También convierte fechas dd/mm/yyyy → yyyy-mm-dd para SQL Server.
      */
     private function normalizeFilters(mixed $filters): object|array
     {
         if (!is_array($filters) || $filters === [] || array_is_list($filters)) {
             return new \stdClass();
+        }
+
+        // Convertir fechas al formato ISO que SQL Server espera
+        foreach ($filters as $key => $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            // dd/mm/yyyy → yyyy-mm-dd
+            if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $value)) {
+                try {
+                    $filters[$key] = \Carbon\Carbon::createFromFormat('d/m/Y', $value)->format('Y-m-d');
+                } catch (\Exception $e) {
+                    // Dejar el valor original si no se puede parsear
+                }
+            }
+            // dd-mm-yyyy → yyyy-mm-dd
+            elseif (preg_match('/^\d{2}-\d{2}-\d{4}$/', $value)) {
+                try {
+                    $filters[$key] = \Carbon\Carbon::createFromFormat('d-m-Y', $value)->format('Y-m-d');
+                } catch (\Exception $e) {
+                    // Dejar el valor original
+                }
+            }
         }
 
         return $filters;
