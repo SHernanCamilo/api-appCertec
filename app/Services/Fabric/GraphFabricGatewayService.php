@@ -618,6 +618,7 @@ class GraphFabricGatewayService
                 'offset'      => $offset,
                 'sort_col'    => $options['sort_col'] ?? '',
                 'sort_dir'    => $options['sort_dir'] ?? 'asc',
+                'skip_count'  => ($options['skip_count'] ?? false) || $limit > 1000,
             ]
         );
 
@@ -717,9 +718,9 @@ class GraphFabricGatewayService
 
             // Ambos endpoints requieren el token en el body (ya está en $payload)
             $format   = $options['format'] ?? 'gzip';
-            $endpoint = $format === 'gzip'
-                ? '/api/data/export/start'
-                : '/api/data/export/excel';
+            // Ambos formatos usan /api/data/export/excel — el campo 'format' en el body
+            // le indica a la API Py si devolver gzip o xlsx
+            $endpoint = '/api/data/export/excel';
 
             Log::debug('GraphFabricGateway export payload', [
                 'endpoint' => $endpoint,
@@ -770,6 +771,57 @@ class GraphFabricGatewayService
     }
 
     // =========================================================================
+    // CONSULTA COMO SISTEMA (JOBS INTERNOS)
+    // =========================================================================
+
+    /**
+     * Consulta directa como sistema (sin validar usuario).
+     * Usado por Jobs internos que necesitan datos de Fabric sin un request HTTP.
+     *
+     * @param string $schema Esquema de la vista (ej: 'ex')
+     * @param string $view   Nombre de la vista
+     * @param array  $options Opciones: columns, filters, limit, offset, sort_col, sort_dir
+     * @return array{success: bool, data: array, meta?: array, message?: string}
+     */
+    public function queryAsSystem(string $schema, string $view, array $options = []): array
+    {
+        $limit  = min((int)($options['limit'] ?? 500), 5000);
+        $offset = max(0, (int)($options['offset'] ?? 0));
+
+        $payload = [
+            'token'       => $this->tokenAdmin,
+            'groups'      => ['GG-BD-' . strtoupper($schema), 'GG-BD-ADMIN'],
+            'department'  => 'NAL-TIC NAL',  // NAL = Nacional, sin filtro de sede
+            'user_email'  => env('NOTIF_ADMIN_EMAIL', 'sistema@medilaser.com.co'),
+            'user_name'   => 'Sistema Notificaciones',
+            'schema_name' => $schema,
+            'view'        => $view,
+            'columns'     => $options['columns'] ?? [],
+            'filters'     => $this->normalizeFilters($options['filters'] ?? []),
+            'limit'       => $limit,
+            'offset'      => $offset,
+            'sort_col'    => $options['sort_col'] ?? '',
+            'sort_dir'    => $options['sort_dir'] ?? 'asc',
+        ];
+
+        if (!$this->circuitBreaker->isAvailable()) {
+            return ['success' => false, 'message' => 'Circuit breaker OPEN', 'data' => []];
+        }
+
+        $response = $this->post('/api/data/dynamic', $payload);
+
+        if ($response === null) {
+            return ['success' => false, 'message' => 'Error conectando a Graph-Fabric', 'data' => []];
+        }
+
+        return [
+            'success' => true,
+            'data'    => $response['items'] ?? [],
+            'meta'    => $response['page_info'] ?? ['total' => 0],
+        ];
+    }
+
+    // =========================================================================
     // HTTP HELPERS
     // =========================================================================
 
@@ -810,11 +862,36 @@ class GraphFabricGatewayService
     /**
      * La API Python (FastAPI) exige filters como dict {}.
      * Un array vacío [] en PHP se serializa como [] y provoca HTTP 422.
+     * También convierte fechas dd/mm/yyyy → yyyy-mm-dd para SQL Server.
      */
     private function normalizeFilters(mixed $filters): object|array
     {
         if (!is_array($filters) || $filters === [] || array_is_list($filters)) {
             return new \stdClass();
+        }
+
+        // Convertir fechas al formato ISO que SQL Server espera
+        foreach ($filters as $key => $value) {
+            if (!is_string($value)) {
+                continue;
+            }
+
+            // dd/mm/yyyy → yyyy-mm-dd
+            if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $value)) {
+                try {
+                    $filters[$key] = \Carbon\Carbon::createFromFormat('d/m/Y', $value)->format('Y-m-d');
+                } catch (\Exception $e) {
+                    // Dejar el valor original si no se puede parsear
+                }
+            }
+            // dd-mm-yyyy → yyyy-mm-dd
+            elseif (preg_match('/^\d{2}-\d{2}-\d{4}$/', $value)) {
+                try {
+                    $filters[$key] = \Carbon\Carbon::createFromFormat('d-m-Y', $value)->format('Y-m-d');
+                } catch (\Exception $e) {
+                    // Dejar el valor original
+                }
+            }
         }
 
         return $filters;
