@@ -28,6 +28,7 @@ class BiGrupo extends Model
         'codigo',
         'tipo',
         'descripcion',
+        'empresa_id',
         'usuario_crea_id',
         'usuario_modifica_id',
     ];
@@ -35,6 +36,16 @@ class BiGrupo extends Model
     protected $casts = [
         'tipo' => 'integer',
     ];
+
+    public function empresa(): BelongsTo
+    {
+        return $this->belongsTo(Empresa::class, 'empresa_id');
+    }
+
+    public function vistas()
+    {
+        return $this->hasMany(BiVista::class, 'id_bi_grupos')->orderBy('nombre');
+    }
 
     public function usuarioCrea(): BelongsTo
     {

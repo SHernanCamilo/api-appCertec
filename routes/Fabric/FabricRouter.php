@@ -14,6 +14,11 @@ use App\Http\Controllers\Fabric\FabricViewerController;
 Route::middleware(['auth:api'])->group(function () {
 
     // =========================================================================
+    // Parámetros BI — bi_grupos / bi_vistas → routes/Fabric/BiGruposRouter.php
+    // =========================================================================
+    require __DIR__ . '/BiGruposRouter.php';
+
+    // =========================================================================
     // HC Report Viewer — [DT].[VW_HC_ReportViewer]
     // =========================================================================
     Route::get('/hc-report-viewer/columnas', [HcReportViewerController::class, 'columnas']);

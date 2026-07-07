@@ -5,6 +5,7 @@ namespace App\Services\Fabric;
 use App\Models\User;
 use App\Models\UserGrup;
 use App\Models\BiGrupo;
+use App\Models\BiVista;
 use App\Services\Fabric\FabricCircuitBreaker;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -269,6 +270,90 @@ class GraphFabricGatewayService
         return $response;
     }
 
+    /**
+     * Aplica restricciones de departamento definidas en bi_vistas.
+     * Ej: VW_AG_Agendas solo para MA y NAL aunque Fabric la muestre a todas las sedes.
+     */
+    private function filterViewsByBiVistasDepartamento(array $response, User $user): array
+    {
+        if (!isset($response['schemas']) || !is_array($response['schemas']) || !Schema::hasTable('bi_vistas')) {
+            return $response;
+        }
+
+        $departamento = $this->getDepartamento($user);
+        $configIndex  = $this->getBiVistasConfigBySchema();
+
+        foreach ($response['schemas'] as &$schemaBlock) {
+            $schema  = strtolower($schemaBlock['schema'] ?? '');
+            $configs = $configIndex[$schema] ?? [];
+
+            if ($configs === []) {
+                continue;
+            }
+
+            $byNombre = [];
+            foreach ($configs as $cfg) {
+                $byNombre[strtolower($cfg['nombre'])] = $cfg;
+            }
+
+            $schemaBlock['views'] = array_values(array_filter(
+                $schemaBlock['views'] ?? [],
+                function ($view) use ($byNombre, $departamento) {
+                    $nombre = strtolower($view['view_name'] ?? '');
+                    $cfg    = $byNombre[$nombre] ?? null;
+
+                    if ($cfg === null) {
+                        return true;
+                    }
+
+                    $vista = new BiVista([
+                        'nombre'        => $cfg['nombre'],
+                        'departamentos' => $cfg['departamentos'],
+                    ]);
+
+                    return $vista->visibleParaDepartamento($departamento);
+                }
+            ));
+
+            $schemaBlock['view_count'] = count($schemaBlock['views']);
+        }
+        unset($schemaBlock);
+
+        $response['total_views'] = array_sum(
+            array_map(fn ($block) => count($block['views'] ?? []), $response['schemas'])
+        );
+
+        return $response;
+    }
+
+    /**
+     * @return array<string, array<int, array{nombre: string, departamentos: ?array}>>
+     */
+    private function getBiVistasConfigBySchema(): array
+    {
+        return Cache::remember('bi_vistas_depto_config', 300, function () {
+            $index = [];
+
+            BiVista::query()
+                ->with('grupo:id,codigo')
+                ->get(['id', 'id_bi_grupos', 'nombre', 'departamentos'])
+                ->each(function (BiVista $vista) use (&$index) {
+                    $codigo = $vista->grupo?->codigo;
+                    if ($codigo === null) {
+                        return;
+                    }
+
+                    $schema = strtolower($codigo);
+                    $index[$schema][] = [
+                        'nombre'        => $vista->nombre,
+                        'departamentos' => $vista->departamentos,
+                    ];
+                });
+
+            return $index;
+        });
+    }
+
     // =========================================================================
     // ENDPOINTS DE LA API PYTHON
     // =========================================================================
@@ -350,16 +435,95 @@ class GraphFabricGatewayService
 
         return [
             'success'           => true,
-            'data'              => $this->filterViewsByUserSchemas(
-                $this->enrichViewsResponse($response, $user, $tipo),
-                $user,
-                $tipo
+            'data'              => $this->filterViewsByBiVistasDepartamento(
+                $this->filterViewsByUserSchemas(
+                    $this->enrichViewsResponse($response, $user, $tipo),
+                    $user,
+                    $tipo
+                ),
+                $user
             ),
             'grupos'            => $grupos,
             'esquemas'          => $this->getEsquemasPermitidos($user, $tipo),
             'esquemas_catalogo' => $this->getEsquemasCatalogoUsuario($user, $tipo),
             'departamento'      => $departamento,
             'tipo'              => $tipo,
+        ];
+    }
+
+    /**
+     * Catálogo de vistas Fabric para un esquema (configuración admin).
+     * Usa TOKEN_ADMIN sin filtrar por grupos del usuario.
+     *
+     * @return array{success: bool, message?: string, schema?: string, data: array<int, array{view_name: string, qualified_name: string, column_count: int}>}
+     */
+    public function getCatalogViewsForSchema(string $schema, bool $forceRefresh = false): array
+    {
+        $schema = strtolower(trim($schema));
+        if ($schema === '') {
+            return [
+                'success' => false,
+                'message' => 'Esquema inválido.',
+                'data'    => [],
+            ];
+        }
+
+        $cacheKey = 'fabric_catalog_admin:' . $schema;
+
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
+        $response = Cache::get($cacheKey);
+
+        if ($response === null) {
+            if ($this->tokenAdmin === '') {
+                return [
+                    'success' => false,
+                    'message' => 'TOKEN_ADMIN no está configurado en el servidor.',
+                    'data'    => [],
+                ];
+            }
+
+            $response = $this->post('/api/catalog/views', array_merge(
+                $this->catalogAdminContextPayload(),
+                [
+                    'token'       => $this->tokenAdmin,
+                    'schema_name' => $schema,
+                ]
+            ));
+
+            if ($response !== null) {
+                Cache::put($cacheKey, $response, 300);
+            }
+        }
+
+        if ($response === null) {
+            return [
+                'success' => false,
+                'message' => 'No se pudo conectar con la API Graph-Fabric.',
+                'data'    => [],
+            ];
+        }
+
+        $views = [];
+
+        foreach ($response['schemas'] ?? [] as $block) {
+            foreach ($block['views'] ?? [] as $view) {
+                $views[] = [
+                    'view_name'      => $view['view_name'] ?? '',
+                    'qualified_name' => $view['qualified_name'] ?? '',
+                    'column_count'   => (int) ($view['column_count'] ?? 0),
+                ];
+            }
+        }
+
+        usort($views, fn ($a, $b) => strcasecmp($a['view_name'], $b['view_name']));
+
+        return [
+            'success' => true,
+            'schema'  => $schema,
+            'data'    => $views,
         ];
     }
 
@@ -608,6 +772,24 @@ class GraphFabricGatewayService
     // =========================================================================
     // HTTP HELPERS
     // =========================================================================
+
+    /**
+     * Contexto nacional admin para catálogo Fabric (parámetros BI).
+     * Graph-Fabric exige TOKEN_ADMIN + groups/department; sin esto responde 401.
+     *
+     * @return array{groups: string[], department: string, user_email: string, user_name: string}
+     */
+    private function catalogAdminContextPayload(?User $user = null): array
+    {
+        $user = $user ?? auth()->user();
+
+        return [
+            'groups'      => ['GG-BD-ADMIN'],
+            'department'  => 'NAL',
+            'user_email'  => $user?->email ?? 'admin@medilaser.com.co',
+            'user_name'   => $user?->name ?? $user?->email ?? 'Administrador BI',
+        ];
+    }
 
     /**
      * Contexto del usuario autenticado para Graph-Fabric.
