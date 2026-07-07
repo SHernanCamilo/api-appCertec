@@ -164,22 +164,44 @@ class FabricViewerController extends Controller
             'offset'      => 'nullable|integer|min:0',
             'sort_col'    => 'nullable|string|max:100',
             'sort_dir'    => 'nullable|in:asc,desc',
+            'skip_count'  => 'nullable|boolean',
         ]);
 
         $user   = auth()->user();
         $schema = strtolower($request->schema_name);
+        $view   = $request->view;
+
+        // Validar filtros obligatorios para vistas pesadas (>1M filas)
+        $heavyViews = [
+            'ca.VW_Portfolio_ExtractoCartera',
+            'if.VW_Financiera_InfoFinanciero_UnidadFuncional2024',
+            'co.VW_Billing_FacturacionVsCausacion',
+            'df.Billing_OportunidadEgresoFactura',
+        ];
+
+        $viewKey = "{$schema}.{$view}";
+        $filters = $request->input('filters', []);
+
+        if (in_array($viewKey, $heavyViews) && empty($filters)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Esta vista requiere al menos un filtro para cargar (tiene más de 1M de registros).',
+                'required_filters' => ['NIT', 'Sucursal', 'Fecha', 'Tercero'],
+            ], 422);
+        }
 
         $result = $this->gateway->queryViewData(
             $user,
             $schema,
             $request->view,
             [
-                'columns'  => $request->input('columns', []),
-                'filters'  => $request->input('filters', []),
-                'limit'    => $request->input('limit', 50),
-                'offset'   => $request->input('offset', 0),
-                'sort_col' => $request->input('sort_col', ''),
-                'sort_dir' => $request->input('sort_dir', 'asc'),
+                'columns'    => $request->input('columns', []),
+                'filters'    => $request->input('filters', []),
+                'limit'      => $request->input('limit', 50),
+                'offset'     => $request->input('offset', 0),
+                'sort_col'   => $request->input('sort_col', ''),
+                'sort_dir'   => $request->input('sort_dir', 'asc'),
+                'skip_count' => $request->boolean('skip_count', false),
             ]
         );
 

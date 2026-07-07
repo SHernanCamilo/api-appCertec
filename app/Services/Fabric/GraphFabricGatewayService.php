@@ -454,6 +454,7 @@ class GraphFabricGatewayService
                 'offset'      => $offset,
                 'sort_col'    => $options['sort_col'] ?? '',
                 'sort_dir'    => $options['sort_dir'] ?? 'asc',
+                'skip_count'  => ($options['skip_count'] ?? false) || $limit > 1000,
             ]
         );
 
