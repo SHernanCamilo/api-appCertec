@@ -640,6 +640,21 @@ class GraphFabricGatewayService
             ];
         }
 
+        // La API Python detectó vista pesada sin filtros → propagar al controller
+        if (!empty($response['__filters_required'])) {
+            return [
+                'success'          => false,
+                'requires_filters' => true,
+                'code'             => 422,
+                'message'          => $response['message'],
+                'suggestions'      => $response['suggestions'] ?? [],
+                'columns'          => $response['columns'] ?? [],
+                'heavy_view'       => true,
+                'schema'           => $response['schema'] ?? $schema,
+                'view_name'        => $response['view_name'] ?? $view,
+            ];
+        }
+
         $result = [
             'success' => true,
             'data'    => $response['items'] ?? $response,
@@ -870,31 +885,61 @@ class GraphFabricGatewayService
             return new \stdClass();
         }
 
-        // Convertir fechas al formato ISO que SQL Server espera
+        // Convertir fechas al formato ISO (yyyy-mm-dd) que SQL Server espera.
+        // Un formato mal parseado provoca el error ODBC 22007 (241):
+        // "Conversion failed when converting date and/or time from character string".
         foreach ($filters as $key => $value) {
-            if (!is_string($value)) {
-                continue;
-            }
-
-            // dd/mm/yyyy → yyyy-mm-dd
-            if (preg_match('/^\d{2}\/\d{2}\/\d{4}$/', $value)) {
-                try {
-                    $filters[$key] = \Carbon\Carbon::createFromFormat('d/m/Y', $value)->format('Y-m-d');
-                } catch (\Exception $e) {
-                    // Dejar el valor original si no se puede parsear
-                }
-            }
-            // dd-mm-yyyy → yyyy-mm-dd
-            elseif (preg_match('/^\d{2}-\d{2}-\d{4}$/', $value)) {
-                try {
-                    $filters[$key] = \Carbon\Carbon::createFromFormat('d-m-Y', $value)->format('Y-m-d');
-                } catch (\Exception $e) {
-                    // Dejar el valor original
-                }
-            }
+            $filters[$key] = $this->normalizeFilterValue($value);
         }
 
         return $filters;
+    }
+
+    /**
+     * Normaliza un valor de filtro. Si es una fecha en formato local
+     * (dd/mm/yyyy, d/m/yyyy, dd-mm-yyyy, con u sin hora) la convierte a ISO.
+     * Los valores ya en ISO (yyyy-mm-dd[ T]hh:mm:ss) se dejan intactos.
+     *
+     * @param  mixed  $value
+     * @return mixed
+     */
+    private function normalizeFilterValue(mixed $value): mixed
+    {
+        // Rango de fechas: {"from": "...", "to": "..."} o lista [desde, hasta]
+        if (is_array($value)) {
+            return array_map(fn ($v) => $this->normalizeFilterValue($v), $value);
+        }
+
+        if (!is_string($value)) {
+            return $value;
+        }
+
+        $trimmed = trim($value);
+
+        // Ya viene en ISO (yyyy-mm-dd, con hora opcional) → no tocar.
+        if (preg_match('#^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$#', $trimmed)) {
+            return $trimmed;
+        }
+
+        // Fecha local con separador / o - : acepta uno o dos dígitos en día/mes
+        // y hora opcional (dd/mm/yyyy, d/m/yyyy, dd-mm-yyyy HH:mm, etc.)
+        if (preg_match('#^(\d{1,2})[/-](\d{1,2})[/-](\d{4})([ T]\d{1,2}:\d{2}(:\d{2})?)?$#', $trimmed, $m)) {
+            $sep    = str_contains($trimmed, '/') ? '/' : '-';
+            $hasHms = isset($m[5]) && $m[5] !== '';
+            $fmt    = "d{$sep}m{$sep}Y" . (isset($m[4]) && $m[4] !== '' ? ($hasHms ? ' H:i:s' : ' H:i') : '');
+            try {
+                $carbon = \Carbon\Carbon::createFromFormat($fmt, $trimmed);
+                // Si trae hora, conservarla en ISO; si no, solo la fecha.
+                return isset($m[4]) && $m[4] !== ''
+                    ? $carbon->format('Y-m-d H:i:s')
+                    : $carbon->format('Y-m-d');
+            } catch (\Exception $e) {
+                // Formato no parseable → devolver original sin romper la consulta.
+                return $value;
+            }
+        }
+
+        return $value;
     }
 
     private function post(string $path, array $body): ?array
@@ -916,6 +961,24 @@ class GraphFabricGatewayService
             }
 
             $response = $req->post($this->baseUrl . $path, $body);
+
+            // HTTP 422 con "filters_required" → no es un error genérico,
+            // es la detección dinámica de vistas pesadas. Propagar al caller.
+            if ($response->status() === 422) {
+                $data = $response->json();
+                if (is_array($data) && ($data['error'] ?? '') === 'filters_required') {
+                    // Retornar con flag especial para que queryViewData() lo propague
+                    return [
+                        '__filters_required' => true,
+                        'message'     => $data['message'] ?? 'Esta vista requiere filtros.',
+                        'suggestions' => $data['suggestions'] ?? [],
+                        'columns'     => $data['columns'] ?? [],
+                        'heavy_view'  => true,
+                        'schema'      => $data['schema'] ?? null,
+                        'view_name'   => $data['view_name'] ?? null,
+                    ];
+                }
+            }
 
             if ($response->failed()) {
                 Log::error('GraphFabricGateway POST error', [

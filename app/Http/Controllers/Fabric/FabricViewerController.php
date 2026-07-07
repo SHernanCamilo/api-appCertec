@@ -171,29 +171,10 @@ class FabricViewerController extends Controller
         $schema = strtolower($request->schema_name);
         $view   = $request->view;
 
-        // Validar filtros obligatorios para vistas pesadas (>1M filas)
-        $heavyViews = [
-            'ca.VW_Portfolio_ExtractoCartera',
-            'if.VW_Financiera_InfoFinanciero_UnidadFuncional2024',
-            'co.VW_Billing_FacturacionVsCausacion',
-            'df.Billing_OportunidadEgresoFactura',
-        ];
-
-        $viewKey = "{$schema}.{$view}";
-        $filters = $request->input('filters', []);
-
-        if (in_array($viewKey, $heavyViews) && empty($filters)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Esta vista requiere al menos un filtro para cargar (tiene más de 1M de registros).',
-                'required_filters' => ['NIT', 'Sucursal', 'Fecha', 'Tercero'],
-            ], 422);
-        }
-
         $result = $this->gateway->queryViewData(
             $user,
             $schema,
-            $request->view,
+            $view,
             [
                 'columns'    => $request->input('columns', []),
                 'filters'    => $request->input('filters', []),
@@ -207,6 +188,21 @@ class FabricViewerController extends Controller
 
         if (!$result['success']) {
             $code = $result['code'] ?? 400;
+
+            // Propagación del 422 "filters_required" de la API Python
+            if (!empty($result['requires_filters'])) {
+                return response()->json([
+                    'success'          => false,
+                    'requires_filters' => true,
+                    'message'          => $result['message'],
+                    'suggestions'      => $result['suggestions'] ?? [],
+                    'columns'          => $result['columns'] ?? [],
+                    'heavy_view'       => true,
+                    'schema'           => $result['schema'] ?? $schema,
+                    'view_name'        => $result['view_name'] ?? $view,
+                ], 422);
+            }
+
             return response()->json([
                 'success' => false,
                 'message' => $result['message'],
