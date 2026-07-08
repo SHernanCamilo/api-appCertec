@@ -722,6 +722,7 @@ class GraphFabricGatewayService
 
         try {
             $exportTimeout = max($this->timeout, 300);
+            $this->ensurePhpTimeLimit($exportTimeout);
             $apiKey = env('GRAPHQL_API_KEY', '');
             $req    = Http::timeout($exportTimeout)
                          ->connectTimeout(10)
@@ -944,6 +945,8 @@ class GraphFabricGatewayService
 
     private function post(string $path, array $body): ?array
     {
+        $this->ensurePhpTimeLimit($this->timeout);
+
         // Circuit breaker: verificar antes de intentar
         if (!$this->circuitBreaker->isAvailable()) {
             Log::warning('GraphFabricGateway: circuit breaker OPEN, request bloqueado', ['path' => $path]);
@@ -1015,5 +1018,14 @@ class GraphFabricGatewayService
             ]);
             return null;
         }
+    }
+
+    /**
+     * Evita que max_execution_time de PHP (60s en XAMPP) corte antes que el timeout HTTP.
+     */
+    private function ensurePhpTimeLimit(int $httpTimeoutSeconds): void
+    {
+        $limit = max(180, $httpTimeoutSeconds + 10);
+        @set_time_limit($limit);
     }
 }
