@@ -1003,14 +1003,38 @@ class GraphFabricGatewayService
             }
 
             if ($response->failed()) {
-                Log::error('GraphFabricGateway POST error', [
-                    'path'   => $path,
-                    'status' => $response->status(),
-                    'body'   => substr($response->body(), 0, 500),
+                $status    = $response->status();
+                $rawBody   = $response->body();
+                $jsonBody  = $response->json();
+
+                // Extraer info útil del body de error
+                $detail    = $jsonBody['detail'] ?? $rawBody;
+                $errSchema = $jsonBody['schema'] ?? ($body['schema_name'] ?? null);
+                $errView   = $jsonBody['view_name'] ?? ($body['view'] ?? null);
+                $errType   = $jsonBody['error'] ?? 'unknown';
+
+                // Clasificar el error para el log
+                $errorCategory = match (true) {
+                    str_contains((string)$detail, 'Invalid column name') => 'INVALID_COLUMN',
+                    str_contains((string)$detail, 'Conversion failed')   => 'DATE_CONVERSION',
+                    str_contains((string)$detail, 'does not exist')      => 'MISSING_RESOURCE',
+                    str_contains((string)$detail, 'more column names')   => 'DDL_ERROR',
+                    str_contains((string)$detail, 'timeout')             => 'TIMEOUT',
+                    default => 'FABRIC_ERROR',
+                };
+
+                Log::error("GraphFabricGateway [{$errorCategory}]", [
+                    'path'     => $path,
+                    'status'   => $status,
+                    'category' => $errorCategory,
+                    'schema'   => $errSchema,
+                    'view'     => $errView,
+                    'detail'   => is_string($detail) ? substr($detail, 0, 300) : json_encode($detail),
+                    'error'    => $errType,
                 ]);
 
                 // 5xx = problema del servidor Py → registrar fallo
-                if ($response->status() >= 500) {
+                if ($status >= 500) {
                     $this->circuitBreaker->recordFailure();
                 }
 
@@ -1024,16 +1048,20 @@ class GraphFabricGatewayService
         } catch (\Illuminate\Http\Client\ConnectionException $e) {
             // Timeout o conexión rechazada → registrar fallo
             $this->circuitBreaker->recordFailure();
-            Log::error('GraphFabricGateway connection failed', [
-                'path'  => $path,
-                'error' => $e->getMessage(),
+            Log::error('GraphFabricGateway [TIMEOUT]', [
+                'path'   => $path,
+                'schema' => $body['schema_name'] ?? null,
+                'view'   => $body['view'] ?? null,
+                'error'  => $e->getMessage(),
             ]);
             return null;
         } catch (\Exception $e) {
             $this->circuitBreaker->recordFailure();
-            Log::error('GraphFabricGateway POST exception', [
-                'path'  => $path,
-                'error' => $e->getMessage(),
+            Log::error('GraphFabricGateway [EXCEPTION]', [
+                'path'   => $path,
+                'schema' => $body['schema_name'] ?? null,
+                'view'   => $body['view'] ?? null,
+                'error'  => $e->getMessage(),
             ]);
             return null;
         }
