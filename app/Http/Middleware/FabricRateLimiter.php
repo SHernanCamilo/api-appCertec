@@ -12,25 +12,28 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Rate limiter específico para endpoints Fabric.
  *
- * Límites por tipo de operación:
- *   - /viewer/views:    10/min/usuario  (se cachea, no necesita más)
- *   - /viewer/columns:  20/min/usuario  (se cachea)
- *   - /viewer/data:     30/min/usuario  (paginación + filtros)
- *   - /viewer/export:    3/min/usuario  (costoso, consume RAM)
+ * Límites por tipo de operación (por usuario/minuto):
+ *   - /viewer/views:    60/min   (catálogo, se cachea 5 min)
+ *   - /viewer/columns:  60/min   (columnas, se cachea)
+ *   - /viewer/data:    200/min   (paginación intensiva con 500 usuarios)
+ *   - /viewer/export:   20/min   (costoso pero necesario)
+ *   - /viewer/context:  60/min
+ *   - /viewer/start:    20/min   (export async)
  *
- * Con 500 usuarios simultáneos y estos límites:
- *   - Máx queries reales a la API Py: ~250/min (con cache absorbe el resto)
- *   - Máx exports simultáneos: ~15 (controlados)
+ * Con 500 usuarios simultáneos y cache activo:
+ *   - Cache absorbe ~70% de queries repetidas (Redis TTL 30s-5min)
+ *   - La API Python soporta 20 queries concurrentes (semáforo interno)
+ *   - El circuit breaker protege contra sobrecarga
  */
 final class FabricRateLimiter
 {
     private const LIMITS = [
-        'views'   => ['max' => 30, 'decay' => 60],
-        'columns' => ['max' => 30, 'decay' => 60],
-        'data'    => ['max' => 60, 'decay' => 60],
-        'export'  => ['max' => 10, 'decay' => 60],
-        'context' => ['max' => 30, 'decay' => 60],
-        'start'   => ['max' => 10, 'decay' => 60],
+        'views'   => ['max' => 60,  'decay' => 60],
+        'columns' => ['max' => 60,  'decay' => 60],
+        'data'    => ['max' => 200, 'decay' => 60],
+        'export'  => ['max' => 20,  'decay' => 60],
+        'context' => ['max' => 60,  'decay' => 60],
+        'start'   => ['max' => 20,  'decay' => 60],
     ];
 
     public function handle(Request $request, Closure $next): Response
