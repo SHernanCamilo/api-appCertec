@@ -28,13 +28,15 @@ class GraphFabricGatewayService
     private string $tokenAdmin;
     private int    $timeout;
     private FabricCircuitBreaker $circuitBreaker;
+    private BiVistasSyncService  $vistasSyncService;
 
     public function __construct()
     {
-        $this->baseUrl        = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-        $this->tokenAdmin     = env('TOKEN_ADMIN', '');
-        $this->timeout        = (int) env('GRAPHQL_TIMEOUT', 500);
-        $this->circuitBreaker = new FabricCircuitBreaker();
+        $this->baseUrl            = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
+        $this->tokenAdmin         = env('TOKEN_ADMIN', '');
+        $this->timeout            = (int) env('GRAPHQL_TIMEOUT', 500);
+        $this->circuitBreaker     = new FabricCircuitBreaker();
+        $this->vistasSyncService  = new BiVistasSyncService();
     }
 
     // =========================================================================
@@ -433,11 +435,17 @@ class GraphFabricGatewayService
             ];
         }
 
+        // Sincronizar vistas nuevas de Fabric → bi_vistas (auto-registro)
+        $this->vistasSyncService->syncFromCatalogResponse($response);
+
+        // Filtrar vistas en mantenimiento/inactivas antes de entregar al usuario
+        $filteredResponse = $this->vistasSyncService->filterByEstado($response);
+
         return [
             'success'           => true,
             'data'              => $this->filterViewsByBiVistasDepartamento(
                 $this->filterViewsByUserSchemas(
-                    $this->enrichViewsResponse($response, $user, $tipo),
+                    $this->enrichViewsResponse($filteredResponse, $user, $tipo),
                     $user,
                     $tipo
                 ),
@@ -591,6 +599,17 @@ class GraphFabricGatewayService
                 'success' => false,
                 'message' => "Sin acceso al esquema '{$schema}'.",
                 'code'    => 403,
+            ];
+        }
+
+        // Validar estado de la vista (mantenimiento/inactiva)
+        $estadoCheck = $this->vistasSyncService->checkVistaEstado($schema, $view);
+        if (!$estadoCheck['activa']) {
+            return [
+                'success' => false,
+                'message' => $estadoCheck['mensaje'] ?? "Vista no disponible.",
+                'code'    => 503,
+                'estado'  => $estadoCheck['estado'],
             ];
         }
 
