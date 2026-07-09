@@ -52,6 +52,7 @@ final class FabricStreamExportJob implements ShouldQueue
     {
         // Excel con 150K+ filas necesita RAM para PhpSpreadsheet (genera XML interno)
         ini_set('memory_limit', '1G');
+        set_time_limit(0); // Sin límite de tiempo (el job tiene su propio timeout de 600s)
 
         $this->updateStatus(self::STATUS_PROCESSING, null, ['progress' => 0, 'rows' => 0]);
 
