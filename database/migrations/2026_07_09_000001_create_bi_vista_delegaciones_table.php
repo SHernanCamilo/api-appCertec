@@ -1,0 +1,46 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        if (Schema::hasTable('bi_vista_delegaciones')) {
+            return;
+        }
+
+        Schema::create('bi_vista_delegaciones', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('empresa_id');
+            $table->unsignedBigInteger('id_bi_grupos');
+            $table->unsignedBigInteger('id_bi_vista');
+            $table->timestamps();
+
+            $table->foreign('empresa_id')
+                ->references('id')
+                ->on('ent_empresas')
+                ->cascadeOnDelete();
+
+            $table->foreign('id_bi_grupos')
+                ->references('id')
+                ->on('bi_grupos')
+                ->cascadeOnDelete();
+
+            $table->foreign('id_bi_vista')
+                ->references('id')
+                ->on('bi_vistas')
+                ->cascadeOnDelete();
+
+            $table->unique(['empresa_id', 'id_bi_vista'], 'bi_vista_delegaciones_empresa_vista_unique');
+            $table->index(['empresa_id', 'id_bi_grupos'], 'bi_vista_delegaciones_empresa_grupo_idx');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('bi_vista_delegaciones');
+    }
+};

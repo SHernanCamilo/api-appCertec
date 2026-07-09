@@ -37,8 +37,13 @@ class BiVista extends Model
 
     protected static function booted(): void
     {
-        static::saved(fn () => Cache::forget('bi_vistas_depto_config'));
-        static::deleted(fn () => Cache::forget('bi_vistas_depto_config'));
+        $clearCaches = function (): void {
+            Cache::forget('bi_vistas_depto_config');
+            Cache::forget('bi_vistas_estado_index');
+        };
+
+        static::saved($clearCaches);
+        static::deleted($clearCaches);
     }
 
     // =========================================================================

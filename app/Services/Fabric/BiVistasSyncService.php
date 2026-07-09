@@ -13,7 +13,8 @@ use Illuminate\Support\Facades\Log;
  * Responsabilidades:
  *   - Detectar vistas nuevas que Fabric devuelve pero no están en bi_vistas
  *   - Crearlas automáticamente como "activo" vinculadas al bi_grupo correcto
- *   - Filtrar vistas inactivas/mantenimiento del catálogo que se entrega al usuario
+ *   - Filtrar vistas inactivas del catálogo que se entrega al usuario
+ *   - Anotar bi_estado (activo/mantenimiento) en cada vista del catálogo
  *   - Proveer estado de cada vista para el frontend
  *
  * Se ejecuta cada vez que getViewsForUser() recibe respuesta de Python.
@@ -87,12 +88,12 @@ class BiVistasSyncService
     }
 
     /**
-     * Filtra las vistas de la respuesta de Python eliminando las inactivas/mantenimiento.
-     * Solo pasan las que están en estado "activo" en bi_vistas.
-     * Las vistas que NO están en bi_vistas también pasan (primera vez, aún no registradas).
+     * Filtra vistas inactivas y anota bi_estado en cada vista del catálogo.
+     * Las vistas en mantenimiento se muestran (bi_estado=mantenimiento) pero no son accesibles.
+     * Las vistas no registradas en bi_vistas se tratan como activas.
      *
      * @param array $pythonResponse  Respuesta de /api/catalog/views
-     * @return array  Respuesta filtrada
+     * @return array  Respuesta filtrada y enriquecida
      */
     public function filterByEstado(array $pythonResponse): array
     {
@@ -101,35 +102,31 @@ class BiVistasSyncService
             return $pythonResponse;
         }
 
-        // Cargar todas las vistas con estado (cache 5 min)
         $estadoIndex = $this->getEstadoIndex();
 
         foreach ($pythonResponse['schemas'] as &$schemaBlock) {
             $schemaCode = strtolower($schemaBlock['schema'] ?? '');
             $views      = $schemaBlock['views'] ?? [];
+            $filtered   = [];
 
-            $schemaBlock['views'] = array_values(array_filter(
-                $views,
-                function ($view) use ($schemaCode, $estadoIndex) {
-                    $viewName = strtolower($view['view_name'] ?? '');
-                    $key      = "{$schemaCode}.{$viewName}";
+            foreach ($views as $view) {
+                $viewName = strtolower($view['view_name'] ?? '');
+                $key      = "{$schemaCode}.{$viewName}";
+                $estado   = $estadoIndex[$key] ?? BiVista::ESTADO_ACTIVO;
 
-                    // Si no está registrada en bi_vistas, dejar pasar
-                    // (será registrada automáticamente después)
-                    if (!isset($estadoIndex[$key])) {
-                        return true;
-                    }
-
-                    // Solo pasan las activas
-                    return $estadoIndex[$key] === BiVista::ESTADO_ACTIVO;
+                if ($estado === BiVista::ESTADO_INACTIVO) {
+                    continue;
                 }
-            ));
 
+                $view['bi_estado'] = $estado;
+                $filtered[]        = $view;
+            }
+
+            $schemaBlock['views']      = array_values($filtered);
             $schemaBlock['view_count'] = count($schemaBlock['views']);
         }
         unset($schemaBlock);
 
-        // Actualizar totales
         $pythonResponse['total_views'] = array_sum(
             array_map(fn ($block) => count($block['views'] ?? []), $pythonResponse['schemas'])
         );
@@ -197,12 +194,27 @@ class BiVistasSyncService
                     if ($codigo === null) {
                         return;
                     }
-                    $key = strtolower($codigo) . '.' . strtolower($vista->nombre);
+                    $schema = $this->schemaFromGrupoCodigo($codigo);
+                    if ($schema === '') {
+                        return;
+                    }
+                    $key         = $schema . '.' . strtolower($vista->nombre);
                     $index[$key] = $vista->estado;
                 });
 
             return $index;
         });
+    }
+
+    /**
+     * Extrae el esquema corto de un código de grupo (GG-BD-XX → xx).
+     */
+    private function schemaFromGrupoCodigo(string $codigo): string
+    {
+        $parts  = explode('-', strtoupper(trim($codigo)));
+        $schema = $parts[2] ?? '';
+
+        return $schema !== '' ? strtolower($schema) : strtolower(trim($codigo));
     }
 
     /**

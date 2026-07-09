@@ -6,6 +6,8 @@ use App\Models\User;
 use App\Models\UserGrup;
 use App\Models\BiGrupo;
 use App\Models\BiVista;
+use App\Models\BiVistaDelegacion;
+use App\Models\BiVistaDelegacionUsuario;
 use App\Services\Fabric\FabricCircuitBreaker;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -44,12 +46,35 @@ class GraphFabricGatewayService
     // =========================================================================
 
     /**
-     * Retorna los grupos GG-BD-* activos del usuario desde users_grups.
-     * Ej: ["GG-BD-IN", "GG-BD-CO"]
+     * Retorna los grupos GG-BD-* del usuario: asignados en users_grups + delegados por empresa.
+     * Ej: ["GG-BD-IN", "GG-BD-RF"]
      *
      * @return string[]
      */
     public function getGruposBd(User $user, ?int $tipo = null): array
+    {
+        $grupos    = $this->getGruposBdDirectos($user, $tipo);
+        $delegados = $this->getGruposDelegadosPorEmpresa($user, $tipo);
+        $grupos    = array_values(array_unique(array_merge($grupos, $delegados)));
+
+        if ($tipo === null) {
+            return $grupos;
+        }
+
+        $catalogo = $this->getCatalogoGrupos();
+
+        return array_values(array_filter(
+            $grupos,
+            fn ($g) => $this->resolveGrupoTipo($g, $catalogo) === $tipo
+        ));
+    }
+
+    /**
+     * Grupos GG-BD-* asignados directamente al usuario en users_grups.
+     *
+     * @return string[]
+     */
+    public function getGruposBdDirectos(User $user, ?int $tipo = null): array
     {
         $grupos = UserGrup::where('id_user', $user->id)
             ->where('tipo', UserGrup::TIPO_VISTA_BD)
@@ -68,6 +93,59 @@ class GraphFabricGatewayService
             $grupos,
             fn ($g) => $this->resolveGrupoTipo($g, $catalogo) === $tipo
         ));
+    }
+
+    /**
+     * Esquemas delegados a las empresas del usuario vía bi_vista_delegaciones.
+     *
+     * @return string[]  Códigos GG-BD-*
+     */
+    private function getGruposDelegadosPorEmpresa(User $user, ?int $tipo = null): array
+    {
+        if (!Schema::hasTable('bi_vista_delegaciones')) {
+            return [];
+        }
+
+        $empresaIds = $user->empresas()->pluck('ent_empresas.id')->map(fn ($id) => (int) $id)->all();
+        if ($empresaIds === []) {
+            return [];
+        }
+
+        $grupoIds = BiVistaDelegacion::query()
+            ->whereIn('empresa_id', $empresaIds)
+            ->distinct()
+            ->pluck('id_bi_grupos')
+            ->all();
+
+        if (Schema::hasTable('bi_vista_delegacion_usuarios')) {
+            $grupoIdsUsuario = BiVistaDelegacionUsuario::query()
+                ->where('user_id', $user->id)
+                ->whereIn('empresa_id', $empresaIds)
+                ->distinct()
+                ->pluck('id_bi_grupos')
+                ->all();
+
+            $grupoIds = array_values(array_unique(array_merge($grupoIds, $grupoIdsUsuario)));
+        }
+
+        if ($grupoIds === []) {
+            return [];
+        }
+
+        $query = BiGrupo::query()->whereIn('id', $grupoIds);
+        if ($tipo !== null) {
+            $query->where('tipo', $tipo);
+        }
+
+        return $query->get(['codigo'])
+            ->map(function (BiGrupo $grupo) {
+                $codigo = strtoupper(trim($grupo->codigo));
+
+                return str_starts_with($codigo, 'GG-BD-') ? $codigo : 'GG-BD-' . $codigo;
+            })
+            ->unique()
+            ->values()
+            ->all();
     }
 
     /**
@@ -147,12 +225,13 @@ class GraphFabricGatewayService
     /**
      * Esquemas permitidos del usuario con nombre desde bi_grupos.
      *
-     * @return array<int, array{schema: string, codigo: string, nombre: string, tipo: ?int}>
+     * @return array<int, array{schema: string, codigo: string, nombre: string, tipo: ?int, es_delegado: bool, empresa_id: ?int, empresa_nombre: ?string}>
      */
     public function getEsquemasCatalogoUsuario(User $user, ?int $tipo = null): array
     {
-        $catalogo = $this->getCatalogoGrupos();
-        $result   = [];
+        $catalogo   = $this->getCatalogoGrupos();
+        $directos   = array_flip(array_map('strtoupper', $this->getGruposBdDirectos($user, $tipo)));
+        $result     = [];
 
         foreach ($this->getGruposBd($user, $tipo) as $grupoCodigo) {
             $schema = $this->extractSchema($grupoCodigo);
@@ -160,20 +239,53 @@ class GraphFabricGatewayService
                 continue;
             }
 
-            $meta = $catalogo[strtoupper($grupoCodigo)] ?? null;
+            $meta       = $catalogo[strtoupper($grupoCodigo)] ?? null;
             if ($meta === null) {
                 $meta = $this->resolveGrupoCatalogo($grupoCodigo, $catalogo);
             }
 
+            $esDelegado = !isset($directos[strtoupper($grupoCodigo)]);
+            $empresaId  = null;
+            $empresaNom = null;
+
+            if ($esDelegado) {
+                $grupo = $this->resolveBiGrupoByCodigo($grupoCodigo);
+                $empresaId  = $grupo?->empresa_id;
+                $empresaNom = $grupo?->empresa?->nombre;
+            }
+
             $result[] = [
-                'schema' => $schema,
-                'codigo' => $grupoCodigo,
-                'nombre' => $meta['descripcion'] ?? strtoupper($schema),
-                'tipo'   => $meta['tipo'] ?? null,
+                'schema'          => $schema,
+                'codigo'          => $grupoCodigo,
+                'nombre'          => $meta['descripcion'] ?? strtoupper($schema),
+                'tipo'            => $meta['tipo'] ?? null,
+                'es_delegado'     => $esDelegado,
+                'empresa_id'      => $empresaId,
+                'empresa_nombre'  => $empresaNom,
             ];
         }
 
         return $result;
+    }
+
+    /**
+     * Resuelve bi_grupos por código GG-BD-* o esquema corto (RF).
+     */
+    private function resolveBiGrupoByCodigo(string $grupoCodigo): ?BiGrupo
+    {
+        $upper  = strtoupper(trim($grupoCodigo));
+        $schema = strtoupper($this->extractSchema($upper));
+
+        return BiGrupo::query()
+            ->where(function ($q) use ($upper, $schema) {
+                $q->whereRaw('UPPER(codigo) = ?', [$upper]);
+                if ($schema !== '') {
+                    $q->orWhereRaw('UPPER(codigo) = ?', [$schema])
+                        ->orWhereRaw('UPPER(codigo) = ?', ['GG-BD-' . $schema]);
+                }
+            })
+            ->with('empresa:id,nombre')
+            ->first();
     }
 
     /**
@@ -329,6 +441,147 @@ class GraphFabricGatewayService
     }
 
     /**
+     * Restringe vistas según delegación empresa ↔ bi_vistas.
+     * Si la empresa del usuario NO tiene filas en bi_vista_delegaciones para el esquema, no restringe.
+     */
+    private function filterViewsByDelegacion(array $response, User $user): array
+    {
+        if (!isset($response['schemas']) || !is_array($response['schemas']) || !Schema::hasTable('bi_vista_delegaciones')) {
+            return $response;
+        }
+
+        $empresaIds = $user->empresas()->pluck('ent_empresas.id')->map(fn ($id) => (int) $id)->all();
+        if ($empresaIds === []) {
+            return $response;
+        }
+
+        $delegacionIndex       = $this->getDelegacionIndex();
+        $userDelegacionIndex   = $this->getDelegacionUsuarioIndex();
+
+        foreach ($response['schemas'] as &$schemaBlock) {
+            $schema  = strtolower($schemaBlock['schema'] ?? '');
+            $grupoId = $this->resolveGrupoIdBySchema($schema);
+
+            if ($grupoId === null) {
+                continue;
+            }
+
+            $schemaBlock['views'] = array_values(array_filter(
+                $schemaBlock['views'] ?? [],
+                function ($view) use ($empresaIds, $delegacionIndex, $userDelegacionIndex, $grupoId, $user) {
+                    $nombre = strtolower($view['view_name'] ?? '');
+
+                    foreach ($empresaIds as $empresaId) {
+                        $userKey = $user->id . '.' . $empresaId . '.' . $grupoId;
+
+                        if (isset($userDelegacionIndex[$userKey])) {
+                            $permitidos = array_map('strtolower', $userDelegacionIndex[$userKey]);
+                            if (in_array($nombre, $permitidos, true)) {
+                                return true;
+                            }
+                            continue;
+                        }
+
+                        $key = $empresaId . '.' . $grupoId;
+
+                        if (!isset($delegacionIndex[$key])) {
+                            return true;
+                        }
+
+                        $permitidos = array_map('strtolower', $delegacionIndex[$key]);
+                        if (in_array($nombre, $permitidos, true)) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+            ));
+
+            $schemaBlock['view_count'] = count($schemaBlock['views']);
+        }
+        unset($schemaBlock);
+
+        $response['total_views'] = array_sum(
+            array_map(fn ($block) => count($block['views'] ?? []), $response['schemas'])
+        );
+
+        return $response;
+    }
+
+    /**
+     * @return array<string, array<int, string>>  "empresa_id.grupo_id" => [nombre_vista, ...]
+     */
+    private function getDelegacionIndex(): array
+    {
+        return Cache::remember('bi_vista_delegaciones_index', 300, function () {
+            $index = [];
+
+            BiVistaDelegacion::query()
+                ->with(['vista:id,nombre'])
+                ->get(['id', 'empresa_id', 'id_bi_grupos', 'id_bi_vista'])
+                ->each(function (BiVistaDelegacion $row) use (&$index) {
+                    $nombre = $row->vista?->nombre;
+                    if ($nombre === null) {
+                        return;
+                    }
+
+                    $key = $row->empresa_id . '.' . $row->id_bi_grupos;
+                    $index[$key][] = $nombre;
+                });
+
+            return $index;
+        });
+    }
+
+    /**
+     * @return array<string, array<int, string>>  "user_id.empresa_id.grupo_id" => [nombre_vista, ...]
+     */
+    private function getDelegacionUsuarioIndex(): array
+    {
+        if (!Schema::hasTable('bi_vista_delegacion_usuarios')) {
+            return [];
+        }
+
+        return Cache::remember('bi_vista_delegacion_usuarios_index', 300, function () {
+            $index = [];
+
+            BiVistaDelegacionUsuario::query()
+                ->with(['vista:id,nombre'])
+                ->get(['user_id', 'empresa_id', 'id_bi_grupos', 'id_bi_vista'])
+                ->each(function (BiVistaDelegacionUsuario $row) use (&$index) {
+                    $nombre = $row->vista?->nombre;
+                    if ($nombre === null) {
+                        return;
+                    }
+
+                    $key           = $row->user_id . '.' . $row->empresa_id . '.' . $row->id_bi_grupos;
+                    $index[$key][] = $nombre;
+                });
+
+            return $index;
+        });
+    }
+
+    /**
+     * Resuelve id de bi_grupos por esquema corto (rf) o código (GG-BD-RF).
+     */
+    private function resolveGrupoIdBySchema(string $schema): ?int
+    {
+        $schema = strtolower(trim($schema));
+        if ($schema === '') {
+            return null;
+        }
+
+        return BiGrupo::query()
+            ->where(function ($q) use ($schema) {
+                $q->whereRaw('LOWER(codigo) = ?', [$schema])
+                    ->orWhereRaw('LOWER(codigo) = ?', ['gg-bd-' . $schema]);
+            })
+            ->value('id');
+    }
+
+    /**
      * @return array<string, array<int, array{nombre: string, departamentos: ?array}>>
      */
     private function getBiVistasConfigBySchema(): array
@@ -438,16 +691,19 @@ class GraphFabricGatewayService
         // Sincronizar vistas nuevas de Fabric → bi_vistas (auto-registro)
         $this->vistasSyncService->syncFromCatalogResponse($response);
 
-        // Filtrar vistas en mantenimiento/inactivas antes de entregar al usuario
+        // Filtrar vistas inactivas y anotar bi_estado (mantenimiento visible pero bloqueado)
         $filteredResponse = $this->vistasSyncService->filterByEstado($response);
 
         return [
             'success'           => true,
-            'data'              => $this->filterViewsByBiVistasDepartamento(
-                $this->filterViewsByUserSchemas(
-                    $this->enrichViewsResponse($filteredResponse, $user, $tipo),
-                    $user,
-                    $tipo
+            'data'              => $this->filterViewsByDelegacion(
+                $this->filterViewsByBiVistasDepartamento(
+                    $this->filterViewsByUserSchemas(
+                        $this->enrichViewsResponse($filteredResponse, $user, $tipo),
+                        $user,
+                        $tipo
+                    ),
+                    $user
                 ),
                 $user
             ),

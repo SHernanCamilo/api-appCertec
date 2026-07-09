@@ -191,22 +191,27 @@ class FabricViewerController extends Controller
 
             // Propagación del 422 "filters_required" de la API Python
             if (!empty($result['requires_filters'])) {
-                return response()->json([
-                    'success'          => false,
-                    'requires_filters' => true,
-                    'message'          => $result['message'],
-                    'suggestions'      => $result['suggestions'] ?? [],
-                    'columns'          => $result['columns'] ?? [],
-                    'heavy_view'       => true,
-                    'schema'           => $result['schema'] ?? $schema,
-                    'view_name'        => $result['view_name'] ?? $view,
-                ], 422);
+            return response()->json([
+                'success'          => false,
+                'requires_filters' => true,
+                'message'          => $result['message'],
+                'suggestions'      => $result['suggestions'] ?? [],
+                'columns'          => $result['columns'] ?? [],
+                'heavy_view'       => true,
+                'schema'           => $result['schema'] ?? $schema,
+                'view_name'        => $result['view_name'] ?? $view,
+            ], 422);
             }
 
-            return response()->json([
+            $errorPayload = [
                 'success' => false,
                 'message' => $result['message'],
-            ], $code);
+            ];
+            if (!empty($result['estado'])) {
+                $errorPayload['estado'] = $result['estado'];
+            }
+
+            return response()->json($errorPayload, $code);
         }
 
         return response()->json($result);
@@ -415,16 +420,18 @@ class FabricViewerController extends Controller
 
         $user = auth()->user();
         $tipo = $request->filled('tipo') ? (int) $request->query('tipo') : null;
+        $esquemasCatalogo = $this->gateway->getEsquemasCatalogoUsuario($user, $tipo);
 
         return response()->json([
-            'success'           => true,
-            'user'              => $user->email,
-            'grupos'            => $this->gateway->getGruposBd($user, $tipo),
-            'esquemas'          => $this->gateway->getEsquemasPermitidos($user, $tipo),
-            'esquemas_catalogo' => $this->gateway->getEsquemasCatalogoUsuario($user, $tipo),
-            'departamento'      => $this->gateway->getDepartamento($user),
-            'catalogo'          => array_values($this->gateway->getCatalogoGrupos()),
-            'tipo'              => $tipo,
+            'success'                 => true,
+            'user'                    => $user->email,
+            'grupos'                  => $this->gateway->getGruposBd($user, $tipo),
+            'esquemas'                => $this->gateway->getEsquemasPermitidos($user, $tipo),
+            'esquemas_catalogo'       => $esquemasCatalogo,
+            'tiene_vistas_delegadas'  => collect($esquemasCatalogo)->contains(fn ($e) => !empty($e['es_delegado'])),
+            'departamento'            => $this->gateway->getDepartamento($user),
+            'catalogo'                => array_values($this->gateway->getCatalogoGrupos()),
+            'tipo'                    => $tipo,
         ]);
     }
 }

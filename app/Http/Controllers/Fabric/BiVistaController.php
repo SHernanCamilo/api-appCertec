@@ -66,6 +66,11 @@ class BiVistaController extends Controller
             'descripcion'   => 'nullable|string|max:255',
             'departamentos' => 'nullable|array',
             'departamentos.*' => 'string|max:10',
+            'estado'        => ['nullable', Rule::in([
+                BiVista::ESTADO_ACTIVO,
+                BiVista::ESTADO_INACTIVO,
+                BiVista::ESTADO_MANTENIMIENTO,
+            ])],
         ]);
 
         try {
@@ -74,6 +79,7 @@ class BiVistaController extends Controller
                 'nombre'        => trim($request->nombre),
                 'descripcion'   => $request->descripcion,
                 'departamentos' => $this->normalizarDepartamentos($request->departamentos),
+                'estado'        => $request->input('estado', BiVista::ESTADO_ACTIVO),
             ]);
 
             return response()->json([
@@ -145,6 +151,11 @@ class BiVistaController extends Controller
             'descripcion'   => 'nullable|string|max:255',
             'departamentos' => 'nullable|array',
             'departamentos.*' => 'string|max:10',
+            'estado'        => ['sometimes', Rule::in([
+                BiVista::ESTADO_ACTIVO,
+                BiVista::ESTADO_INACTIVO,
+                BiVista::ESTADO_MANTENIMIENTO,
+            ])],
         ]);
 
         try {
@@ -154,6 +165,7 @@ class BiVistaController extends Controller
                 'departamentos' => $request->has('departamentos')
                     ? $this->normalizarDepartamentos($request->departamentos)
                     : $vista->departamentos,
+                'estado'        => $request->input('estado', $vista->estado),
             ]);
             $vista->save();
 
