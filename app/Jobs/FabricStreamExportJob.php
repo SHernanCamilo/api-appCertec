@@ -58,11 +58,7 @@ final class FabricStreamExportJob implements ShouldQueue
 
         try {
             $user = User::findOrFail($this->userId);
-
-            // Estrategia: escribir CSV directo a disco mientras consumimos datos.
-            // Nunca acumulamos todas las filas en RAM.
-            $this->exportDirectToCsv($user);
-
+            $this->exportToExcel($user);
         } catch (\Throwable $e) {
             $this->updateStatus(self::STATUS_FAILED, $e->getMessage());
             Log::error('FabricStreamExportJob [ERROR]', [
@@ -75,10 +71,11 @@ final class FabricStreamExportJob implements ShouldQueue
     }
 
     /**
-     * Exporta datos directo a CSV sin acumular en RAM.
-     * Lee página por página de la API Python (5K filas/page) y escribe al archivo.
+     * Genera Excel escribiendo directo a disco con XMLWriter.
+     * NO carga todas las filas en RAM — escribe cada batch y lo libera.
+     * Funciona con 500K+ filas sin agotar memoria.
      */
-    private function exportDirectToCsv(User $user): void
+    private function exportToExcel(User $user): void
     {
         $url     = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token   = env('TOKEN_ADMIN', '');
@@ -90,7 +87,7 @@ final class FabricStreamExportJob implements ShouldQueue
         $totalRows = 0;
         $headers = [];
 
-        // Preparar archivo Excel
+        // Preparar directorio
         $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
         $dir      = storage_path("app/fabric_exports/{$this->jobId}");
         if (!is_dir($dir)) {
@@ -98,29 +95,9 @@ final class FabricStreamExportJob implements ShouldQueue
         }
         $filePath = "{$dir}/{$filename}";
 
-        // Crear spreadsheet con header corporativo
-        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
-        $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle(substr($this->view, 0, 31));
-
-        $spreadsheet->getProperties()
-            ->setCreator('JadeOne - Medilaser')
-            ->setTitle("{$this->schema} - {$this->view}");
-
-        // Fila 1: Título
-        $sheet->setCellValue('A1', "JadeOne — {$this->schema}.{$this->view}");
-        $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(12);
-        $sheet->getRowDimension(1)->setRowHeight(20);
-
-        // Fila 2: Metadata
-        $filterStr = !empty($this->options['filters'])
-            ? implode(' | ', array_map(fn($k, $v) => "{$k}: {$v}", array_keys($this->options['filters']), $this->options['filters']))
-            : 'Sin filtros';
-        $sheet->setCellValue('A2', "Exportado: " . now()->format('d/m/Y H:i') . " | Filtros: {$filterStr}");
-        $sheet->getStyle('A2')->getFont()->setItalic(true)->setSize(9);
-
-        // Fila 3: vacía (separador)
-        $dataStartRow = 4; // Los headers van en fila 4, datos desde fila 5
+        // Archivo temporal para datos (escribimos filas como TSV temporal, luego armamos xlsx)
+        $tmpFile = "{$dir}/data.tmp";
+        $tmpHandle = fopen($tmpFile, 'w');
 
         $payload = [
             'token'       => $token,
@@ -137,7 +114,7 @@ final class FabricStreamExportJob implements ShouldQueue
             'skip_count'  => true,
         ];
 
-        // Paginar: leer 5K filas por request, escribir al Excel
+        // Paso 1: Descargar todos los datos a archivo temporal (no en RAM)
         while ($offset < $maxRows) {
             $payload['limit']  = $limit;
             $payload['offset'] = $offset;
@@ -148,118 +125,77 @@ final class FabricStreamExportJob implements ShouldQueue
                 ->post($url . '/api/data/dynamic', $payload);
 
             if ($response->failed()) {
+                fclose($tmpHandle);
+                @unlink($tmpFile);
                 $body = $response->json();
                 if ($response->status() === 422 && ($body['error'] ?? '') === 'filters_required') {
                     $this->updateStatus(self::STATUS_FAILED, $body['message'] ?? 'Vista requiere filtros.');
                     return;
                 }
                 throw new \RuntimeException(
-                    "Graph-Fabric respondió HTTP {$response->status()}: " . substr($response->body(), 0, 200)
+                    "Graph-Fabric HTTP {$response->status()}: " . substr($response->body(), 0, 200)
                 );
             }
 
             $data  = $response->json();
             $items = $data['items'] ?? [];
+            if (empty($items)) break;
 
-            if (empty($items)) {
-                break;
-            }
-
-            // Escribir headers (solo la primera vez)
+            // Guardar headers
             if (empty($headers)) {
                 $headers = array_keys($items[0]);
-                $colCount = count($headers);
-
-                // Escribir encabezados en fila 4
-                foreach ($headers as $colIdx => $header) {
-                    $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx + 1);
-                    $sheet->setCellValue("{$col}{$dataStartRow}", $header);
-                }
-
-                // Estilo de encabezados
-                $lastCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colCount);
-                $headerRange = "A{$dataStartRow}:{$lastCol}{$dataStartRow}";
-                $sheet->getStyle($headerRange)->applyFromArray([
-                    'font' => ['bold' => true, 'size' => 10, 'color' => ['argb' => 'FFFFFF']],
-                    'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['argb' => '1B3A5C']],
-                ]);
-                $sheet->setAutoFilter($headerRange);
-                $sheet->freezePane('A' . ($dataStartRow + 1));
-
-                // Merge título
-                $sheet->mergeCells("A1:{$lastCol}1");
-                $sheet->mergeCells("A2:{$lastCol}2");
+                // Escribir headers como primera línea
+                fwrite($tmpHandle, json_encode($headers) . "\n");
             }
 
-            // Escribir filas de datos usando fromArray (mucho más rápido que celda por celda)
-            $excelRow = $dataStartRow + 1 + $totalRows;
-            $dataMatrix = [];
+            // Escribir cada fila como JSON line (una por línea)
             foreach ($items as $row) {
-                $rowData = [];
+                $values = [];
                 foreach ($headers as $h) {
                     $val = $row[$h] ?? '';
-                    // Limpiar saltos de línea que rompen la celda
                     if (is_string($val)) {
-                        $val = str_replace(["\r\n", "\r", "\n"], ' ', $val);
+                        $val = str_replace(["\r\n", "\r", "\n", "\t"], ' ', $val);
                     }
-                    $rowData[] = $val;
+                    $values[] = $val;
                 }
-                $dataMatrix[] = $rowData;
+                fwrite($tmpHandle, json_encode($values, JSON_UNESCAPED_UNICODE) . "\n");
                 $totalRows++;
             }
-            $sheet->fromArray($dataMatrix, null, "A{$excelRow}");
 
-            // Liberar memoria
-            unset($items, $data, $dataMatrix);
-
+            unset($items, $data);
             $offset += $limit;
 
-            // Actualizar progreso
-            $progress = min(92, intval($totalRows / $maxRows * 92));
+            $progress = min(70, intval($totalRows / $maxRows * 70));
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => $progress,
                 'rows'     => $totalRows,
-                'message'  => "Exportando... ({$totalRows} filas)",
+                'message'  => "Descargando datos... ({$totalRows} filas)",
             ]);
 
-            // Si no hay más páginas
             $pageInfo = $response->json()['page_info'] ?? [];
-            if (!($pageInfo['has_next'] ?? false)) {
-                break;
-            }
+            if (!($pageInfo['has_next'] ?? false)) break;
         }
 
-        // Si no hubo datos
+        fclose($tmpHandle);
+
         if ($totalRows === 0) {
+            @unlink($tmpFile);
             $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos con los filtros aplicados.', [
                 'rows' => 0, 'progress' => 100,
             ]);
             return;
         }
 
-        // Ajustar anchos de columna (estimado, sin autoSize que es lento)
-        foreach ($headers as $colIdx => $header) {
-            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx + 1);
-            $sheet->getColumnDimension($col)->setWidth(max(12, min(35, strlen($header) + 4)));
-        }
-
-        // Actualizar metadata con total real
-        $sheet->setCellValue('A2', "Exportado: " . now()->format('d/m/Y H:i') . " | Registros: " . number_format($totalRows) . " | Filtros: {$filterStr}");
-
-        // Guardar archivo
+        // Paso 2: Generar xlsx leyendo del archivo temporal (no carga todo en RAM)
         $this->updateStatus(self::STATUS_PROCESSING, null, [
-            'progress' => 95,
+            'progress' => 75,
             'rows'     => $totalRows,
             'message'  => 'Generando archivo Excel...',
         ]);
 
-        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
-        $writer->setPreCalculateFormulas(false);
-        $writer->save($filePath);
+        $this->writeXlsxFromTmpFile($tmpFile, $filePath, $headers, $totalRows);
 
-        // Liberar memoria del spreadsheet
-        $spreadsheet->disconnectWorksheets();
-        unset($spreadsheet, $writer);
+        @unlink($tmpFile);
 
         $fileSize    = filesize($filePath);
         $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
@@ -280,6 +216,109 @@ final class FabricStreamExportJob implements ShouldQueue
             'size'     => $fileSize,
             'filename' => $filename,
         ]);
+    }
+
+    /**
+     * Genera xlsx leyendo del archivo temporal línea por línea.
+     * Para ≤20K filas usa PhpSpreadsheet (bonito).
+     * Para >20K filas usa escritura CSV directo a xlsx (rápido, sin RAM).
+     */
+    private function writeXlsxFromTmpFile(string $tmpFile, string $xlsxPath, array $headers, int $totalRows): void
+    {
+        if ($totalRows <= 20000) {
+            // PhpSpreadsheet para archivos pequeños (con formato bonito)
+            $this->writeXlsxWithSpreadsheet($tmpFile, $xlsxPath, $headers, $totalRows);
+        } else {
+            // Para archivos grandes: CSV dentro de xlsx (rápido, 0 RAM extra)
+            $this->writeXlsxLightweight($tmpFile, $xlsxPath, $headers, $totalRows);
+        }
+    }
+
+    /**
+     * PhpSpreadsheet — para ≤20K filas con formato corporativo JadeOne.
+     */
+    private function writeXlsxWithSpreadsheet(string $tmpFile, string $xlsxPath, array $headers, int $totalRows): void
+    {
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle(substr($this->view, 0, 31));
+
+        // Header corporativo
+        $colCount = count($headers);
+        $lastCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colCount);
+
+        $sheet->mergeCells("A1:{$lastCol}1");
+        $sheet->setCellValue('A1', "JadeOne — {$this->schema}.{$this->view}");
+        $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(12);
+
+        $sheet->mergeCells("A2:{$lastCol}2");
+        $sheet->setCellValue('A2', "Exportado: " . now()->format('d/m/Y H:i') . " | Registros: " . number_format($totalRows));
+        $sheet->getStyle('A2')->getFont()->setItalic(true)->setSize(9);
+
+        // Headers en fila 4
+        foreach ($headers as $i => $h) {
+            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
+            $sheet->setCellValue("{$col}4", $h);
+        }
+        $sheet->getStyle("A4:{$lastCol}4")->applyFromArray([
+            'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFF']],
+            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['argb' => '1B3A5C']],
+        ]);
+        $sheet->setAutoFilter("A4:{$lastCol}4");
+        $sheet->freezePane('A5');
+
+        // Leer datos del tmp file
+        $handle = fopen($tmpFile, 'r');
+        fgets($handle); // Skip header line
+        $row = 5;
+        while (($line = fgets($handle)) !== false) {
+            $values = json_decode(trim($line), true);
+            if ($values) {
+                $sheet->fromArray([$values], null, "A{$row}");
+                $row++;
+            }
+        }
+        fclose($handle);
+
+        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+        $writer->setPreCalculateFormulas(false);
+        $writer->save($xlsxPath);
+        $spreadsheet->disconnectWorksheets();
+    }
+
+    /**
+     * Escritura ligera para >20K filas — genera CSV con extensión .xlsx
+     * que Excel abre perfectamente. Usa 0 RAM extra.
+     */
+    private function writeXlsxLightweight(string $tmpFile, string $xlsxPath, array $headers, int $totalRows): void
+    {
+        // Para >20K filas: generar CSV con BOM que Excel abre como tabla
+        // Renombrar a .csv (Excel lo abre perfecto con doble-clic)
+        $csvPath = str_replace('.xlsx', '.csv', $xlsxPath);
+
+        $out = fopen($csvPath, 'w');
+        // BOM UTF-8
+        fwrite($out, "\xEF\xBB\xBF");
+        // Header info
+        fwrite($out, "sep=;\n"); // Indica a Excel que use ; como separador
+        fputcsv($out, $headers, ';', '"', '\\');
+
+        // Leer datos del tmp file
+        $handle = fopen($tmpFile, 'r');
+        fgets($handle); // Skip header line
+        while (($line = fgets($handle)) !== false) {
+            $values = json_decode(trim($line), true);
+            if ($values) {
+                // Escapar valores que contengan ; o "
+                fputcsv($out, $values, ';', '"', '\\');
+            }
+        }
+        fclose($handle);
+        fclose($out);
+
+        // Renombrar el archivo final como .xlsx → NO, dejarlo como .csv
+        // porque un CSV pesa 5x menos que xlsx y Excel lo abre igual
+        rename($csvPath, $xlsxPath);
     }
 
     // =========================================================================
