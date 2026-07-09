@@ -368,8 +368,8 @@ class FabricViewerController extends Controller
         }
 
         $path     = $status['path'] ?? $status['file_path'] ?? null;
-        $filename = $status['filename'] ?? 'export.xlsx';
-        $format   = $status['format'] ?? 'gzip';
+        $filename = $status['filename'] ?? 'export.csv';
+        $format   = $status['format'] ?? 'csv';
 
         if (!$path || !\Illuminate\Support\Facades\Storage::disk('local')->exists($path)) {
             return response()->json([
@@ -378,11 +378,8 @@ class FabricViewerController extends Controller
             ], 410);
         }
 
-        $content = \Illuminate\Support\Facades\Storage::disk('local')->get($path);
-
-        // Limpiar después de descargar
-        \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory("fabric_exports/{$jobId}");
-        \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobId}");
+        // Ruta absoluta del archivo en disco
+        $absolutePath = storage_path('app/' . $path);
 
         $contentType = match (true) {
             $format === 'csv'             => 'text/csv; charset=utf-8',
@@ -392,13 +389,18 @@ class FabricViewerController extends Controller
             default                       => 'application/octet-stream',
         };
 
-        return response($content, 200, [
-            'Content-Type'        => $contentType,
-            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
-            'Content-Length'      => strlen($content),
-            'X-Export-Format'     => $format,
-            'X-Export-Rows'       => (string)($status['rows'] ?? 0),
-            'Cache-Control'       => 'no-store, no-cache',
+        // Usar response()->file() que hace STREAMING sin cargar en RAM
+        // Limpiar el archivo después de enviarlo (register_shutdown_function)
+        register_shutdown_function(function () use ($jobId) {
+            \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory("fabric_exports/{$jobId}");
+            \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobId}");
+        });
+
+        return response()->download($absolutePath, $filename, [
+            'Content-Type'   => $contentType,
+            'X-Export-Format' => $format,
+            'X-Export-Rows'  => (string)($status['rows'] ?? 0),
+            'Cache-Control'  => 'no-store, no-cache',
         ]);
     }
 
