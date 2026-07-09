@@ -66,14 +66,14 @@ final class FabricStreamExportJob implements ShouldQueue
                 return;
             }
 
-            // 2. Generar archivo (CSV comprimido — liviano y rápido)
+            // 2. Generar archivo Excel (.xlsx) con plantilla JadeOne
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => 92,
                 'rows'     => count($allRows),
-                'message'  => 'Generando archivo...',
+                'message'  => 'Generando Excel...',
             ]);
 
-            $this->generateCsvGzip($allRows);
+            $this->generateExcel($allRows);
 
         } catch (\Throwable $e) {
             $this->updateStatus(self::STATUS_FAILED, $e->getMessage());
@@ -261,66 +261,46 @@ final class FabricStreamExportJob implements ShouldQueue
     }
 
     /**
-     * Genera CSV comprimido con gzip. Rápido y sin dependencias externas.
+     * Genera Excel (.xlsx) con la plantilla corporativa JadeOne.
      */
-    private function generateCsvGzip(array $rows): void
+    private function generateExcel(array $rows): void
     {
-        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.csv.gz';
-        $path     = "fabric_exports/{$this->jobId}/{$filename}";
+        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
+        $dir      = storage_path("app/fabric_exports/{$this->jobId}");
+        $filePath = "{$dir}/{$filename}";
 
-        // Crear CSV en memoria y comprimir
-        $csvContent = $this->buildCsv($rows);
-        $gzContent  = gzencode($csvContent, 6);
+        // Crear directorio si no existe
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
 
-        Storage::disk('local')->put($path, $gzContent);
+        $generator = new \App\Services\Fabric\FabricExcelGenerator(
+            $this->schema,
+            $this->view,
+            $this->options['filters'] ?? []
+        );
+
+        $result = $generator->generate($rows, $filePath);
+
+        $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
 
         $this->updateStatus(self::STATUS_COMPLETED, null, [
             'progress'        => 100,
-            'rows'            => count($rows),
+            'rows'            => $result['rows'],
+            'columns'         => $result['columns'],
             'filename'        => $filename,
-            'file_path'       => $path,
-            'file_size'       => strlen($gzContent),
-            'file_size_human' => $this->humanFileSize(strlen($gzContent)),
-            'format'          => 'csv.gz',
-            'csv_filename'    => str_replace('.csv.gz', '.csv', $filename),
+            'file_path'       => $storagePath,
+            'file_size'       => $result['file_size'],
+            'file_size_human' => $this->humanFileSize($result['file_size']),
+            'format'          => 'xlsx',
         ]);
 
-        Log::info('FabricStreamExportJob: CSV generado', [
+        Log::info('FabricStreamExportJob: Excel generado', [
             'job_id'   => $this->jobId,
-            'rows'     => count($rows),
-            'size'     => strlen($gzContent),
+            'rows'     => $result['rows'],
+            'size'     => $result['file_size'],
             'filename' => $filename,
         ]);
-    }
-
-    /**
-     * Construye un CSV UTF-8 con BOM (compatible con Excel).
-     */
-    private function buildCsv(array $rows): string
-    {
-        if (empty($rows)) {
-            return '';
-        }
-
-        $output = fopen('php://temp', 'r+');
-
-        // BOM UTF-8 para que Excel abra bien los acentos
-        fwrite($output, "\xEF\xBB\xBF");
-
-        // Headers (nombres de columnas)
-        $headers = array_keys($rows[0]);
-        fputcsv($output, $headers, ';'); // Separador ; para Excel en español
-
-        // Datos
-        foreach ($rows as $row) {
-            fputcsv($output, array_values($row), ';');
-        }
-
-        rewind($output);
-        $csv = stream_get_contents($output);
-        fclose($output);
-
-        return $csv;
     }
 
     // =========================================================================
@@ -369,7 +349,7 @@ final class FabricStreamExportJob implements ShouldQueue
             'schema'     => $schema,
             'view'       => $view,
             'user_id'    => $userId,
-            'format'     => 'csv.gz',
+            'format'     => 'xlsx',
             'created_at' => now()->toIso8601String(),
             'updated_at' => now()->toIso8601String(),
         ], 1800);
