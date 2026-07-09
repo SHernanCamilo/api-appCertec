@@ -197,6 +197,18 @@ final class FabricStreamExportJob implements ShouldQueue
 
         @unlink($tmpFile);
 
+        // Si >20K filas, el archivo es CSV (no xlsx) — corregir extensión y formato
+        $format = 'xlsx';
+        if ($totalRows > 20000) {
+            $csvFilePath = str_replace('.xlsx', '.csv', $filePath);
+            if (file_exists($filePath)) {
+                rename($filePath, $csvFilePath);
+            }
+            $filePath = $csvFilePath;
+            $filename = str_replace('.xlsx', '.csv', $filename);
+            $format = 'csv';
+        }
+
         $fileSize    = filesize($filePath);
         $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
 
@@ -207,7 +219,7 @@ final class FabricStreamExportJob implements ShouldQueue
             'file_path'       => $storagePath,
             'file_size'       => $fileSize,
             'file_size_human' => $this->humanFileSize($fileSize),
-            'format'          => 'xlsx',
+            'format'          => $format,
         ]);
 
         Log::info('FabricStreamExportJob: Excel generado', [
@@ -292,33 +304,25 @@ final class FabricStreamExportJob implements ShouldQueue
      */
     private function writeXlsxLightweight(string $tmpFile, string $xlsxPath, array $headers, int $totalRows): void
     {
-        // Para >20K filas: generar CSV con BOM que Excel abre como tabla
-        // Renombrar a .csv (Excel lo abre perfecto con doble-clic)
-        $csvPath = str_replace('.xlsx', '.csv', $xlsxPath);
-
-        $out = fopen($csvPath, 'w');
+        // Escribir directo al path recibido (se renombrará a .csv después)
+        $out = fopen($xlsxPath, 'w');
         // BOM UTF-8
         fwrite($out, "\xEF\xBB\xBF");
-        // Header info
-        fwrite($out, "sep=;\n"); // Indica a Excel que use ; como separador
+        // Indica a Excel que use ; como separador
+        fwrite($out, "sep=;\n");
         fputcsv($out, $headers, ';', '"', '\\');
 
-        // Leer datos del tmp file
+        // Leer datos del tmp file línea por línea (0 RAM extra)
         $handle = fopen($tmpFile, 'r');
         fgets($handle); // Skip header line
         while (($line = fgets($handle)) !== false) {
             $values = json_decode(trim($line), true);
             if ($values) {
-                // Escapar valores que contengan ; o "
                 fputcsv($out, $values, ';', '"', '\\');
             }
         }
         fclose($handle);
         fclose($out);
-
-        // Renombrar el archivo final como .xlsx → NO, dejarlo como .csv
-        // porque un CSV pesa 5x menos que xlsx y Excel lo abre igual
-        rename($csvPath, $xlsxPath);
     }
 
     // =========================================================================
