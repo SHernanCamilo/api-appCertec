@@ -66,10 +66,3 @@ Route::middleware(['auth:api'])->group(function () {
         Route::delete('/{id}', [\App\Http\Controllers\Fabric\ODataController::class, 'deactivateLink']);
     });
 });
-
-// =========================================================================
-// OData Endpoint — FUERA del middleware auth:api (tiene su propia autenticación)
-// Excel/Power Query se conecta con Bearer Azure AD o token público en URL.
-// =========================================================================
-Route::get('/odata/link/{code}', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLink'])
-    ->where('code', '[a-f0-9]{32}');

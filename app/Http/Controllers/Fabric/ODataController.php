@@ -27,17 +27,22 @@ class ODataController extends Controller
 {
     public function __construct(
         private GraphFabricGatewayService $gateway
-    ) {}
+    ) {
+    }
 
     // =========================================================================
     // ENDPOINT PRINCIPAL: GET /odata/link/{code}
     // =========================================================================
 
     /**
-     * Acceder a un link OData.
-     * Excel llama esta URL con Bearer token (Azure AD) o ?token=xxx (público).
+     * Acceder a un link OData — siempre devuelve UNA página (5K max).
+     * Power Query sigue @odata.nextLink automáticamente para cargar todo.
+     *
+     * Excel "Fuente OData" llama primero la URL raíz esperando un service document.
+     * Si no hay $top/$skip → devolver service document.
+     * Si hay $top/$skip o el Accept indica datos → devolver datos.
      */
-    public function queryByLink(Request $request, string $code): JsonResponse
+    public function queryByLink(Request $request, string $code): mixed
     {
         $link = OdataLink::where('code', $code)->first();
 
@@ -49,23 +54,60 @@ class ODataController extends Controller
             return $this->odataError('LinkExpired', 'El link ha expirado o fue desactivado.', 403);
         }
 
-        // Autenticar según nivel de visibilidad
+        // Autenticar
         $authResult = $this->authenticateRequest($request, $link);
         if ($authResult['error']) {
             return $this->odataError($authResult['code'], $authResult['message'], 401);
         }
 
-        $userEmail = $authResult['email'];
-        $userName  = $authResult['name'];
+        // Si Excel pide el service document (primera vez, sin params de datos)
+        $hasDataParams = $request->has('$top') || $request->has('$skip') || $request->has('$filter');
+        if (!$hasDataParams) {
+            return $this->serviceDocument($code, $link);
+        }
 
-        // Parsear parámetros OData
-        $top     = min((int) $request->query('$top', '1000'), 5000);
-        $skip    = max((int) $request->query('$skip', '0'), 0);
-        $filter  = $request->query('$filter', '');
-        $select  = $request->query('$select', '');
+        // Devolver datos paginados
+        return $this->fetchData($request, $code, $link, $authResult);
+    }
+
+    /**
+     * Service Document OData — Excel lo necesita para reconocer la fuente.
+     * Lista las "entidades" disponibles (en nuestro caso, solo "value" = la vista).
+     */
+    private function serviceDocument(string $code, OdataLink $link): JsonResponse
+    {
+        $baseUrl = url("/api/fabric/odata/link/{$code}");
+
+        return response()->json([
+            '@odata.context' => "{$baseUrl}/\$metadata",
+            'value' => [
+                [
+                    'name' => 'value',
+                    'kind' => 'EntitySet',
+                    'url'  => 'value',
+                ],
+            ],
+        ], 200, [
+            'OData-Version' => '4.0',
+            'Content-Type'  => 'application/json; odata.metadata=minimal',
+        ]);
+    }
+
+    /**
+     * Datos paginados con formato OData.
+     * Power Query sigue @odata.nextLink para cargar todas las páginas.
+     */
+    private function fetchData(Request $request, string $code, OdataLink $link, array $authResult): JsonResponse
+    {
+        $userEmail = $authResult['email'];
+        $userName = $authResult['name'];
+
+        $top = min((int) $request->query('$top', '5000'), 5000);
+        $skip = max((int) $request->query('$skip', '0'), 0);
+        $filter = $request->query('$filter', '');
+        $select = $request->query('$select', '');
         $orderby = $request->query('$orderby', '');
 
-        // Combinar filtros del link + filtros del request
         $filters = array_merge(
             $link->filters ?? [],
             $this->parseODataFilter($filter)
@@ -81,19 +123,18 @@ class ODataController extends Controller
             $sortDir = $link->sort_dir ?? 'asc';
         }
 
-        // Consultar Graph-Fabric
         $startTime = microtime(true);
 
         $result = $this->gateway->queryAsSystem(
             $link->schema_name,
             $link->view_name,
             [
-                'columns'    => $columns,
-                'filters'    => $filters,
-                'limit'      => $top,
-                'offset'     => $skip,
-                'sort_col'   => $sortCol,
-                'sort_dir'   => $sortDir,
+                'columns' => $columns,
+                'filters' => $filters,
+                'limit' => $top,
+                'offset' => $skip,
+                'sort_col' => $sortCol,
+                'sort_dir' => $sortDir,
             ]
         );
 
@@ -104,49 +145,90 @@ class ODataController extends Controller
         }
 
         $items = $result['data'] ?? [];
+        $hasNext = $result['meta']['has_next'] ?? (count($items) === $top);
 
         // Registrar acceso
         $link->recordAccess();
         OdataAccessLog::create([
-            'odata_link_id'  => $link->id,
-            'user_email'     => $userEmail,
-            'user_name'      => $userName,
-            'schema_name'    => $link->schema_name,
-            'view_name'      => $link->view_name,
-            'visibility'     => $link->visibility,
+            'odata_link_id' => $link->id,
+            'user_email' => $userEmail,
+            'user_name' => $userName,
+            'schema_name' => $link->schema_name,
+            'view_name' => $link->view_name,
+            'visibility' => $link->visibility,
             'filter_applied' => $filter ?: null,
-            'top'            => $top,
-            'skip'           => $skip,
-            'rows_returned'  => count($items),
-            'elapsed_ms'     => $elapsedMs,
-            'ip_address'     => $request->ip(),
-            'user_agent'     => $request->userAgent(),
-            'auth_method'    => $authResult['method'],
+            'top' => $top,
+            'skip' => $skip,
+            'rows_returned' => count($items),
+            'elapsed_ms' => $elapsedMs,
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+            'auth_method' => $authResult['method'],
         ]);
 
-        // Construir respuesta OData
+        // Construir respuesta OData (sin @odata.count — Excel no lo acepta en entity sets)
         $response = [
-            '@odata.context' => url("/odata/link/{$code}/\$metadata"),
-            'value'          => $items,
+            '@odata.context' => url("/api/fabric/odata/link/{$code}/\$metadata#value"),
+            'value' => $items,
         ];
 
-        // nextLink si hay más páginas
-        $hasNext = ($result['meta']['has_next'] ?? false) || count($items) === $top;
+        // SIEMPRE incluir nextLink si hay más páginas — Power Query lo sigue automáticamente
         if ($hasNext && count($items) > 0) {
             $nextSkip = $skip + $top;
             $nextParams = array_filter([
-                '$top'     => $top,
-                '$skip'    => $nextSkip,
-                '$filter'  => $filter ?: null,
-                '$select'  => $select ?: null,
+                '$top' => (string) $top,
+                '$skip' => (string) $nextSkip,
+                '$filter' => $filter ?: null,
+                '$select' => $select ?: null,
                 '$orderby' => $orderby ?: null,
-                'token'    => $request->query('token'), // mantener token público
+                'token' => $request->query('token'),
             ]);
-            $response['@odata.nextLink'] = url("/odata/link/{$code}")
+            $response['@odata.nextLink'] = url("/api/fabric/odata/link/{$code}")
                 . '?' . http_build_query($nextParams);
         }
 
-        return response()->json($response);
+        return response()->json($response, 200, [
+            'OData-Version' => '4.0',
+            'Content-Type' => 'application/json; odata.metadata=minimal',
+        ]);
+    }
+
+    // =========================================================================
+    // METADATA — Service Document para que Excel reconozca la fuente OData
+    // =========================================================================
+
+    /**
+     * GET /api/fabric/odata/link/{code}/$metadata
+     * Devuelve un EDMX mínimo que Excel necesita para reconocer la fuente.
+     */
+    public function metadata(Request $request, string $code)
+    {
+        $link = OdataLink::where('code', $code)->first();
+
+        if (!$link) {
+            return response('Not found', 404);
+        }
+
+        // EDMX mínimo — Excel solo necesita saber que es un servicio OData válido
+        $edmx = '<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="Fabric" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EntityType Name="Row">
+        <Key><PropertyRef Name="Id"/></Key>
+        <Property Name="Id" Type="Edm.Int32" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="Container">
+        <EntitySet Name="value" EntityType="Fabric.Row"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>';
+
+        return response($edmx, 200, [
+            'Content-Type' => 'application/xml',
+            'OData-Version' => '4.0',
+        ]);
     }
 
     // =========================================================================
@@ -160,16 +242,16 @@ class ODataController extends Controller
     public function createLink(Request $request): JsonResponse
     {
         $request->validate([
-            'name'        => 'required|string|max:150',
-            'visibility'  => 'required|in:private,organizational,public',
+            'name' => 'required|string|max:150',
+            'visibility' => 'required|in:private,organizational,public',
             'schema_name' => 'required|string|max:20',
-            'view_name'   => 'required|string|max:150',
-            'columns'     => 'nullable|array',
-            'filters'     => 'nullable|array',
-            'sort_col'    => 'nullable|string|max:100',
-            'sort_dir'    => 'nullable|in:asc,desc',
-            'max_rows'    => 'nullable|integer|min:100|max:1000000',
-            'expires_at'  => 'nullable|date|after:now',
+            'view_name' => 'required|string|max:150',
+            'columns' => 'nullable|array',
+            'filters' => 'nullable|array',
+            'sort_col' => 'nullable|string|max:100',
+            'sort_dir' => 'nullable|in:asc,desc',
+            'max_rows' => 'nullable|integer|min:100|max:1000000',
+            'expires_at' => 'nullable|date|after:now',
             'allowed_ips' => 'nullable|array',
             'allowed_users' => 'nullable|array',
         ]);
@@ -193,33 +275,33 @@ class ODataController extends Controller
         }
 
         $link = OdataLink::create([
-            'code'             => $code,
-            'name'             => $request->name,
-            'visibility'       => $request->visibility,
-            'created_by'       => $user->id,
+            'code' => $code,
+            'name' => $request->name,
+            'visibility' => $request->visibility,
+            'created_by' => $user->id,
             'created_by_email' => $user->email,
-            'schema_name'      => strtolower($request->schema_name),
-            'view_name'        => $request->view_name,
-            'columns'          => $request->columns,
-            'filters'          => $request->filters,
-            'sort_col'         => $request->sort_col,
-            'sort_dir'         => $request->sort_dir ?? 'asc',
-            'max_rows'         => $request->max_rows ?? 100000,
-            'token_hash'       => $tokenData['hash'] ?? null,
-            'expires_at'       => $request->expires_at,
-            'allowed_ips'      => $request->allowed_ips,
-            'allowed_users'    => $request->allowed_users,
+            'schema_name' => strtolower($request->schema_name),
+            'view_name' => $request->view_name,
+            'columns' => $request->columns,
+            'filters' => $request->filters,
+            'sort_col' => $request->sort_col,
+            'sort_dir' => $request->sort_dir ?? 'asc',
+            'max_rows' => $request->max_rows ?? 100000,
+            'token_hash' => $tokenData['hash'] ?? null,
+            'expires_at' => $request->expires_at,
+            'allowed_ips' => $request->allowed_ips,
+            'allowed_users' => $request->allowed_users,
         ]);
 
         $response = [
             'success' => true,
-            'data'    => [
-                'id'         => $link->id,
-                'code'       => $link->code,
-                'name'       => $link->name,
+            'data' => [
+                'id' => $link->id,
+                'code' => $link->code,
+                'name' => $link->name,
                 'visibility' => $link->visibility,
-                'url'        => url("/odata/link/{$link->code}"),
-                'excel_url'  => url("/odata/link/{$link->code}"),
+                'url' => url("/odata/link/{$link->code}"),
+                'excel_url' => url("/odata/link/{$link->code}"),
                 'expires_at' => $link->expires_at?->toIso8601String(),
             ],
         ];
@@ -227,8 +309,8 @@ class ODataController extends Controller
         // El token público solo se muestra UNA VEZ al crear
         if ($tokenData) {
             $response['data']['public_token'] = $tokenData['token'];
-            $response['data']['full_url']     = url("/odata/link/{$link->code}") . "?token={$tokenData['token']}";
-            $response['data']['warning']      = 'Guarda este token. No se puede recuperar después.';
+            $response['data']['full_url'] = url("/odata/link/{$link->code}") . "?token={$tokenData['token']}";
+            $response['data']['warning'] = 'Guarda este token. No se puede recuperar después.';
         }
 
         return response()->json($response, 201);
@@ -240,27 +322,38 @@ class ODataController extends Controller
      */
     public function listLinks(Request $request): JsonResponse
     {
-        $user  = auth()->user();
+        $user = auth()->user();
         $links = OdataLink::where('created_by', $user->id)
             ->orderByDesc('created_at')
-            ->get(['id', 'code', 'name', 'visibility', 'schema_name', 'view_name',
-                   'active', 'expires_at', 'access_count', 'last_accessed_at', 'created_at']);
+            ->get([
+                'id',
+                'code',
+                'name',
+                'visibility',
+                'schema_name',
+                'view_name',
+                'active',
+                'expires_at',
+                'access_count',
+                'last_accessed_at',
+                'created_at'
+            ]);
 
         return response()->json([
             'success' => true,
-            'data'    => $links->map(fn($l) => [
-                'id'              => $l->id,
-                'code'            => $l->code,
-                'name'            => $l->name,
-                'visibility'      => $l->visibility,
-                'schema'          => $l->schema_name,
-                'view'            => $l->view_name,
-                'url'             => url("/odata/link/{$l->code}"),
-                'active'          => $l->active,
-                'expires_at'      => $l->expires_at?->toIso8601String(),
-                'access_count'    => $l->access_count,
+            'data' => $links->map(fn($l) => [
+                'id' => $l->id,
+                'code' => $l->code,
+                'name' => $l->name,
+                'visibility' => $l->visibility,
+                'schema' => $l->schema_name,
+                'view' => $l->view_name,
+                'url' => url("/odata/link/{$l->code}"),
+                'active' => $l->active,
+                'expires_at' => $l->expires_at?->toIso8601String(),
+                'access_count' => $l->access_count,
                 'last_accessed_at' => $l->last_accessed_at?->toIso8601String(),
-                'created_at'      => $l->created_at->toIso8601String(),
+                'created_at' => $l->created_at->toIso8601String(),
             ]),
         ]);
     }
@@ -298,15 +391,15 @@ class ODataController extends Controller
             $token = $request->query('token', '');
             if (!$token || !$link->validatePublicToken($token)) {
                 return [
-                    'error'   => true,
-                    'code'    => 'InvalidToken',
+                    'error' => true,
+                    'code' => 'InvalidToken',
                     'message' => 'Token inválido o faltante para link público.',
                 ];
             }
             return [
-                'error'  => false,
-                'email'  => 'public_access',
-                'name'   => 'Acceso Público',
+                'error' => false,
+                'email' => 'public_access',
+                'name' => 'Acceso Público',
                 'method' => 'token_public',
             ];
         }
@@ -323,23 +416,23 @@ class ODataController extends Controller
                     // Verificar acceso según nivel
                     if (!$link->canAccess($azureUser['email'], $request->ip())) {
                         return [
-                            'error'   => true,
-                            'code'    => 'AccessDenied',
+                            'error' => true,
+                            'code' => 'AccessDenied',
                             'message' => 'No tiene permiso para acceder a este link.',
                         ];
                     }
                     return [
-                        'error'  => false,
-                        'email'  => $azureUser['email'],
-                        'name'   => $azureUser['name'],
+                        'error' => false,
+                        'email' => $azureUser['email'],
+                        'name' => $azureUser['name'],
                         'method' => 'azure_ad',
                     ];
                 }
             }
 
             return [
-                'error'   => true,
-                'code'    => 'AuthRequired',
+                'error' => true,
+                'code' => 'AuthRequired',
                 'message' => 'Autenticación requerida. Use "Cuenta de organización" en Excel.',
             ];
         }
@@ -347,16 +440,16 @@ class ODataController extends Controller
         // Usuario autenticado con JWT de Laravel (desde Angular/Postman)
         if (!$link->canAccess($user->email, $request->ip())) {
             return [
-                'error'   => true,
-                'code'    => 'AccessDenied',
+                'error' => true,
+                'code' => 'AccessDenied',
                 'message' => 'No tiene permiso para acceder a este link.',
             ];
         }
 
         return [
-            'error'  => false,
-            'email'  => $user->email,
-            'name'   => $user->name ?? $user->email,
+            'error' => false,
+            'email' => $user->email,
+            'name' => $user->name ?? $user->email,
             'method' => 'azure_ad',
         ];
     }
@@ -371,31 +464,36 @@ class ODataController extends Controller
             // Decodificar payload sin validar firma (para extraer email)
             // En producción con firebase/php-jwt se valida la firma completa
             $parts = explode('.', $token);
-            if (count($parts) !== 3) return null;
+            if (count($parts) !== 3)
+                return null;
 
             $payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
-            if (!$payload) return null;
+            if (!$payload)
+                return null;
 
             // Verificar que no esté expirado
             $exp = $payload['exp'] ?? 0;
-            if ($exp < time()) return null;
+            if ($exp < time())
+                return null;
 
             // Verificar issuer (debe ser Azure AD de Medilaser)
             $tenantId = env('AZURE_TENANT_ID', '');
             $iss = $payload['iss'] ?? '';
-            if ($tenantId && !str_contains($iss, $tenantId)) return null;
+            if ($tenantId && !str_contains($iss, $tenantId))
+                return null;
 
             $email = $payload['preferred_username']
-                  ?? $payload['upn']
-                  ?? $payload['email']
-                  ?? $payload['unique_name']
-                  ?? '';
+                ?? $payload['upn']
+                ?? $payload['email']
+                ?? $payload['unique_name']
+                ?? '';
 
-            if (!$email) return null;
+            if (!$email)
+                return null;
 
             return [
                 'email' => $email,
-                'name'  => $payload['name'] ?? $email,
+                'name' => $payload['name'] ?? $email,
             ];
         } catch (\Exception $e) {
             Log::debug('OData: Error validando token Azure', ['error' => $e->getMessage()]);
@@ -409,7 +507,8 @@ class ODataController extends Controller
 
     private function parseODataFilter(string $filter): array
     {
-        if (empty($filter)) return [];
+        if (empty($filter))
+            return [];
 
         $filters = [];
         $parts = preg_split('/\s+and\s+/i', $filter);
@@ -432,7 +531,8 @@ class ODataController extends Controller
 
     private function parseOrderBy(string $orderby): array
     {
-        if (empty($orderby)) return ['', 'asc'];
+        if (empty($orderby))
+            return ['', 'asc'];
         $parts = explode(' ', trim($orderby));
         $col = $parts[0] ?? '';
         $dir = strtolower($parts[1] ?? 'asc');

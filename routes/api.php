@@ -287,6 +287,17 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('fabric')->group(fu
     require __DIR__ . '/Fabric/FabricRouter.php';
 });
 
+// ── OData Endpoint PÚBLICO — sin auth:api (tiene su propia autenticación por token/Azure AD)
+// Excel/Power Query se conecta directamente a esta URL.
+Route::prefix('fabric/odata')->group(function () {
+    // Service document (Excel lo pide al conectar como fuente OData)
+    Route::get('/link/{code}/$metadata', [\App\Http\Controllers\Fabric\ODataController::class, 'metadata'])
+        ->where('code', '[a-f0-9]{32}');
+    // Datos
+    Route::get('/link/{code}', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLink'])
+        ->where('code', '[a-f0-9]{32}');
+});
+
 // Rutas de Notificaciones (Interconsultas) → routes/Notificaciones/NotificacionesRouter.php
 Route::middleware(['auth:api', 'check.user.active'])->prefix('notificaciones')->group(function () {
     require __DIR__ . '/Notificaciones/NotificacionesRouter.php';

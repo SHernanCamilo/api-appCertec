@@ -50,8 +50,8 @@ final class FabricStreamExportJob implements ShouldQueue
 
     public function handle(): void
     {
-        // No necesitamos mucha RAM: escribimos directo a disco mientras leemos
-        ini_set('memory_limit', '256M');
+        // Excel con 150K+ filas necesita RAM para PhpSpreadsheet (genera XML interno)
+        ini_set('memory_limit', '1G');
 
         $this->updateStatus(self::STATUS_PROCESSING, null, ['progress' => 0, 'rows' => 0]);
 
@@ -84,22 +84,42 @@ final class FabricStreamExportJob implements ShouldQueue
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
         $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
-        $limit   = 5000; // Máximo que acepta la API por request
+        $limit   = 5000;
         $offset  = 0;
         $totalRows = 0;
-        $headersWritten = false;
+        $headers = [];
 
-        // Preparar archivo CSV
-        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.csv';
+        // Preparar archivo Excel
+        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
         $dir      = storage_path("app/fabric_exports/{$this->jobId}");
         if (!is_dir($dir)) {
             mkdir($dir, 0775, true);
         }
         $filePath = "{$dir}/{$filename}";
-        $handle   = fopen($filePath, 'w');
 
-        // BOM UTF-8 para Excel
-        fwrite($handle, "\xEF\xBB\xBF");
+        // Crear spreadsheet con header corporativo
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle(substr($this->view, 0, 31));
+
+        $spreadsheet->getProperties()
+            ->setCreator('JadeOne - Medilaser')
+            ->setTitle("{$this->schema} - {$this->view}");
+
+        // Fila 1: Título
+        $sheet->setCellValue('A1', "JadeOne — {$this->schema}.{$this->view}");
+        $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(12);
+        $sheet->getRowDimension(1)->setRowHeight(20);
+
+        // Fila 2: Metadata
+        $filterStr = !empty($this->options['filters'])
+            ? implode(' | ', array_map(fn($k, $v) => "{$k}: {$v}", array_keys($this->options['filters']), $this->options['filters']))
+            : 'Sin filtros';
+        $sheet->setCellValue('A2', "Exportado: " . now()->format('d/m/Y H:i') . " | Filtros: {$filterStr}");
+        $sheet->getStyle('A2')->getFont()->setItalic(true)->setSize(9);
+
+        // Fila 3: vacía (separador)
+        $dataStartRow = 4; // Los headers van en fila 4, datos desde fila 5
 
         $payload = [
             'token'       => $token,
@@ -116,7 +136,7 @@ final class FabricStreamExportJob implements ShouldQueue
             'skip_count'  => true,
         ];
 
-        // Paginar: leer 5K filas por request, escribir al CSV, liberar memoria
+        // Paginar: leer 5K filas por request, escribir al Excel
         while ($offset < $maxRows) {
             $payload['limit']  = $limit;
             $payload['offset'] = $offset;
@@ -127,11 +147,8 @@ final class FabricStreamExportJob implements ShouldQueue
                 ->post($url . '/api/data/dynamic', $payload);
 
             if ($response->failed()) {
-                // Si es 422 filters_required, reportar error amigable
                 $body = $response->json();
                 if ($response->status() === 422 && ($body['error'] ?? '') === 'filters_required') {
-                    fclose($handle);
-                    @unlink($filePath);
                     $this->updateStatus(self::STATUS_FAILED, $body['message'] ?? 'Vista requiere filtros.');
                     return;
                 }
@@ -144,53 +161,104 @@ final class FabricStreamExportJob implements ShouldQueue
             $items = $data['items'] ?? [];
 
             if (empty($items)) {
-                break; // No hay más datos
+                break;
             }
 
-            // Escribir headers del CSV (solo la primera vez)
-            if (!$headersWritten) {
+            // Escribir headers (solo la primera vez)
+            if (empty($headers)) {
                 $headers = array_keys($items[0]);
-                fputcsv($handle, $headers, ';');
-                $headersWritten = true;
+                $colCount = count($headers);
+
+                // Escribir encabezados en fila 4
+                foreach ($headers as $colIdx => $header) {
+                    $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx + 1);
+                    $sheet->setCellValue("{$col}{$dataStartRow}", $header);
+                }
+
+                // Estilo de encabezados
+                $lastCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colCount);
+                $headerRange = "A{$dataStartRow}:{$lastCol}{$dataStartRow}";
+                $sheet->getStyle($headerRange)->applyFromArray([
+                    'font' => ['bold' => true, 'size' => 10, 'color' => ['argb' => 'FFFFFF']],
+                    'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['argb' => '1B3A5C']],
+                ]);
+                $sheet->setAutoFilter($headerRange);
+                $sheet->freezePane('A' . ($dataStartRow + 1));
+
+                // Merge título
+                $sheet->mergeCells("A1:{$lastCol}1");
+                $sheet->mergeCells("A2:{$lastCol}2");
             }
 
-            // Escribir filas directo al disco
+            // Escribir filas de datos usando fromArray (mucho más rápido que celda por celda)
+            $excelRow = $dataStartRow + 1 + $totalRows;
+            $dataMatrix = [];
             foreach ($items as $row) {
-                fputcsv($handle, array_map(fn($h) => $row[$h] ?? '', $headers), ';');
+                $rowData = [];
+                foreach ($headers as $h) {
+                    $val = $row[$h] ?? '';
+                    // Limpiar saltos de línea que rompen la celda
+                    if (is_string($val)) {
+                        $val = str_replace(["\r\n", "\r", "\n"], ' ', $val);
+                    }
+                    $rowData[] = $val;
+                }
+                $dataMatrix[] = $rowData;
                 $totalRows++;
             }
+            $sheet->fromArray($dataMatrix, null, "A{$excelRow}");
 
-            // Liberar memoria del batch actual
-            unset($items, $data);
+            // Liberar memoria
+            unset($items, $data, $dataMatrix);
 
             $offset += $limit;
 
             // Actualizar progreso
-            $progress = min(95, intval($totalRows / $maxRows * 95));
+            $progress = min(92, intval($totalRows / $maxRows * 92));
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => $progress,
                 'rows'     => $totalRows,
-                'message'  => "Exportando datos... ({$totalRows} filas)",
+                'message'  => "Exportando... ({$totalRows} filas)",
             ]);
 
-            // Si el último batch tenía menos de $limit filas, ya no hay más
+            // Si no hay más páginas
             $pageInfo = $response->json()['page_info'] ?? [];
             if (!($pageInfo['has_next'] ?? false)) {
                 break;
             }
         }
 
-        fclose($handle);
-
         // Si no hubo datos
         if ($totalRows === 0) {
-            @unlink($filePath);
             $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos con los filtros aplicados.', [
-                'rows' => 0,
-                'progress' => 100,
+                'rows' => 0, 'progress' => 100,
             ]);
             return;
         }
+
+        // Ajustar anchos de columna (estimado, sin autoSize que es lento)
+        foreach ($headers as $colIdx => $header) {
+            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colIdx + 1);
+            $sheet->getColumnDimension($col)->setWidth(max(12, min(35, strlen($header) + 4)));
+        }
+
+        // Actualizar metadata con total real
+        $sheet->setCellValue('A2', "Exportado: " . now()->format('d/m/Y H:i') . " | Registros: " . number_format($totalRows) . " | Filtros: {$filterStr}");
+
+        // Guardar archivo
+        $this->updateStatus(self::STATUS_PROCESSING, null, [
+            'progress' => 95,
+            'rows'     => $totalRows,
+            'message'  => 'Generando archivo Excel...',
+        ]);
+
+        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+        $writer->setPreCalculateFormulas(false);
+        $writer->save($filePath);
+
+        // Liberar memoria del spreadsheet
+        $spreadsheet->disconnectWorksheets();
+        unset($spreadsheet, $writer);
 
         $fileSize    = filesize($filePath);
         $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
@@ -202,10 +270,10 @@ final class FabricStreamExportJob implements ShouldQueue
             'file_path'       => $storagePath,
             'file_size'       => $fileSize,
             'file_size_human' => $this->humanFileSize($fileSize),
-            'format'          => 'csv',
+            'format'          => 'xlsx',
         ]);
 
-        Log::info('FabricStreamExportJob: export completado', [
+        Log::info('FabricStreamExportJob: Excel generado', [
             'job_id'   => $this->jobId,
             'rows'     => $totalRows,
             'size'     => $fileSize,

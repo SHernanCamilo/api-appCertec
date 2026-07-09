@@ -24,6 +24,13 @@ class OdataLink extends Model
         'active', 'access_count', 'last_accessed_at',
     ];
 
+    protected $attributes = [
+        'active'       => true,
+        'access_count' => 0,
+        'sort_dir'     => 'asc',
+        'max_rows'     => 100000,
+    ];
+
     protected $casts = [
         'columns'          => 'array',
         'filters'          => 'array',
