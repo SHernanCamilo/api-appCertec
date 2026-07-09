@@ -301,7 +301,7 @@ class FabricViewerController extends Controller
             ], 403);
         }
 
-        $jobId = \App\Jobs\FabricExportJob::dispatch_and_track(
+        $jobId = \App\Jobs\FabricStreamExportJob::dispatch_and_track(
             $user->id,
             $schema,
             $request->view,
@@ -310,7 +310,7 @@ class FabricViewerController extends Controller
                 'filters'  => $request->input('filters', []),
                 'sort_col' => $request->input('sort_col', ''),
                 'sort_dir' => $request->input('sort_dir', 'asc'),
-                'max_rows' => $request->input('max_rows', 100000),
+                'max_rows' => $request->input('max_rows', 500000),
                 'format'   => $request->input('format', 'gzip'),
             ]
         );
@@ -334,7 +334,7 @@ class FabricViewerController extends Controller
      */
     public function exportStatus(string $jobId): JsonResponse
     {
-        $status = \App\Jobs\FabricExportJob::getStatus($jobId);
+        $status = \Illuminate\Support\Facades\Cache::get("fabric_export:{$jobId}");
 
         if ($status === null) {
             return response()->json([
@@ -358,7 +358,7 @@ class FabricViewerController extends Controller
      */
     public function exportDownload(string $jobId): mixed
     {
-        $status = \App\Jobs\FabricExportJob::getStatus($jobId);
+        $status = \Illuminate\Support\Facades\Cache::get("fabric_export:{$jobId}");
 
         if ($status === null || ($status['status'] ?? '') !== 'completed') {
             return response()->json([
@@ -367,7 +367,7 @@ class FabricViewerController extends Controller
             ], 404);
         }
 
-        $path     = $status['path'] ?? null;
+        $path     = $status['path'] ?? $status['file_path'] ?? null;
         $filename = $status['filename'] ?? 'export.xlsx';
         $format   = $status['format'] ?? 'gzip';
 
@@ -381,17 +381,22 @@ class FabricViewerController extends Controller
         $content = \Illuminate\Support\Facades\Storage::disk('local')->get($path);
 
         // Limpiar después de descargar
-        \App\Jobs\FabricExportJob::cleanup($jobId);
+        \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory("fabric_exports/{$jobId}");
+        \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobId}");
 
-        $contentType = $format === 'gzip'
-            ? 'application/gzip'
-            : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        $contentType = match (true) {
+            str_contains($format, 'csv')  => 'application/gzip',
+            $format === 'gzip'            => 'application/gzip',
+            $format === 'xlsx'            => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            default                       => 'application/octet-stream',
+        };
 
         return response($content, 200, [
             'Content-Type'        => $contentType,
             'Content-Disposition' => "attachment; filename=\"{$filename}\"",
             'Content-Length'      => strlen($content),
             'X-Export-Format'     => $format,
+            'X-Export-Rows'       => (string)($status['rows'] ?? 0),
             'Cache-Control'       => 'no-store, no-cache',
         ]);
     }

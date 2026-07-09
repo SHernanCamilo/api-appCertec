@@ -916,6 +916,14 @@ class GraphFabricGatewayService
     }
 
     /**
+     * Wrapper público de normalizeFilters para uso desde Jobs.
+     */
+    public function normalizeFiltersPublic(mixed $filters): object|array
+    {
+        return $this->normalizeFilters($filters);
+    }
+
+    /**
      * Normaliza un valor de filtro. Si es una fecha en formato local
      * (dd/mm/yyyy, d/m/yyyy, dd-mm-yyyy, con u sin hora) la convierte a ISO.
      * Los valores ya en ISO (yyyy-mm-dd[ T]hh:mm:ss) se dejan intactos.
