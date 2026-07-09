@@ -50,6 +50,9 @@ final class FabricStreamExportJob implements ShouldQueue
 
     public function handle(): void
     {
+        // Subir memory_limit para exports grandes (PhpSpreadsheet es intensivo en RAM)
+        ini_set('memory_limit', '512M');
+
         $this->updateStatus(self::STATUS_PROCESSING, null, ['progress' => 0, 'rows' => 0]);
 
         try {
@@ -66,14 +69,20 @@ final class FabricStreamExportJob implements ShouldQueue
                 return;
             }
 
-            // 2. Generar archivo Excel (.xlsx) con plantilla JadeOne
+            // 2. Generar archivo:
+            //    - ≤10K filas: Excel .xlsx con plantilla JadeOne (bonito)
+            //    - >10K filas: CSV con BOM UTF-8 (rápido, sin agotar RAM)
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => 92,
                 'rows'     => count($allRows),
-                'message'  => 'Generando Excel...',
+                'message'  => count($allRows) > 10000 ? 'Generando CSV...' : 'Generando Excel...',
             ]);
 
-            $this->generateExcel($allRows);
+            if (count($allRows) <= 10000) {
+                $this->generateExcel($allRows);
+            } else {
+                $this->generateCsv($allRows);
+            }
 
         } catch (\Throwable $e) {
             $this->updateStatus(self::STATUS_FAILED, $e->getMessage());
@@ -299,6 +308,58 @@ final class FabricStreamExportJob implements ShouldQueue
             'job_id'   => $this->jobId,
             'rows'     => $result['rows'],
             'size'     => $result['file_size'],
+            'filename' => $filename,
+        ]);
+    }
+
+    /**
+     * Genera CSV con BOM UTF-8 para exports grandes (>10K filas).
+     * Escribe línea por línea al disco — no carga todo en RAM.
+     */
+    private function generateCsv(array $rows): void
+    {
+        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.csv';
+        $dir      = storage_path("app/fabric_exports/{$this->jobId}");
+        $filePath = "{$dir}/{$filename}";
+
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+
+        $handle = fopen($filePath, 'w');
+
+        // BOM UTF-8 para que Excel abra con acentos correctos
+        fwrite($handle, "\xEF\xBB\xBF");
+
+        // Headers
+        $headers = array_keys($rows[0]);
+        fputcsv($handle, $headers, ';');
+
+        // Datos — línea por línea (no acumula en RAM)
+        foreach ($rows as $row) {
+            fputcsv($handle, array_map(fn($h) => $row[$h] ?? '', $headers), ';');
+        }
+
+        fclose($handle);
+
+        $fileSize    = filesize($filePath);
+        $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
+
+        $this->updateStatus(self::STATUS_COMPLETED, null, [
+            'progress'        => 100,
+            'rows'            => count($rows),
+            'columns'         => count($headers),
+            'filename'        => $filename,
+            'file_path'       => $storagePath,
+            'file_size'       => $fileSize,
+            'file_size_human' => $this->humanFileSize($fileSize),
+            'format'          => 'csv',
+        ]);
+
+        Log::info('FabricStreamExportJob: CSV generado', [
+            'job_id'   => $this->jobId,
+            'rows'     => count($rows),
+            'size'     => $fileSize,
             'filename' => $filename,
         ]);
     }

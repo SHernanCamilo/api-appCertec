@@ -385,7 +385,8 @@ class FabricViewerController extends Controller
         \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobId}");
 
         $contentType = match (true) {
-            str_contains($format, 'csv')  => 'application/gzip',
+            $format === 'csv'             => 'text/csv; charset=utf-8',
+            str_contains($format, 'csv')  => 'text/csv; charset=utf-8',
             $format === 'gzip'            => 'application/gzip',
             $format === 'xlsx'            => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             default                       => 'application/octet-stream',
