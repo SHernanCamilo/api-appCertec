@@ -50,39 +50,17 @@ final class FabricStreamExportJob implements ShouldQueue
 
     public function handle(): void
     {
-        // Subir memory_limit para exports grandes (PhpSpreadsheet es intensivo en RAM)
-        ini_set('memory_limit', '512M');
+        // No necesitamos mucha RAM: escribimos directo a disco mientras leemos
+        ini_set('memory_limit', '256M');
 
         $this->updateStatus(self::STATUS_PROCESSING, null, ['progress' => 0, 'rows' => 0]);
 
         try {
             $user = User::findOrFail($this->userId);
 
-            // 1. Consumir stream de Graph-Fabric
-            $allRows = $this->streamFromGraphFabric($user);
-
-            if (empty($allRows)) {
-                $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos con los filtros aplicados.', [
-                    'rows' => 0,
-                    'progress' => 100,
-                ]);
-                return;
-            }
-
-            // 2. Generar archivo:
-            //    - ≤10K filas: Excel .xlsx con plantilla JadeOne (bonito)
-            //    - >10K filas: CSV con BOM UTF-8 (rápido, sin agotar RAM)
-            $this->updateStatus(self::STATUS_PROCESSING, null, [
-                'progress' => 92,
-                'rows'     => count($allRows),
-                'message'  => count($allRows) > 10000 ? 'Generando CSV...' : 'Generando Excel...',
-            ]);
-
-            if (count($allRows) <= 10000) {
-                $this->generateExcel($allRows);
-            } else {
-                $this->generateCsv($allRows);
-            }
+            // Estrategia: escribir CSV directo a disco mientras consumimos datos.
+            // Nunca acumulamos todas las filas en RAM.
+            $this->exportDirectToCsv($user);
 
         } catch (\Throwable $e) {
             $this->updateStatus(self::STATUS_FAILED, $e->getMessage());
@@ -96,15 +74,32 @@ final class FabricStreamExportJob implements ShouldQueue
     }
 
     /**
-     * Consume el stream binario de Graph-Fabric chunk por chunk.
-     * Cada chunk: [4 bytes tamaño big-endian] + [N bytes gzip(NDJSON)]
+     * Exporta datos directo a CSV sin acumular en RAM.
+     * Lee página por página de la API Python (5K filas/page) y escribe al archivo.
      */
-    private function streamFromGraphFabric(User $user): array
+    private function exportDirectToCsv(User $user): void
     {
-        $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-        $token = env('TOKEN_ADMIN', '');
-
+        $url     = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
+        $token   = env('TOKEN_ADMIN', '');
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
+
+        $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
+        $limit   = 5000; // Máximo que acepta la API por request
+        $offset  = 0;
+        $totalRows = 0;
+        $headersWritten = false;
+
+        // Preparar archivo CSV
+        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.csv';
+        $dir      = storage_path("app/fabric_exports/{$this->jobId}");
+        if (!is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        $filePath = "{$dir}/{$filename}";
+        $handle   = fopen($filePath, 'w');
+
+        // BOM UTF-8 para Excel
+        fwrite($handle, "\xEF\xBB\xBF");
 
         $payload = [
             'token'       => $token,
@@ -118,237 +113,91 @@ final class FabricStreamExportJob implements ShouldQueue
             'columns'     => $this->options['columns'] ?? [],
             'sort_col'    => $this->options['sort_col'] ?? '',
             'sort_dir'    => $this->options['sort_dir'] ?? 'asc',
-            'max_rows'    => min((int)($this->options['max_rows'] ?? 500000), 1000000),
-            'format'      => 'gzip',
+            'skip_count'  => true,
         ];
 
-        // Intentar endpoint streaming primero, fallback al export normal
-        $endpoint = '/api/data/export/stream';
+        // Paginar: leer 5K filas por request, escribir al CSV, liberar memoria
+        while ($offset < $maxRows) {
+            $payload['limit']  = $limit;
+            $payload['offset'] = $offset;
 
-        $response = Http::withOptions([
-            'stream'          => true,
-            'timeout'         => 300,
-            'connect_timeout' => 30,
-        ])->acceptJson()
-          ->post($url . $endpoint, $payload);
+            $response = Http::timeout(130)
+                ->connectTimeout(10)
+                ->acceptJson()
+                ->post($url . '/api/data/dynamic', $payload);
 
-        // Si streaming no existe (404), usar el endpoint normal
-        if ($response->status() === 404) {
-            Log::info('FabricStreamExportJob: endpoint /stream no disponible, usando /excel', [
-                'job_id' => $this->jobId,
-            ]);
-            return $this->fallbackExportNormal($user);
-        }
-
-        if ($response->failed()) {
-            throw new \RuntimeException(
-                "Graph-Fabric stream respondió HTTP {$response->status()}: " .
-                substr($response->body(), 0, 300)
-            );
-        }
-
-        // Consumir el stream binario
-        $body    = $response->toPsrResponse()->getBody();
-        $allRows = [];
-        $chunk   = 0;
-        $maxRows = $payload['max_rows'];
-
-        while (!$body->eof()) {
-            // Leer 4 bytes header (tamaño del chunk, big-endian uint32)
-            $sizeBytes = $body->read(4);
-            if (strlen($sizeBytes) < 4) {
-                break; // EOF
-            }
-
-            $chunkSize = unpack('N', $sizeBytes)[1];
-
-            // Size 0 = error del servidor
-            if ($chunkSize === 0) {
-                $errorData = $body->read(4096);
-                throw new \RuntimeException("Stream error: {$errorData}");
-            }
-
-            // Leer chunk gzip completo
-            $chunkGzip = '';
-            $remaining = $chunkSize;
-            while ($remaining > 0 && !$body->eof()) {
-                $read = $body->read(min($remaining, 65536));
-                $chunkGzip .= $read;
-                $remaining -= strlen($read);
-            }
-
-            // Decodificar gzip → NDJSON
-            $ndjson = @gzdecode($chunkGzip);
-            if ($ndjson === false) {
-                Log::warning("FabricStreamExportJob: chunk {$chunk} gzdecode failed", [
-                    'job_id' => $this->jobId,
-                ]);
-                continue;
-            }
-
-            // Parsear NDJSON
-            $lines = explode("\n", trim($ndjson));
-            foreach ($lines as $line) {
-                if ($line !== '') {
-                    $row = json_decode($line, true);
-                    if ($row) {
-                        $allRows[] = $row;
-                    }
+            if ($response->failed()) {
+                // Si es 422 filters_required, reportar error amigable
+                $body = $response->json();
+                if ($response->status() === 422 && ($body['error'] ?? '') === 'filters_required') {
+                    fclose($handle);
+                    @unlink($filePath);
+                    $this->updateStatus(self::STATUS_FAILED, $body['message'] ?? 'Vista requiere filtros.');
+                    return;
                 }
+                throw new \RuntimeException(
+                    "Graph-Fabric respondió HTTP {$response->status()}: " . substr($response->body(), 0, 200)
+                );
             }
 
-            $chunk++;
+            $data  = $response->json();
+            $items = $data['items'] ?? [];
+
+            if (empty($items)) {
+                break; // No hay más datos
+            }
+
+            // Escribir headers del CSV (solo la primera vez)
+            if (!$headersWritten) {
+                $headers = array_keys($items[0]);
+                fputcsv($handle, $headers, ';');
+                $headersWritten = true;
+            }
+
+            // Escribir filas directo al disco
+            foreach ($items as $row) {
+                fputcsv($handle, array_map(fn($h) => $row[$h] ?? '', $headers), ';');
+                $totalRows++;
+            }
+
+            // Liberar memoria del batch actual
+            unset($items, $data);
+
+            $offset += $limit;
 
             // Actualizar progreso
-            $progress = min(90, intval(count($allRows) / $maxRows * 90));
+            $progress = min(95, intval($totalRows / $maxRows * 95));
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => $progress,
-                'rows'     => count($allRows),
-                'chunks'   => $chunk,
+                'rows'     => $totalRows,
+                'message'  => "Exportando datos... ({$totalRows} filas)",
             ]);
-        }
 
-        Log::info('FabricStreamExportJob: stream completado', [
-            'job_id' => $this->jobId,
-            'rows'   => count($allRows),
-            'chunks' => $chunk,
-        ]);
-
-        return $allRows;
-    }
-
-    /**
-     * Fallback: si /stream no existe, usar el export normal existente.
-     */
-    private function fallbackExportNormal(User $user): array
-    {
-        $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
-
-        $result = $gateway->exportViewExcel($user, $this->schema, $this->view, $this->options);
-
-        if (!$result['success']) {
-            throw new \RuntimeException($result['message'] ?? 'Error en export normal');
-        }
-
-        // El export normal devuelve NDJSON.gz → decodificar a array
-        $content = $result['content'] ?? '';
-        $format  = $result['format'] ?? 'gzip';
-
-        if ($format === 'gzip') {
-            $ndjson = @gzdecode($content);
-            if ($ndjson === false) {
-                throw new \RuntimeException('No se pudo decodificar el export gzip');
+            // Si el último batch tenía menos de $limit filas, ya no hay más
+            $pageInfo = $response->json()['page_info'] ?? [];
+            if (!($pageInfo['has_next'] ?? false)) {
+                break;
             }
-
-            $rows = [];
-            foreach (explode("\n", trim($ndjson)) as $line) {
-                if ($line !== '') {
-                    $row = json_decode($line, true);
-                    if ($row) {
-                        $rows[] = $row;
-                    }
-                }
-            }
-            return $rows;
-        }
-
-        // Si es xlsx directo, guardar tal cual
-        $filename = $result['filename'] ?? "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
-        $path     = "fabric_exports/{$this->jobId}/{$filename}";
-        Storage::disk('local')->put($path, $content);
-
-        $this->updateStatus(self::STATUS_COMPLETED, null, [
-            'progress'  => 100,
-            'rows'      => -1,
-            'filename'  => $filename,
-            'file_path' => $path,
-            'file_size' => strlen($content),
-            'format'    => 'xlsx',
-        ]);
-
-        return []; // Retornar vacío porque ya guardamos el archivo
-    }
-
-    /**
-     * Genera Excel (.xlsx) con la plantilla corporativa JadeOne.
-     */
-    private function generateExcel(array $rows): void
-    {
-        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
-        $dir      = storage_path("app/fabric_exports/{$this->jobId}");
-        $filePath = "{$dir}/{$filename}";
-
-        // Crear directorio si no existe
-        if (!is_dir($dir)) {
-            mkdir($dir, 0775, true);
-        }
-
-        $generator = new \App\Services\Fabric\FabricExcelGenerator(
-            $this->schema,
-            $this->view,
-            $this->options['filters'] ?? []
-        );
-
-        $result = $generator->generate($rows, $filePath);
-
-        $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
-
-        $this->updateStatus(self::STATUS_COMPLETED, null, [
-            'progress'        => 100,
-            'rows'            => $result['rows'],
-            'columns'         => $result['columns'],
-            'filename'        => $filename,
-            'file_path'       => $storagePath,
-            'file_size'       => $result['file_size'],
-            'file_size_human' => $this->humanFileSize($result['file_size']),
-            'format'          => 'xlsx',
-        ]);
-
-        Log::info('FabricStreamExportJob: Excel generado', [
-            'job_id'   => $this->jobId,
-            'rows'     => $result['rows'],
-            'size'     => $result['file_size'],
-            'filename' => $filename,
-        ]);
-    }
-
-    /**
-     * Genera CSV con BOM UTF-8 para exports grandes (>10K filas).
-     * Escribe línea por línea al disco — no carga todo en RAM.
-     */
-    private function generateCsv(array $rows): void
-    {
-        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.csv';
-        $dir      = storage_path("app/fabric_exports/{$this->jobId}");
-        $filePath = "{$dir}/{$filename}";
-
-        if (!is_dir($dir)) {
-            mkdir($dir, 0775, true);
-        }
-
-        $handle = fopen($filePath, 'w');
-
-        // BOM UTF-8 para que Excel abra con acentos correctos
-        fwrite($handle, "\xEF\xBB\xBF");
-
-        // Headers
-        $headers = array_keys($rows[0]);
-        fputcsv($handle, $headers, ';');
-
-        // Datos — línea por línea (no acumula en RAM)
-        foreach ($rows as $row) {
-            fputcsv($handle, array_map(fn($h) => $row[$h] ?? '', $headers), ';');
         }
 
         fclose($handle);
+
+        // Si no hubo datos
+        if ($totalRows === 0) {
+            @unlink($filePath);
+            $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos con los filtros aplicados.', [
+                'rows' => 0,
+                'progress' => 100,
+            ]);
+            return;
+        }
 
         $fileSize    = filesize($filePath);
         $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
 
         $this->updateStatus(self::STATUS_COMPLETED, null, [
             'progress'        => 100,
-            'rows'            => count($rows),
-            'columns'         => count($headers),
+            'rows'            => $totalRows,
             'filename'        => $filename,
             'file_path'       => $storagePath,
             'file_size'       => $fileSize,
@@ -356,9 +205,9 @@ final class FabricStreamExportJob implements ShouldQueue
             'format'          => 'csv',
         ]);
 
-        Log::info('FabricStreamExportJob: CSV generado', [
+        Log::info('FabricStreamExportJob: export completado', [
             'job_id'   => $this->jobId,
-            'rows'     => count($rows),
+            'rows'     => $totalRows,
             'size'     => $fileSize,
             'filename' => $filename,
         ]);
