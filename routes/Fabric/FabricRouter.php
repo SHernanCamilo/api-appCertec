@@ -56,4 +56,20 @@ Route::middleware(['auth:api'])->group(function () {
         Route::get('/export/status/{jobId}', [FabricViewerController::class, 'exportStatus']);
         Route::get('/export/download/{jobId}', [FabricViewerController::class, 'exportDownload']);
     });
+
+    // =========================================================================
+    // OData Links — CRUD (requiere autenticación Laravel)
+    // =========================================================================
+    Route::prefix('odata/links')->group(function () {
+        Route::get('/', [\App\Http\Controllers\Fabric\ODataController::class, 'listLinks']);
+        Route::post('/', [\App\Http\Controllers\Fabric\ODataController::class, 'createLink']);
+        Route::delete('/{id}', [\App\Http\Controllers\Fabric\ODataController::class, 'deactivateLink']);
+    });
 });
+
+// =========================================================================
+// OData Endpoint — FUERA del middleware auth:api (tiene su propia autenticación)
+// Excel/Power Query se conecta con Bearer Azure AD o token público en URL.
+// =========================================================================
+Route::get('/odata/link/{code}', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLink'])
+    ->where('code', '[a-f0-9]{32}');
