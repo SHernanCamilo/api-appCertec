@@ -513,7 +513,13 @@ class ODataController extends Controller
             $clientSecret = env('MICROSOFT_CLIENT_SECRET', '');
 
             // ROPC flow: validar credenciales contra Azure AD
-            $response = Http::asForm()->post(
+            // User-Agent de Windows para que Azure identifique la plataforma correctamente
+            // Sin esto, Azure clasifica como "Unknown" y Conditional Access bloquea (AADSTS50005)
+            $response = Http::asForm()
+                ->withHeaders([
+                    'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                ])
+                ->post(
                 "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",
                 [
                     'grant_type'    => 'password',
