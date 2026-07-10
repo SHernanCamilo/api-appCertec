@@ -10,6 +10,7 @@ use App\Models\OdataLink;
 use App\Services\Fabric\GraphFabricGatewayService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -57,17 +58,13 @@ class ODataController extends Controller
         // Autenticar
         $authResult = $this->authenticateRequest($request, $link);
         if ($authResult['error']) {
-            // Si requiere Azure AD y no hay token, devolver 401 con WWW-Authenticate
-            // Excel usa este header para saber contra qué authority autenticarse
+            // Si requiere autenticación, devolver 401 con header WWW-Authenticate
+            // Excel usa "Básico" para pedir usuario/contraseña
             if ($authResult['code'] === 'AuthRequired') {
-                $tenantId = env('MICROSOFT_MEDILASER_TENANT_ID', 'common');
-                $clientId = env('MICROSOFT_CLIENT_ID', '');
-                $authority = "https://login.microsoftonline.com/{$tenantId}";
-
                 return response()->json([
                     'error' => ['code' => 'AuthRequired', 'message' => $authResult['message']],
                 ], 401)->withHeaders([
-                    'WWW-Authenticate' => "Bearer authorization_uri=\"{$authority}\", resource_id=\"{$clientId}\"",
+                    'WWW-Authenticate' => 'Basic realm="JadeOne Fabric Viewer"',
                 ]);
             }
             return $this->odataError($authResult['code'], $authResult['message'], 401);
@@ -419,16 +416,44 @@ class ODataController extends Controller
             ];
         }
 
-        // Niveles PRIVATE y ORGANIZATIONAL: requieren Azure AD (auth:api de Laravel)
+        // Niveles PRIVATE y ORGANIZATIONAL: requieren autenticación
         $user = auth('api')->user();
 
         if (!$user) {
-            // Intentar Bearer token de Azure AD directo (para Excel)
+            // Intentar Basic Auth (usuario/contraseña desde Excel)
+            $basicAuth = $request->header('Authorization', '');
+            if (str_starts_with($basicAuth, 'Basic ')) {
+                $credentials = base64_decode(substr($basicAuth, 6));
+                $parts = explode(':', $credentials, 2);
+                if (count($parts) === 2) {
+                    $email = $parts[0];
+                    $password = $parts[1];
+
+                    // Validar contra Microsoft Graph (Azure AD)
+                    $azureUser = $this->validateBasicWithAzure($email, $password);
+                    if ($azureUser) {
+                        if (!$link->canAccess($azureUser['email'], $request->ip())) {
+                            return [
+                                'error' => true,
+                                'code' => 'AccessDenied',
+                                'message' => 'No tiene permiso para acceder a este link.',
+                            ];
+                        }
+                        return [
+                            'error' => false,
+                            'email' => $azureUser['email'],
+                            'name' => $azureUser['name'],
+                            'method' => 'basic_azure',
+                        ];
+                    }
+                }
+            }
+
+            // Intentar Bearer token de Azure AD directo (para Power Query avanzado)
             $bearerToken = $request->bearerToken();
             if ($bearerToken) {
                 $azureUser = $this->validateAzureToken($bearerToken);
                 if ($azureUser) {
-                    // Verificar acceso según nivel
                     if (!$link->canAccess($azureUser['email'], $request->ip())) {
                         return [
                             'error' => true,
@@ -448,7 +473,7 @@ class ODataController extends Controller
             return [
                 'error' => true,
                 'code' => 'AuthRequired',
-                'message' => 'Autenticación requerida. Use "Cuenta de organización" en Excel.',
+                'message' => 'Autenticación requerida. Use su correo @medilaser.com.co y contraseña.',
             ];
         }
 
@@ -467,6 +492,69 @@ class ODataController extends Controller
             'name' => $user->name ?? $user->email,
             'method' => 'azure_ad',
         ];
+    }
+
+    /**
+     * Validar credenciales (email + password) contra Azure AD usando
+     * Resource Owner Password Credentials (ROPC) flow.
+     * Excel envía las credenciales via Basic Auth.
+     */
+    private function validateBasicWithAzure(string $email, string $password): ?array
+    {
+        // Solo aceptar emails de Medilaser
+        if (!str_ends_with(strtolower($email), '@medilaser.com.co')) {
+            return null;
+        }
+
+        try {
+            $tenantId = env('MICROSOFT_MEDILASER_TENANT_ID', 'common');
+            $clientId = env('MICROSOFT_CLIENT_ID', '');
+            $clientSecret = env('MICROSOFT_CLIENT_SECRET', '');
+
+            // ROPC flow: validar credenciales contra Azure AD
+            $response = Http::asForm()->post(
+                "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",
+                [
+                    'grant_type'    => 'password',
+                    'client_id'     => $clientId,
+                    'client_secret' => $clientSecret,
+                    'username'      => $email,
+                    'password'      => $password,
+                    'scope'         => 'openid profile email',
+                ]
+            );
+
+            if ($response->failed()) {
+                Log::debug('OData Basic Auth: Azure AD rechazó credenciales', [
+                    'email' => $email,
+                    'status' => $response->status(),
+                ]);
+                return null;
+            }
+
+            $data = $response->json();
+            $idToken = $data['id_token'] ?? null;
+
+            // Decodificar el id_token para obtener nombre
+            if ($idToken) {
+                $parts = explode('.', $idToken);
+                if (count($parts) === 3) {
+                    $payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
+                    return [
+                        'email' => $email,
+                        'name'  => $payload['name'] ?? $email,
+                    ];
+                }
+            }
+
+            return [
+                'email' => $email,
+                'name'  => $email,
+            ];
+        } catch (\Exception $e) {
+            Log::debug('OData Basic Auth: error validando', ['error' => $e->getMessage()]);
+            return null;
+        }
     }
 
     /**
