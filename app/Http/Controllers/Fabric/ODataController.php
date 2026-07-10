@@ -222,17 +222,16 @@ class ODataController extends Controller
             return response('Not found', 404);
         }
 
-        // EDMX con OpenType — permite cualquier propiedad sin declararla
+        // EDMX sin Key obligatoria — los datos de Fabric no siempre tienen "Id"
         $edmx = '<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
     <Schema Namespace="Fabric" xmlns="http://docs.oasis-open.org/odata/ns/edm">
-      <EntityType Name="Row" OpenType="true">
-        <Key><PropertyRef Name="Id"/></Key>
-        <Property Name="Id" Type="Edm.String" Nullable="true"/>
-      </EntityType>
+      <ComplexType Name="Row" OpenType="true"/>
       <EntityContainer Name="Container">
-        <EntitySet Name="value" EntityType="Fabric.Row"/>
+        <FunctionImport Name="value">
+          <ReturnType Type="Collection(Fabric.Row)"/>
+        </FunctionImport>
       </EntityContainer>
     </Schema>
   </edmx:DataServices>
