@@ -61,8 +61,10 @@ class ODataController extends Controller
         }
 
         // Si Excel pide el service document (primera vez, sin params de datos)
+        // Si la URL termina en /value → siempre devolver datos (Excel agrega /value al EntitySet)
+        $isValueEndpoint = str_ends_with($request->path(), '/value');
         $hasDataParams = $request->has('$top') || $request->has('$skip') || $request->has('$filter');
-        if (!$hasDataParams) {
+        if (!$hasDataParams && !$isValueEndpoint) {
             return $this->serviceDocument($code, $link);
         }
 
@@ -183,7 +185,7 @@ class ODataController extends Controller
                 '$orderby' => $orderby ?: null,
                 'token' => $request->query('token'),
             ]);
-            $response['@odata.nextLink'] = url("/api/fabric/odata/link/{$code}")
+            $response['@odata.nextLink'] = url("/api/fabric/odata/link/{$code}/value")
                 . '?' . http_build_query($nextParams);
         }
 
@@ -455,45 +457,66 @@ class ODataController extends Controller
     }
 
     /**
-     * Validar Bearer token de Azure AD (para cuando Excel se conecta directamente).
+     * Validar Bearer token de Azure AD (para cuando Excel se conecta con "Cuenta de organización").
+     * Decodifica el JWT, verifica expiración y extrae email del usuario.
      * Retorna datos del usuario o null si es inválido.
      */
     private function validateAzureToken(string $token): ?array
     {
         try {
-            // Decodificar payload sin validar firma (para extraer email)
-            // En producción con firebase/php-jwt se valida la firma completa
             $parts = explode('.', $token);
-            if (count($parts) !== 3)
-                return null;
+            if (count($parts) !== 3) return null;
 
             $payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
-            if (!$payload)
-                return null;
+            if (!$payload) return null;
 
             // Verificar que no esté expirado
             $exp = $payload['exp'] ?? 0;
-            if ($exp < time())
-                return null;
+            if ($exp < time()) return null;
 
-            // Verificar issuer (debe ser Azure AD de Medilaser)
-            $tenantId = env('AZURE_TENANT_ID', '');
+            // Verificar que sea del tenant de Medilaser
+            // El issuer puede ser:
+            //   https://sts.windows.net/{tenant_id}/
+            //   https://login.microsoftonline.com/{tenant_id}/v2.0
+            $tenantId = env('MICROSOFT_MEDILASER_TENANT_ID', env('AZURE_TENANT_ID', ''));
             $iss = $payload['iss'] ?? '';
-            if ($tenantId && !str_contains($iss, $tenantId))
-                return null;
+            $tid = $payload['tid'] ?? '';
 
+            // Validar tenant (preferir tid del payload, fallback a issuer)
+            if ($tenantId) {
+                $tenantMatch = ($tid === $tenantId) || str_contains($iss, $tenantId);
+                if (!$tenantMatch) {
+                    Log::debug('OData: Token de otro tenant', ['tid' => $tid, 'expected' => $tenantId]);
+                    return null;
+                }
+            }
+
+            // Verificar audience (debe ser nuestra app o api://CLIENT_ID)
+            $clientId = env('MICROSOFT_CLIENT_ID', '');
+            $aud = $payload['aud'] ?? '';
+            if ($clientId && $aud !== $clientId && $aud !== "api://{$clientId}") {
+                // Si el audience no coincide, puede ser un token de Graph — aún aceptar si es del tenant correcto
+                Log::debug('OData: Audience diferente', ['aud' => $aud, 'expected' => $clientId]);
+            }
+
+            // Extraer email
             $email = $payload['preferred_username']
                 ?? $payload['upn']
                 ?? $payload['email']
                 ?? $payload['unique_name']
                 ?? '';
 
-            if (!$email)
+            if (!$email) return null;
+
+            // Verificar que sea @medilaser.com.co
+            if (!str_ends_with(strtolower($email), '@medilaser.com.co')) {
+                Log::warning('OData: Token de usuario no-Medilaser', ['email' => $email]);
                 return null;
+            }
 
             return [
                 'email' => $email,
-                'name' => $payload['name'] ?? $email,
+                'name'  => $payload['name'] ?? $email,
             ];
         } catch (\Exception $e) {
             Log::debug('OData: Error validando token Azure', ['error' => $e->getMessage()]);

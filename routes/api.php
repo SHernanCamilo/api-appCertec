@@ -293,7 +293,10 @@ Route::prefix('fabric/odata')->group(function () {
     // Service document (Excel lo pide al conectar como fuente OData)
     Route::get('/link/{code}/$metadata', [\App\Http\Controllers\Fabric\ODataController::class, 'metadata'])
         ->where('code', '[a-f0-9]{32}');
-    // Datos
+    // EntitySet "value" — Excel accede aquí para los datos (agrega /value al base)
+    Route::get('/link/{code}/value', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLink'])
+        ->where('code', '[a-f0-9]{32}');
+    // Service document (raíz)
     Route::get('/link/{code}', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLink'])
         ->where('code', '[a-f0-9]{32}');
 });
