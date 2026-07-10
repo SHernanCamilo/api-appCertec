@@ -222,14 +222,14 @@ class ODataController extends Controller
             return response('Not found', 404);
         }
 
-        // EDMX mínimo — Excel solo necesita saber que es un servicio OData válido
+        // EDMX con OpenType — permite cualquier propiedad sin declararla
         $edmx = '<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
     <Schema Namespace="Fabric" xmlns="http://docs.oasis-open.org/odata/ns/edm">
-      <EntityType Name="Row">
+      <EntityType Name="Row" OpenType="true">
         <Key><PropertyRef Name="Id"/></Key>
-        <Property Name="Id" Type="Edm.Int32" Nullable="false"/>
+        <Property Name="Id" Type="Edm.String" Nullable="true"/>
       </EntityType>
       <EntityContainer Name="Container">
         <EntitySet Name="value" EntityType="Fabric.Row"/>
