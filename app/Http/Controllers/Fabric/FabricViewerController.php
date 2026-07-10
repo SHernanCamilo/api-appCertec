@@ -328,6 +328,16 @@ class FabricViewerController extends Controller
     }
 
     /**
+     * Export con schema/view en la URL (para frontend que usa GET).
+     * GET /api/fabric/viewer/export/start/{schema}/{view}
+     */
+    public function exportStartByUrl(Request $request, string $schema, string $view): JsonResponse
+    {
+        $request->merge(['schema_name' => $schema, 'view' => $view]);
+        return $this->exportStart($request);
+    }
+
+    /**
      * Consulta el estado de un export en progreso.
      *
      * GET /api/fabric/viewer/export/status/{jobId}

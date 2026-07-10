@@ -53,6 +53,10 @@ Route::middleware(['auth:api'])->group(function () {
 
         // Export a Excel — asíncrono (segundo plano, recomendado para producción)
         Route::match(['get', 'post'], '/export/start', [FabricViewerController::class, 'exportStart']);
+        // Ruta alternativa con schema/view en la URL (para frontend que usa GET)
+        Route::get('/export/start/{schema}/{view}', [FabricViewerController::class, 'exportStartByUrl'])
+            ->where('schema', '[a-z]{2,4}')
+            ->where('view', '[A-Za-z0-9_]+');
         Route::get('/export/status/{jobId}', [FabricViewerController::class, 'exportStatus']);
         Route::get('/export/download/{jobId}', [FabricViewerController::class, 'exportDownload']);
     });
