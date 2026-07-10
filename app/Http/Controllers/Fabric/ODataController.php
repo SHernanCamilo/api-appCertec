@@ -279,8 +279,8 @@ class ODataController extends Controller
             'int', 'bigint', 'smallint', 'tinyint' => 'Edm.Int64',
             'decimal', 'numeric', 'money', 'smallmoney', 'float', 'real' => 'Edm.Decimal',
             'bit' => 'Edm.Boolean',
-            'date' => 'Edm.Date',
-            'datetime', 'datetime2', 'smalldatetime', 'datetimeoffset' => 'Edm.DateTimeOffset',
+            // Fechas como String para evitar errores de formato (Fabric no envía timezone)
+            'date', 'datetime', 'datetime2', 'smalldatetime', 'datetimeoffset' => 'Edm.String',
             default => 'Edm.String',
         };
     }
