@@ -288,6 +288,13 @@ class FabricViewerController extends Controller
         $viewName   = $request->input('view', $request->query('view'));
 
         if (!$schemaName || !$viewName) {
+            \Illuminate\Support\Facades\Log::warning('ExportStart: parámetros faltantes', [
+                'method'       => $request->method(),
+                'content_type' => $request->header('Content-Type'),
+                'all_input'    => $request->all(),
+                'raw_body'     => substr($request->getContent(), 0, 500),
+                'query'        => $request->query(),
+            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Parámetros requeridos: schema_name y view.',
