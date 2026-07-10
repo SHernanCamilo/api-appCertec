@@ -59,12 +59,13 @@ class ODataController extends Controller
         $authResult = $this->authenticateRequest($request, $link);
         if ($authResult['error']) {
             // Si requiere autenticación, devolver 401 con header WWW-Authenticate
-            // Excel usa "Básico" para pedir usuario/contraseña
+            // Power Query usa este header para iniciar flujo OAuth ("Cuenta de organización")
             if ($authResult['code'] === 'AuthRequired') {
+                $tenantId = env('MICROSOFT_MEDILASER_TENANT_ID', 'common');
                 return response()->json([
                     'error' => ['code' => 'AuthRequired', 'message' => $authResult['message']],
                 ], 401)->withHeaders([
-                    'WWW-Authenticate' => 'Basic realm="JadeOne Fabric Viewer"',
+                    'WWW-Authenticate' => 'Bearer authorization_uri="https://login.microsoftonline.com/' . $tenantId . '", resource_id="https://jade-api.medilaser.com.co"',
                 ]);
             }
             return $this->odataError($authResult['code'], $authResult['message'], 401);
@@ -601,12 +602,17 @@ class ODataController extends Controller
                 }
             }
 
-            // Verificar audience (debe ser nuestra app o api://CLIENT_ID)
+            // Verificar audience (debe ser nuestra app, api://CLIENT_ID o el dominio)
             $clientId = env('MICROSOFT_CLIENT_ID', '');
             $aud = $payload['aud'] ?? '';
-            if ($clientId && $aud !== $clientId && $aud !== "api://{$clientId}") {
-                // Si el audience no coincide, puede ser un token de Graph — aún aceptar si es del tenant correcto
-                Log::debug('OData: Audience diferente', ['aud' => $aud, 'expected' => $clientId]);
+            $validAudiences = [
+                $clientId,
+                "api://{$clientId}",
+                'https://jade-api.medilaser.com.co',
+            ];
+            // Aceptar cualquiera de los audiences válidos
+            if ($clientId && !in_array($aud, $validAudiences, true)) {
+                Log::debug('OData: Audience no reconocido', ['aud' => $aud, 'valid' => $validAudiences]);
             }
 
             // Extraer email
