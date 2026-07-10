@@ -28,12 +28,13 @@ use Symfony\Component\HttpFoundation\Response;
 final class FabricRateLimiter
 {
     private const LIMITS = [
-        'views'   => ['max' => 60,  'decay' => 60],
-        'columns' => ['max' => 60,  'decay' => 60],
-        'data'    => ['max' => 200, 'decay' => 60],
-        'export'  => ['max' => 20,  'decay' => 60],
-        'context' => ['max' => 60,  'decay' => 60],
-        'start'   => ['max' => 20,  'decay' => 60],
+        'views'   => ['max' => 120,  'decay' => 60],
+        'columns' => ['max' => 120,  'decay' => 60],
+        'data'    => ['max' => 500,  'decay' => 60],
+        'export'  => ['max' => 30,   'decay' => 60],
+        'context' => ['max' => 120,  'decay' => 60],
+        'start'   => ['max' => 30,   'decay' => 60],
+        'value'   => ['max' => 500,  'decay' => 60],  // OData paginación
     ];
 
     public function handle(Request $request, Closure $next): Response

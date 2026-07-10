@@ -121,6 +121,11 @@ class ODataController extends Controller
         $select = $request->query('$select', '');
         $orderby = $request->query('$orderby', '');
 
+        // Protección contra SQL injection en filtros OData
+        if ($filter && preg_match('/;|--|DROP|DELETE|INSERT|UPDATE|EXEC|xp_/i', $filter)) {
+            return $this->odataError('InvalidFilter', 'Filtro no válido.', 400);
+        }
+
         $filters = array_merge(
             $link->filters ?? [],
             $this->parseODataFilter($filter)
@@ -138,22 +143,30 @@ class ODataController extends Controller
 
         $startTime = microtime(true);
 
-        $result = $this->gateway->queryAsSystem(
-            $link->schema_name,
-            $link->view_name,
-            [
-                'columns' => $columns,
-                'filters' => $filters,
-                'limit' => $top,
-                'offset' => $skip,
-                'sort_col' => $sortCol,
-                'sort_dir' => $sortDir,
-            ]
-        );
+        // Cache OData: misma consulta (link + offset + filtros) → respuesta cacheada 2 min
+        $odataCacheKey = 'odata_qry:' . md5("{$code}:{$skip}:{$top}:" . json_encode($filters));
+        $odataCacheTtl = 120; // 2 minutos
+
+        $result = \Illuminate\Support\Facades\Cache::remember($odataCacheKey, $odataCacheTtl, function () use ($link, $columns, $filters, $top, $skip, $sortCol, $sortDir) {
+            return $this->gateway->queryAsSystem(
+                $link->schema_name,
+                $link->view_name,
+                [
+                    'columns' => $columns,
+                    'filters' => $filters,
+                    'limit' => $top,
+                    'offset' => $skip,
+                    'sort_col' => $sortCol,
+                    'sort_dir' => $sortDir,
+                ]
+            );
+        });
 
         $elapsedMs = (int) round((microtime(true) - $startTime) * 1000);
 
         if (!$result['success']) {
+            // No cachear errores
+            \Illuminate\Support\Facades\Cache::forget($odataCacheKey);
             return $this->odataError('DataSourceError', $result['message'] ?? 'Error consultando datos.', 502);
         }
 
