@@ -430,6 +430,7 @@ class ODataController extends Controller
                     $password = $parts[1];
 
                     // Validar contra Microsoft Graph (Azure AD)
+                    Log::info('OData Basic Auth: intentando validar', ['email' => $email]);
                     $azureUser = $this->validateBasicWithAzure($email, $password);
                     if ($azureUser) {
                         if (!$link->canAccess($azureUser['email'], $request->ip())) {
@@ -525,9 +526,12 @@ class ODataController extends Controller
             );
 
             if ($response->failed()) {
-                Log::debug('OData Basic Auth: Azure AD rechazó credenciales', [
-                    'email' => $email,
+                Log::warning('OData Basic Auth: Azure AD RECHAZÓ', [
+                    'email'  => $email,
                     'status' => $response->status(),
+                    'error'  => $response->json('error') ?? 'unknown',
+                    'error_description' => $response->json('error_description') ?? substr($response->body(), 0, 300),
+                ]);
                 ]);
                 return null;
             }
