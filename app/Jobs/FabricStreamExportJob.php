@@ -82,7 +82,7 @@ final class FabricStreamExportJob implements ShouldQueue
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
         $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
-        $limit   = 5000;
+        $limit   = 10000; // Graph-Fabric soporta hasta 10K por request
         $offset  = 0;
         $totalRows = 0;
         $headers = [];

@@ -115,7 +115,7 @@ class ODataController extends Controller
         $userEmail = $authResult['email'];
         $userName = $authResult['name'];
 
-        $top = min((int) $request->query('$top', '5000'), 5000);
+        $top = min((int) $request->query('$top', '10000'), 10000);
         $skip = max((int) $request->query('$skip', '0'), 0);
         $filter = $request->query('$filter', '');
         $select = $request->query('$select', '');

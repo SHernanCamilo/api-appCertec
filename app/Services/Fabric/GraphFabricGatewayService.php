@@ -878,7 +878,7 @@ class GraphFabricGatewayService
             ];
         }
 
-        $limit  = min((int)($options['limit'] ?? 50), 5000);
+        $limit  = min((int)($options['limit'] ?? 50), 10000);
         $offset = max(0, (int)($options['offset'] ?? 0));
 
         $payload = array_merge(
@@ -1076,7 +1076,7 @@ class GraphFabricGatewayService
      */
     public function queryAsSystem(string $schema, string $view, array $options = []): array
     {
-        $limit  = min((int)($options['limit'] ?? 500), 5000);
+        $limit  = min((int)($options['limit'] ?? 500), 10000);
         $offset = max(0, (int)($options['offset'] ?? 0));
 
         $payload = [
