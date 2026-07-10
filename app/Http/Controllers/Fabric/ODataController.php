@@ -230,15 +230,33 @@ class ODataController extends Controller
             return response('Not found', 404);
         }
 
-        // EDMX mínimo — EntityType con Key generada automáticamente
+        // Obtener columnas reales de la vista desde Graph-Fabric (cache 5 min)
+        $cacheKey = "odata_metadata:{$link->schema_name}:{$link->view_name}";
+        $columns = \Illuminate\Support\Facades\Cache::remember($cacheKey, 300, function () use ($link) {
+            $result = $this->gateway->getViewColumns(
+                \App\Models\User::find($link->created_by),
+                $link->schema_name,
+                $link->view_name
+            );
+            return $result['success'] ? ($result['data']['columns'] ?? []) : [];
+        });
+
+        // Generar propiedades EDMX dinámicamente
+        $properties = '        <Property Name="__id" Type="Edm.Int32" Nullable="false"/>' . "\n";
+        foreach ($columns as $col) {
+            $name = $col['name'] ?? '';
+            if ($name === '' || $name === '__id') continue;
+            $edmType = $this->sqlTypeToEdm($col['type'] ?? 'varchar');
+            $properties .= "        <Property Name=\"{$name}\" Type=\"{$edmType}\" Nullable=\"true\"/>\n";
+        }
+
         $edmx = '<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
     <Schema Namespace="Fabric" xmlns="http://docs.oasis-open.org/odata/ns/edm">
-      <EntityType Name="Row" OpenType="true">
+      <EntityType Name="Row">
         <Key><PropertyRef Name="__id"/></Key>
-        <Property Name="__id" Type="Edm.Int32" Nullable="false"/>
-      </EntityType>
+' . $properties . '      </EntityType>
       <EntityContainer Name="Container">
         <EntitySet Name="value" EntityType="Fabric.Row"/>
       </EntityContainer>
@@ -250,6 +268,21 @@ class ODataController extends Controller
             'Content-Type' => 'application/xml',
             'OData-Version' => '4.0',
         ]);
+    }
+
+    /**
+     * Mapear tipo SQL de Fabric a tipo EDM de OData.
+     */
+    private function sqlTypeToEdm(string $sqlType): string
+    {
+        return match (strtolower($sqlType)) {
+            'int', 'bigint', 'smallint', 'tinyint' => 'Edm.Int64',
+            'decimal', 'numeric', 'money', 'smallmoney', 'float', 'real' => 'Edm.Decimal',
+            'bit' => 'Edm.Boolean',
+            'date' => 'Edm.Date',
+            'datetime', 'datetime2', 'smalldatetime', 'datetimeoffset' => 'Edm.DateTimeOffset',
+            default => 'Edm.String',
+        };
     }
 
     // =========================================================================
