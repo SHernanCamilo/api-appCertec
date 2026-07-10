@@ -421,7 +421,7 @@ class ODataController extends Controller
         $user = auth('api')->user();
 
         if (!$user) {
-            // Intentar Basic Auth (usuario/contraseña desde Excel)
+            // Intentar Basic Auth (email + contraseña de JadeOne)
             $basicAuth = $request->header('Authorization', '');
             if (str_starts_with($basicAuth, 'Basic ')) {
                 $credentials = base64_decode(substr($basicAuth, 6));
@@ -430,11 +430,11 @@ class ODataController extends Controller
                     $email = $parts[0];
                     $password = $parts[1];
 
-                    // Validar contra Microsoft Graph (Azure AD)
+                    // Validar contra la BD de Laravel (no Azure AD — evita Conditional Access)
                     Log::info('OData Basic Auth: intentando validar', ['email' => $email]);
-                    $azureUser = $this->validateBasicWithAzure($email, $password);
-                    if ($azureUser) {
-                        if (!$link->canAccess($azureUser['email'], $request->ip())) {
+                    $localUser = $this->validateBasicLocal($email, $password);
+                    if ($localUser) {
+                        if (!$link->canAccess($localUser['email'], $request->ip())) {
                             return [
                                 'error' => true,
                                 'code' => 'AccessDenied',
@@ -443,9 +443,9 @@ class ODataController extends Controller
                         }
                         return [
                             'error' => false,
-                            'email' => $azureUser['email'],
-                            'name' => $azureUser['name'],
-                            'method' => 'basic_azure',
+                            'email' => $localUser['email'],
+                            'name' => $localUser['name'],
+                            'method' => 'basic_local',
                         ];
                     }
                 }
@@ -497,9 +497,41 @@ class ODataController extends Controller
     }
 
     /**
-     * Validar credenciales (email + password) contra Azure AD usando
-     * Resource Owner Password Credentials (ROPC) flow.
-     * Excel envía las credenciales via Basic Auth.
+     * Validar credenciales contra la BD local de Laravel.
+     * No pasa por Azure AD — evita problemas de Conditional Access/MFA/Intune.
+     * Solo acepta @medilaser.com.co y verifica password con bcrypt.
+     */
+    private function validateBasicLocal(string $email, string $password): ?array
+    {
+        // Solo aceptar emails corporativos
+        if (!str_ends_with(strtolower($email), '@medilaser.com.co')) {
+            return null;
+        }
+
+        // Buscar usuario en la BD
+        $user = \App\Models\User::where('email', strtolower($email))->first();
+        if (!$user) {
+            Log::debug('OData Basic Local: usuario no encontrado', ['email' => $email]);
+            return null;
+        }
+
+        // Verificar contraseña (bcrypt)
+        if (!\Illuminate\Support\Facades\Hash::check($password, $user->password)) {
+            Log::warning('OData Basic Local: contraseña incorrecta', ['email' => $email]);
+            return null;
+        }
+
+        Log::info('OData Basic Local: autenticación exitosa', ['email' => $email, 'user_id' => $user->id]);
+
+        return [
+            'email' => $user->email,
+            'name'  => $user->name ?? $user->email,
+        ];
+    }
+
+    /**
+     * Validar credenciales contra Azure AD usando ROPC (fallback).
+     * NOTA: No funciona si el tenant tiene Conditional Access con device compliance.
      */
     private function validateBasicWithAzure(string $email, string $password): ?array
     {
