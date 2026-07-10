@@ -69,4 +69,13 @@ Route::middleware(['auth:api'])->group(function () {
         Route::post('/', [\App\Http\Controllers\Fabric\ODataController::class, 'createLink']);
         Route::delete('/{id}', [\App\Http\Controllers\Fabric\ODataController::class, 'deactivateLink']);
     });
+
+    // =========================================================================
+    // OData API Keys — Generar/Listar/Revocar (requiere autenticación)
+    // =========================================================================
+    Route::prefix('odata/api-keys')->group(function () {
+        Route::get('/', [\App\Http\Controllers\Fabric\ODataController::class, 'listApiKeys']);
+        Route::post('/', [\App\Http\Controllers\Fabric\ODataController::class, 'generateApiKey']);
+        Route::delete('/{id}', [\App\Http\Controllers\Fabric\ODataController::class, 'revokeApiKey']);
+    });
 });

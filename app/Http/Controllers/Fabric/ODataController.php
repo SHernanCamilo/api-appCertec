@@ -65,7 +65,7 @@ class ODataController extends Controller
                 return response()->json([
                     'error' => ['code' => 'AuthRequired', 'message' => $authResult['message']],
                 ], 401)->withHeaders([
-                    'WWW-Authenticate' => 'Bearer authorization_uri="https://login.microsoftonline.com/' . $tenantId . '", resource_id="https://jade-api.medilaser.com.co"',
+                    'WWW-Authenticate' => 'Basic realm="JadeOne OData - Use su email y API Key"',
                 ]);
             }
             return $this->odataError($authResult['code'], $authResult['message'], 401);
@@ -391,6 +391,85 @@ class ODataController extends Controller
     }
 
     // =========================================================================
+    // API KEYS — Generar/Listar/Revocar
+    // =========================================================================
+
+    /**
+     * Generar API Key personal para el usuario autenticado.
+     * POST /api/fabric/odata/api-keys
+     */
+    public function generateApiKey(Request $request): JsonResponse
+    {
+        $request->validate([
+            'name' => 'required|string|max:100',
+            'expires_days' => 'nullable|integer|min:1|max:365',
+        ]);
+
+        $user = auth()->user();
+        $keyData = \App\Models\OdataApiKey::generateKey();
+
+        $apiKey = \App\Models\OdataApiKey::create([
+            'user_id'    => $user->id,
+            'name'       => $request->name,
+            'key_hash'   => $keyData['hash'],
+            'key_prefix' => $keyData['prefix'],
+            'expires_at' => $request->expires_days
+                ? now()->addDays($request->expires_days)
+                : null,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data'    => [
+                'id'         => $apiKey->id,
+                'name'       => $apiKey->name,
+                'key'        => $keyData['key'], // ⚠️ Solo se muestra UNA VEZ
+                'prefix'     => $keyData['prefix'],
+                'expires_at' => $apiKey->expires_at?->toIso8601String(),
+                'instructions' => [
+                    'excel' => 'En Excel → Fuente OData → Básico → Usuario: ' . $user->email . ' → Contraseña: (pegar la key)',
+                ],
+            ],
+            'warning' => 'Guarda esta key. No se puede recuperar después.',
+        ], 201);
+    }
+
+    /**
+     * Listar API Keys del usuario autenticado.
+     * GET /api/fabric/odata/api-keys
+     */
+    public function listApiKeys(): JsonResponse
+    {
+        $keys = \App\Models\OdataApiKey::where('user_id', auth()->id())
+            ->orderByDesc('created_at')
+            ->get(['id', 'name', 'key_prefix', 'active', 'expires_at', 'last_used_at', 'use_count', 'created_at']);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $keys,
+        ]);
+    }
+
+    /**
+     * Revocar una API Key.
+     * DELETE /api/fabric/odata/api-keys/{id}
+     */
+    public function revokeApiKey(int $id): JsonResponse
+    {
+        $key = \App\Models\OdataApiKey::where('id', $id)
+            ->where('user_id', auth()->id())
+            ->first();
+
+        if (!$key) {
+            return response()->json(['success' => false, 'message' => 'Key no encontrada.'], 404);
+        }
+
+        $key->update(['active' => false]);
+
+        return response()->json(['success' => true, 'message' => 'API Key revocada.']);
+    }
+
+    // =========================================================================
     // AUTENTICACIÓN
     // =========================================================================
 
@@ -421,32 +500,54 @@ class ODataController extends Controller
         $user = auth('api')->user();
 
         if (!$user) {
-            // Intentar Basic Auth (email + contraseña de JadeOne)
+            // Intentar Basic Auth (email + API Key personal de JadeOne)
             $basicAuth = $request->header('Authorization', '');
             if (str_starts_with($basicAuth, 'Basic ')) {
                 $credentials = base64_decode(substr($basicAuth, 6));
                 $parts = explode(':', $credentials, 2);
                 if (count($parts) === 2) {
                     $email = $parts[0];
-                    $password = $parts[1];
+                    $apiKey = $parts[1];
 
-                    // Validar contra la BD de Laravel (no Azure AD — evita Conditional Access)
-                    Log::info('OData Basic Auth: intentando validar', ['email' => $email]);
-                    $localUser = $this->validateBasicLocal($email, $password);
-                    if ($localUser) {
-                        if (!$link->canAccess($localUser['email'], $request->ip())) {
+                    // Validar API Key contra la BD
+                    $keyRecord = \App\Models\OdataApiKey::validateKey($email, $apiKey);
+                    if ($keyRecord) {
+                        $keyUser = $keyRecord->user;
+
+                        // Verificar permisos del usuario para este link/esquema
+                        if (!$link->canAccess($keyUser->email, $request->ip())) {
                             return [
                                 'error' => true,
                                 'code' => 'AccessDenied',
                                 'message' => 'No tiene permiso para acceder a este link.',
                             ];
                         }
+
+                        // Verificar que el usuario tiene acceso al esquema de la vista
+                        if (!$this->gateway->tieneAccesoEsquema($keyUser, $link->schema_name)) {
+                            return [
+                                'error' => true,
+                                'code' => 'SchemaAccessDenied',
+                                'message' => "Su cuenta no tiene acceso al esquema '{$link->schema_name}'.",
+                            ];
+                        }
+
+                        // Registrar uso
+                        $keyRecord->recordUse($request->ip());
+
+                        Log::info('OData API Key: autenticación exitosa', [
+                            'email' => $keyUser->email,
+                            'key_prefix' => $keyRecord->key_prefix,
+                        ]);
+
                         return [
                             'error' => false,
-                            'email' => $localUser['email'],
-                            'name' => $localUser['name'],
-                            'method' => 'basic_local',
+                            'email' => $keyUser->email,
+                            'name' => $keyUser->name ?? $keyUser->email,
+                            'method' => 'api_key',
                         ];
+                    } else {
+                        Log::warning('OData API Key: key inválida', ['email' => $email]);
                     }
                 }
             }
