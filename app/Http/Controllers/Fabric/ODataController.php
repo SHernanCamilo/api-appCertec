@@ -179,10 +179,18 @@ class ODataController extends Controller
             'auth_method' => $authResult['method'],
         ]);
 
-        // Construir respuesta OData (sin @odata.count — Excel no lo acepta en entity sets)
+        // Agregar __id como Key a cada fila (Excel OData lo requiere)
+        $indexedItems = [];
+        $baseId = $skip; // Para que sea único entre páginas
+        foreach ($items as $i => $item) {
+            $item['__id'] = $baseId + $i + 1;
+            $indexedItems[] = $item;
+        }
+
+        // Construir respuesta OData
         $response = [
             '@odata.context' => url("/api/fabric/odata/link/{$code}/\$metadata#value"),
-            'value' => $items,
+            'value' => $indexedItems,
         ];
 
         // SIEMPRE incluir nextLink si hay más páginas — Power Query lo sigue automáticamente
@@ -222,16 +230,17 @@ class ODataController extends Controller
             return response('Not found', 404);
         }
 
-        // EDMX sin Key obligatoria — los datos de Fabric no siempre tienen "Id"
+        // EDMX mínimo — EntityType con Key generada automáticamente
         $edmx = '<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
     <Schema Namespace="Fabric" xmlns="http://docs.oasis-open.org/odata/ns/edm">
-      <ComplexType Name="Row" OpenType="true"/>
+      <EntityType Name="Row" OpenType="true">
+        <Key><PropertyRef Name="__id"/></Key>
+        <Property Name="__id" Type="Edm.Int32" Nullable="false"/>
+      </EntityType>
       <EntityContainer Name="Container">
-        <FunctionImport Name="value">
-          <ReturnType Type="Collection(Fabric.Row)"/>
-        </FunctionImport>
+        <EntitySet Name="value" EntityType="Fabric.Row"/>
       </EntityContainer>
     </Schema>
   </edmx:DataServices>
