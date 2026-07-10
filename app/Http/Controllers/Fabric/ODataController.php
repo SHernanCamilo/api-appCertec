@@ -532,7 +532,6 @@ class ODataController extends Controller
                     'error'  => $response->json('error') ?? 'unknown',
                     'error_description' => $response->json('error_description') ?? substr($response->body(), 0, 300),
                 ]);
-                ]);
                 return null;
             }
 
