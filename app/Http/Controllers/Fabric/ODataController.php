@@ -57,6 +57,19 @@ class ODataController extends Controller
         // Autenticar
         $authResult = $this->authenticateRequest($request, $link);
         if ($authResult['error']) {
+            // Si requiere Azure AD y no hay token, devolver 401 con WWW-Authenticate
+            // Excel usa este header para saber contra qué authority autenticarse
+            if ($authResult['code'] === 'AuthRequired') {
+                $tenantId = env('MICROSOFT_MEDILASER_TENANT_ID', 'common');
+                $clientId = env('MICROSOFT_CLIENT_ID', '');
+                $authority = "https://login.microsoftonline.com/{$tenantId}";
+
+                return response()->json([
+                    'error' => ['code' => 'AuthRequired', 'message' => $authResult['message']],
+                ], 401)->withHeaders([
+                    'WWW-Authenticate' => "Bearer authorization_uri=\"{$authority}\", resource_id=\"{$clientId}\"",
+                ]);
+            }
             return $this->odataError($authResult['code'], $authResult['message'], 401);
         }
 
