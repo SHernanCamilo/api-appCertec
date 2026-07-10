@@ -283,20 +283,19 @@ class FabricViewerController extends Controller
      */
     public function exportStart(Request $request): JsonResponse
     {
-        $request->validate([
-            'schema_name' => 'required|string|max:20|alpha_dash',
-            'view'        => 'required|string|max:150|regex:/^[A-Za-z0-9_]+$/',
-            'columns'     => 'nullable|array',
-            'columns.*'   => 'string|max:100',
-            'filters'     => 'nullable|array',
-            'sort_col'    => 'nullable|string|max:100',
-            'sort_dir'    => 'nullable|in:asc,desc',
-            'max_rows'    => 'nullable|integer|min:1|max:1048576',
-            'format'      => 'nullable|in:gzip,excel',
-        ]);
+        // Aceptar parámetros tanto de body (POST) como de query (GET)
+        $schemaName = $request->input('schema_name', $request->query('schema_name'));
+        $viewName   = $request->input('view', $request->query('view'));
+
+        if (!$schemaName || !$viewName) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Parámetros requeridos: schema_name y view.',
+            ], 422);
+        }
 
         $user   = auth()->user();
-        $schema = strtolower($request->schema_name);
+        $schema = strtolower($schemaName);
 
         // Validar acceso antes de encolar
         if (!$this->gateway->tieneAccesoEsquema($user, $schema)) {
@@ -309,21 +308,20 @@ class FabricViewerController extends Controller
         $jobId = \App\Jobs\FabricStreamExportJob::dispatch_and_track(
             $user->id,
             $schema,
-            $request->view,
+            $viewName,
             [
                 'columns'  => $request->input('columns', []),
                 'filters'  => $request->input('filters', []),
                 'sort_col' => $request->input('sort_col', ''),
                 'sort_dir' => $request->input('sort_dir', 'asc'),
-                'max_rows' => $request->input('max_rows', 500000),
-                'format'   => $request->input('format', 'gzip'),
+                'max_rows' => (int) $request->input('max_rows', 500000),
+                'format'   => $request->input('format', 'xlsx'),
             ]
         );
 
         return response()->json([
             'success'    => true,
             'job_id'     => $jobId,
-            'format'     => $request->input('format', 'gzip'),
             'message'    => 'Export iniciado en segundo plano.',
             'status_url' => "/api/fabric/viewer/export/status/{$jobId}",
         ], 202);
