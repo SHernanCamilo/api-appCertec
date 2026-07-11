@@ -45,6 +45,21 @@ class ODataController extends Controller
      */
     public function queryByLink(Request $request, string $code): mixed
     {
+        // Restringir acceso solo a clientes Office/Power Query
+        $userAgent = $request->userAgent() ?? '';
+        $allowedClients = ['Microsoft.Data.Mashup', 'PowerQuery', 'Excel', 'Power BI', 'OData'];
+        $isOfficeClient = false;
+        foreach ($allowedClients as $client) {
+            if (stripos($userAgent, $client) !== false) {
+                $isOfficeClient = true;
+                break;
+            }
+        }
+        // También permitir curl/Postman para testing (con header especial)
+        if (!$isOfficeClient && !$request->hasHeader('X-JadeOne-OData')) {
+            return $this->odataError('ClientNotAllowed', 'Este endpoint solo está disponible para Excel y Power Query.', 403);
+        }
+
         $link = OdataLink::where('code', $code)->first();
 
         if (!$link) {
