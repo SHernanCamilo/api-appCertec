@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Fabric;
 
 use App\Http\Controllers\Controller;
+use App\Models\BiVistaAccessLog;
+use App\Services\Fabric\BiVistaAuditService;
 use App\Services\Fabric\GraphFabricGatewayService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -26,7 +28,8 @@ use Illuminate\Http\JsonResponse;
 class FabricViewerController extends Controller
 {
     public function __construct(
-        private GraphFabricGatewayService $gateway
+        private GraphFabricGatewayService $gateway,
+        private BiVistaAuditService $auditService
     ) {}
 
     // =========================================================================
@@ -214,6 +217,23 @@ class FabricViewerController extends Controller
             return response()->json($errorPayload, $code);
         }
 
+        $offset = (int) $request->input('offset', 0);
+        if ($offset === 0) {
+            $this->auditService->log(
+                $user,
+                $schema,
+                $view,
+                BiVistaAccessLog::ACCION_CONSULTA,
+                $request,
+                [
+                    'filters'       => $request->input('filters', []),
+                    'rows_returned' => (int) ($result['meta']['total'] ?? count($result['data'] ?? [])),
+                    'elapsed_ms'    => (int) ($result['meta']['elapsed_ms'] ?? 0),
+                    'success'       => true,
+                ]
+            );
+        }
+
         return response()->json($result);
     }
 
@@ -263,6 +283,19 @@ class FabricViewerController extends Controller
                 'message' => $result['message'],
             ], $code);
         }
+
+        $this->auditService->log(
+            $user,
+            $schema,
+            $request->view,
+            BiVistaAccessLog::ACCION_EXPORT_SYNC,
+            $request,
+            [
+                'filters'       => $request->input('filters', []),
+                'rows_returned' => (int) ($result['rows'] ?? 0),
+                'metadata'      => ['filename' => $result['filename'] ?? null],
+            ]
+        );
 
         return response($result['content'], 200, [
             'Content-Type'        => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -326,6 +359,18 @@ class FabricViewerController extends Controller
             ]
         );
 
+        $this->auditService->log(
+            $user,
+            $schema,
+            $viewName,
+            BiVistaAccessLog::ACCION_EXPORT_INICIO,
+            $request,
+            [
+                'filters'  => $request->input('filters', []),
+                'metadata' => ['job_id' => $jobId],
+            ]
+        );
+
         return response()->json([
             'success'    => true,
             'job_id'     => $jobId,
@@ -385,6 +430,24 @@ class FabricViewerController extends Controller
                 'success' => false,
                 'message' => 'Export no completado o no encontrado.',
             ], 404);
+        }
+
+        $user = auth()->user();
+        if ($user) {
+            $this->auditService->log(
+                $user,
+                (string) ($status['schema'] ?? ''),
+                (string) ($status['view'] ?? $status['view_name'] ?? ''),
+                BiVistaAccessLog::ACCION_EXPORT_DESCARGA,
+                request(),
+                [
+                    'rows_returned' => (int) ($status['rows'] ?? 0),
+                    'metadata'      => [
+                        'job_id'   => $jobId,
+                        'filename' => $status['filename'] ?? null,
+                    ],
+                ]
+            );
         }
 
         $path     = $status['path'] ?? $status['file_path'] ?? null;
