@@ -80,6 +80,8 @@ class SyncBiVistas extends Command
 
             $data    = $response->json();
             $schemas = $data['schemas'] ?? [];
+            
+            $vistasRecibidas = [];
 
             foreach ($schemas as $schemaBlock) {
                 $views = $schemaBlock['views'] ?? [];
@@ -100,6 +102,12 @@ class SyncBiVistas extends Command
                             'estado'      => BiVista::ESTADO_ACTIVO,
                         ]
                     );
+                    
+                    if (!$biVista->wasRecentlyCreated && $biVista->estado !== BiVista::ESTADO_ACTIVO) {
+                        $biVista->update(['estado' => BiVista::ESTADO_ACTIVO]);
+                    }
+
+                    $vistasRecibidas[] = $biVista->id;
 
                     if ($biVista->wasRecentlyCreated) {
                         $totalCreated++;
@@ -107,6 +115,13 @@ class SyncBiVistas extends Command
                         $totalExisting++;
                     }
                 }
+            }
+
+            if (!empty($vistasRecibidas)) {
+                BiVista::where('id_bi_grupos', $grupo->id)
+                    ->whereNotIn('id', $vistasRecibidas)
+                    ->where('estado', '!=', BiVista::ESTADO_INACTIVO)
+                    ->update(['estado' => BiVista::ESTADO_INACTIVO]);
             }
 
             $bar->advance();

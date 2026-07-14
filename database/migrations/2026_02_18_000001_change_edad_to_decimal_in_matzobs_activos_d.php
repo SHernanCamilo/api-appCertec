@@ -11,11 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('matzobs_activos_d', function (Blueprint $table) {
-            // Cambiar el campo edad de integer a decimal(4,1)
-            // Esto permite valores como 5.4, 10.8, etc.
-            $table->decimal('edad', 4, 1)->nullable()->change();
-        });
+        if (Schema::hasColumn('matzobs_activos_d', 'edad')) {
+            Schema::table('matzobs_activos_d', function (Blueprint $table) {
+                // Cambiar el campo edad de integer a decimal(4,1)
+                // Esto permite valores como 5.4, 10.8, etc.
+                $table->decimal('edad', 4, 1)->nullable()->change();
+            });
+        }
     }
 
     /**

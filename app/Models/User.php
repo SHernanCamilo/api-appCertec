@@ -206,4 +206,12 @@ class User extends Authenticatable implements JWTSubject
     {
         return $this->update(['estado' => 0]);
     }
+
+    /**
+     * Vistas permitidas para actualizar por OData (Excel)
+     */
+    public function vistasPermitidasOData()
+    {
+        return $this->belongsToMany(\App\Models\BiVista::class, 'bi_vista_user_permissions', 'user_id', 'bi_vista_id');
+    }
 }

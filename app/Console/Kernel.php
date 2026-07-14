@@ -35,6 +35,13 @@ class Kernel extends ConsoleKernel
         $schedule->job(new PendingEmailsWorkerJob)
             ->everyFiveMinutes()
             ->withoutOverlapping();
+
+        // ── Sincronización ERP Indigo ────────────────────────────────────────
+        // Sincroniza las órdenes de compra desde la vista de Indigo cada 10 min
+        $schedule->command('indigo:sync-orders')
+            ->everyTenMinutes()
+            ->withoutOverlapping()
+            ->appendOutputTo(storage_path('logs/indigo-sync.log'));
     }
 
     /**

@@ -71,6 +71,15 @@ Route::middleware(['auth:api'])->group(function () {
     });
 
     // =========================================================================
+    // Permisos OData (Quien puede actualizar desde Excel por vista)
+    // =========================================================================
+    Route::prefix('bi-vistas/{id}/permissions')->group(function () {
+        Route::get('/', [\App\Http\Controllers\Fabric\BiVistaPermissionController::class, 'index']);
+        Route::post('/', [\App\Http\Controllers\Fabric\BiVistaPermissionController::class, 'store']);
+        Route::delete('/{userId}', [\App\Http\Controllers\Fabric\BiVistaPermissionController::class, 'destroy']);
+    });
+
+    // =========================================================================
     // OData API Keys — Generar/Listar/Revocar (requiere autenticación)
     // =========================================================================
     Route::prefix('odata/api-keys')->group(function () {

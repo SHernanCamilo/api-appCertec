@@ -20,12 +20,14 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('anti_reglas', function (Blueprint $table) {
-            $table->unsignedTinyInteger('nivel_jerarquico')->default(0)
-                  ->comment('0=aplica a todos, 1=Estratégico, 2=Táctico, 3=Operativo')
-                  ->after('id_concepto');
-            $table->index(['id_concepto', 'nivel_jerarquico']);
-        });
+        if (!Schema::hasColumn('anti_reglas', 'nivel_jerarquico')) {
+            Schema::table('anti_reglas', function (Blueprint $table) {
+                $table->unsignedTinyInteger('nivel_jerarquico')->default(0)
+                      ->comment('0=aplica a todos, 1=Estratégico, 2=Táctico, 3=Operativo')
+                      ->after('id_concepto');
+                $table->index(['id_concepto', 'nivel_jerarquico']);
+            });
+        }
     }
 
     public function down(): void

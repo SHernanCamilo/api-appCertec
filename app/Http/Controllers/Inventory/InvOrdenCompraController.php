@@ -115,7 +115,7 @@ class InvOrdenCompraController extends Controller
     public function cambiarEstado(Request $request, string $id): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'estado' => 'required|string|in:BORRADOR,EN_TRANSITO,RECIBIDA_PARCIAL,RECIBIDA_TOTAL,CANCELADA'
+            'estado' => 'required|string|in:BORRADOR,CONFIRMADO,EN_TRANSITO,RECIBIDA_PARCIAL,RECIBIDA_TOTAL,CANCELADA'
         ]);
 
         if ($validator->fails()) {
@@ -127,7 +127,14 @@ class InvOrdenCompraController extends Controller
         }
 
         try {
-            $result = $this->service->cambiarEstado((int) $id, $request->estado);
+            $userId = auth()->user()->id ?? 1;
+
+            if (strtoupper($request->estado) === 'CONFIRMADO') {
+                $result = $this->service->confirmPurchase((int) $id, $userId);
+            } else {
+                $result = $this->service->cambiarEstado((int) $id, $request->estado);
+            }
+            
             return response()->json($result, $result['success'] ? 200 : 400);
         } catch (\Exception $e) {
             return response()->json([

@@ -69,6 +69,11 @@ class BiVista extends Model
         return $this->belongsTo(BiGrupo::class, 'id_bi_grupos');
     }
 
+    public function usuariosConPermisoOData()
+    {
+        return $this->belongsToMany(\App\Models\User::class, 'bi_vista_user_permissions', 'bi_vista_id', 'user_id');
+    }
+
     // =========================================================================
     // HELPERS
     // =========================================================================

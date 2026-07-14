@@ -5,11 +5,19 @@ namespace App\Services\Inventory;
 use App\Models\Inventory\InvOrdenCompra;
 use App\Models\Inventory\InvOrdenCompraDetalle;
 use App\Models\Inventory\External\IndigoOrdenCompra;
+use App\Services\Inventory\InvSequenceService;
+use App\Services\Inventory\InvPedidoService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class InvOrdenCompraService
 {
+    protected InvSequenceService $sequenceService;
+
+    public function __construct(InvSequenceService $sequenceService)
+    {
+        $this->sequenceService = $sequenceService;
+    }
     /**
      * Listar órdenes de compra.
      * Puede listar de la BD local o del ERP externo (Indigo) dependiendo del parámetro $filters['source'].
@@ -197,5 +205,76 @@ class InvOrdenCompraService
             'message' => 'Estado actualizado a ' . $nuevoEstado,
             'data'    => $orden->fresh()
         ];
+    }
+
+    /**
+     * Crear orden de compra local
+     */
+    public function create(array $data, int $userId): array
+    {
+        DB::beginTransaction();
+        try {
+            $numeroOrden = $this->sequenceService->generateSequence('INVENTARIO', $userId, 'ORDEN_COMPRA');
+            
+            $orden = InvOrdenCompra::create([
+                'numero_orden_compra' => $numeroOrden,
+                'fecha_orden'         => $data['fecha_orden'] ?? now()->toDateString(),
+                'observaciones'       => $data['observaciones'] ?? null,
+                'estado'              => 'pendiente',
+                'creado_por'          => $userId,
+            ]);
+
+            if (!empty($data['detalles']) && is_array($data['detalles'])) {
+                foreach ($data['detalles'] as $detalle) {
+                    InvOrdenCompraDetalle::create([
+                        'compra_id'                  => $orden->id,
+                        'pedido_detalle_id'          => $detalle['pedido_detalle_id'],
+                        'proveedor'                  => $detalle['proveedor'] ?? 'N/A',
+                        'cantidad_solicitada_compra' => $detalle['cantidad_solicitada_compra'],
+                        'precio_unitario_compra'     => $detalle['precio_unitario_compra'] ?? null,
+                        'estado'                     => 'pendiente'
+                    ]);
+                }
+            }
+            DB::commit();
+            return ['success' => true, 'message' => 'Orden de compra creada', 'data' => $orden->load('detalles')];
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error al crear OC: ' . $e->getMessage());
+            return ['success' => false, 'message' => 'Error al crear orden de compra', 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Confirmar la orden de compra y actualizar los pedidos relacionados
+     */
+    public function confirmPurchase(int $id, int $userId): array
+    {
+        $orden = InvOrdenCompra::with('detalles')->find($id);
+        
+        if (!$orden || $orden->estado !== 'pendiente') {
+            return ['success' => false, 'message' => 'Orden no encontrada o no está en estado pendiente'];
+        }
+
+        DB::beginTransaction();
+        try {
+            $orden->update(['estado' => 'confirmado']);
+            
+            // Restar cantidades a los pedidos vinculados
+            $detalles = $orden->detalles->toArray();
+            $pedidoService = app(InvPedidoService::class);
+            $res = $pedidoService->applyPurchaseToOrders($orden->id, $detalles, $userId);
+            
+            if (!$res['success']) {
+                throw new \Exception($res['message']);
+            }
+            
+            DB::commit();
+            return ['success' => true, 'message' => 'Orden confirmada y pedidos actualizados', 'data' => $orden->fresh()];
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error al confirmar OC: ' . $e->getMessage());
+            return ['success' => false, 'message' => 'Error al confirmar la orden', 'error' => $e->getMessage()];
+        }
     }
 }

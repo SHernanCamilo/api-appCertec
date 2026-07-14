@@ -5,12 +5,19 @@ namespace App\Services\Inventory;
 use App\Models\Inventory\InvPedido;
 use App\Models\Inventory\InvPedidoDetalle;
 use App\Models\Inventory\InvPedidoTrazabilidad;
-use App\Models\Inventory\InvSecuencia;
+use App\Services\Inventory\InvSequenceService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class InvPedidoService
 {
+    protected InvSequenceService $sequenceService;
+
+    public function __construct(InvSequenceService $sequenceService)
+    {
+        $this->sequenceService = $sequenceService;
+    }
+
     /**
      * Obtener todos los pedidos con sus detalles y filtros
      */
@@ -68,14 +75,8 @@ class InvPedidoService
     {
         DB::beginTransaction();
         try {
-            // Generar número de pedido (Ej: PED-2024-001)
-            $anoActual = date('Y');
-            $secuencia = InvSecuencia::firstOrCreate(
-                ['tipo_documento' => 'PEDIDO', 'ano' => $anoActual],
-                ['ultimo_numero' => 0]
-            );
-            $secuencia->increment('ultimo_numero');
-            $numeroPedido = sprintf('PED-%s-%04d', $anoActual, $secuencia->ultimo_numero);
+            // Generar número de pedido (Ej: FLA-2026-001) usando InvSequenceService (wrapper de SecuenciaNumericaService)
+            $numeroPedido = $this->sequenceService->generateSequence('INVENTARIO', $userId, 'PEDIDO');
 
             // Crear el pedido cabecera
             $pedido = InvPedido::create([
@@ -243,5 +244,120 @@ class InvPedidoService
     public function destroy(int $id, int $userId): array
     {
         return $this->cambiarEstado($id, 'CANCELADO', $userId);
+    }
+
+    /**
+     * Confirmar un pedido (pasa a SOLICITADO para que compras lo vea)
+     */
+    public function confirmOrder(int $id, int $userId): array
+    {
+        $pedido = InvPedido::find($id);
+        
+        if (!$pedido) {
+            return ['success' => false, 'message' => 'Pedido no encontrado'];
+        }
+
+        if ($pedido->estado !== 'BORRADOR') {
+            return ['success' => false, 'message' => 'Solo se pueden confirmar pedidos en estado BORRADOR'];
+        }
+
+        return $this->cambiarEstado($id, 'SOLICITADO', $userId);
+    }
+
+    /**
+     * Aprobar un pedido formalmente
+     */
+    public function approveOrder(int $id, int $userId): array
+    {
+        $pedido = InvPedido::find($id);
+        
+        if (!$pedido) {
+            return ['success' => false, 'message' => 'Pedido no encontrado'];
+        }
+
+        if ($pedido->estado !== 'SOLICITADO') {
+            return ['success' => false, 'message' => 'Solo se pueden aprobar pedidos en estado SOLICITADO'];
+        }
+
+        return $this->cambiarEstado($id, 'APROBADO', $userId);
+    }
+
+    /**
+     * Restar cantidades compradas de las cantidades solicitadas del pedido.
+     * Actualiza el estado de las líneas del pedido y, si aplica, el estado general.
+     */
+    public function applyPurchaseToOrders(int $compraId, array $detallesAComprar, int $userId): array
+    {
+        DB::beginTransaction();
+        try {
+            foreach ($detallesAComprar as $item) {
+                if (!isset($item['pedido_detalle_id']) || !isset($item['cantidad_solicitada_compra'])) {
+                    continue;
+                }
+
+                $detallePedido = InvPedidoDetalle::lockForUpdate()->find($item['pedido_detalle_id']);
+                if (!$detallePedido) {
+                    throw new \Exception("Detalle de pedido {$item['pedido_detalle_id']} no encontrado.");
+                }
+
+                // Acumular cantidades compradas previamente más la nueva
+                // NOTA: Como en la BD original no existía un campo 'cantidad_comprada' en inv_pedido_detalles,
+                // debemos calcularlo sumando los detalles de compras asociados o agregarlo.
+                // Aquí calculamos sumando las OCs que no estén canceladas:
+                $compradoAnteriormente = DB::table('inv_orden_compra_detalles')
+                    ->join('inv_ordenes_compra', 'inv_orden_compra_detalles.compra_id', '=', 'inv_ordenes_compra.id')
+                    ->where('inv_orden_compra_detalles.pedido_detalle_id', $detallePedido->id)
+                    ->where('inv_orden_compra_detalles.compra_id', '!=', $compraId)
+                    ->where('inv_ordenes_compra.estado', '!=', 'cancelada')
+                    ->sum('inv_orden_compra_detalles.cantidad_solicitada_compra');
+
+                $totalComprado = $compradoAnteriormente + $item['cantidad_solicitada_compra'];
+
+                if ($totalComprado >= $detallePedido->cantidad_solicitada) {
+                    $detallePedido->estado = 'COMPLETO';
+                } elseif ($totalComprado > 0) {
+                    $detallePedido->estado = 'PARCIAL';
+                }
+                $detallePedido->save();
+
+                // Revisar el estado general del pedido asociado a este detalle
+                $this->evaluarEstadoGeneralPedido($detallePedido->pedido_id, $userId);
+            }
+
+            DB::commit();
+            return ['success' => true];
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error en applyPurchaseToOrders: ' . $e->getMessage());
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Evalúa si todas las líneas del pedido están completas o parciales 
+     * para cambiar el estado del pedido general.
+     */
+    private function evaluarEstadoGeneralPedido(int $pedidoId, int $userId): void
+    {
+        $detalles = InvPedidoDetalle::where('pedido_id', $pedidoId)->get();
+        $total = $detalles->count();
+        $completos = $detalles->where('estado', 'COMPLETO')->count();
+        $parciales = $detalles->where('estado', 'PARCIAL')->count();
+
+        $pedido = InvPedido::find($pedidoId);
+        if (!$pedido || in_array($pedido->estado, ['CANCELADO', 'RECIBIDO'])) {
+            return;
+        }
+
+        $nuevoEstado = $pedido->estado;
+        if ($completos == $total) {
+            $nuevoEstado = 'EN_TRANSITO';
+        } elseif ($completos > 0 || $parciales > 0) {
+            $nuevoEstado = 'EN_TRANSITO'; // O un estado intermedio
+        }
+
+        if ($nuevoEstado !== $pedido->estado) {
+            $this->cambiarEstado($pedidoId, $nuevoEstado, $userId);
+        }
     }
 }

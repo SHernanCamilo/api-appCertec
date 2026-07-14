@@ -29,19 +29,3 @@ Route::prefix('invima')->group(function () {
     Route::get('mvd', [App\Http\Controllers\Inventory\InvProductoController::class, 'searchMvd']);
 });
 
-// =========================================================================
-// PEDIDOS
-// =========================================================================
-Route::apiResource('pedidos', App\Http\Controllers\Inventory\InvPedidoController::class);
-Route::patch('pedidos/{id}/estado', [App\Http\Controllers\Inventory\InvPedidoController::class, 'cambiarEstado']);
-
-// =========================================================================
-// ÓRDENES DE COMPRA
-// =========================================================================
-Route::apiResource('ordenes-compra', App\Http\Controllers\Inventory\InvOrdenCompraController::class);
-Route::patch('ordenes-compra/{id}/estado', [App\Http\Controllers\Inventory\InvOrdenCompraController::class, 'cambiarEstado']);
-
-// =========================================================================
-// RECEPCIONES TÉCNICAS
-// =========================================================================
-Route::apiResource('recepciones', App\Http\Controllers\Inventory\InvRecepcionController::class);

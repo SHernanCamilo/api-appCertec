@@ -5,12 +5,18 @@ namespace App\Services\Inventory;
 use App\Models\Inventory\InvOrdenCompra;
 use App\Models\Inventory\InvRecepcion;
 use App\Models\Inventory\InvRecepcionDetalle;
-use App\Models\Inventory\InvSecuencia;
+use App\Services\Inventory\InvSequenceService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class InvRecepcionService
 {
+    protected InvSequenceService $sequenceService;
+
+    public function __construct(InvSequenceService $sequenceService)
+    {
+        $this->sequenceService = $sequenceService;
+    }
     /**
      * Obtener historial de recepciones con filtros
      */
@@ -63,6 +69,37 @@ class InvRecepcionService
     }
 
     /**
+     * Listar compras que están listas para recepción (estados confirmado o en_sitio)
+     */
+    public function getPurchasesForReception(): array
+    {
+        $compras = InvOrdenCompra::with('detalles')
+                    ->whereIn('estado', ['confirmado', 'en_sitio', 'EN_RECEPCION'])
+                    ->orderBy('id', 'desc')
+                    ->get();
+        return ['success' => true, 'data' => $compras];
+    }
+
+    /**
+     * Marcar llegada física al muelle (en_sitio)
+     */
+    public function confirmArrival(int $compraId, int $userId): array
+    {
+        $compra = InvOrdenCompra::find($compraId);
+        if (!$compra) {
+            return ['success' => false, 'message' => 'Compra no encontrada'];
+        }
+        
+        if (!in_array(strtolower($compra->estado), ['confirmado', 'en_transito'])) {
+             return ['success' => false, 'message' => 'La compra no está confirmada ni en tránsito'];
+        }
+
+        $compra->update(['estado' => 'en_sitio']);
+        
+        return ['success' => true, 'message' => 'Llegada al almacén confirmada', 'data' => $compra];
+    }
+
+    /**
      * Crear una recepción técnica desde una Orden de Compra
      */
     public function store(array $data, int $userId): array
@@ -77,13 +114,7 @@ class InvRecepcionService
             }
 
             // Generar número de recepción (Ej: REC-2024-001)
-            $anoActual = date('Y');
-            $secuencia = InvSecuencia::firstOrCreate(
-                ['tipo_documento' => 'RECEPCION', 'ano' => $anoActual],
-                ['ultimo_numero' => 0]
-            );
-            $secuencia->increment('ultimo_numero');
-            $numeroRecepcion = sprintf('REC-%s-%04d', $anoActual, $secuencia->ultimo_numero);
+            $numeroRecepcion = $this->sequenceService->generateSequence('INVENTARIO', $userId, 'RECEPCION');
 
             // Calcular items totales a recepcionar
             $itemsToReceive = array_filter($data['items'] ?? [], function($item) {
@@ -191,6 +222,16 @@ class InvRecepcionService
 
         DB::beginTransaction();
         try {
+            // Validaciones farmacéuticas antes de confirmar
+            $detalles = InvRecepcionDetalle::where('recepcion_id', $recepcion->id)->get();
+            foreach ($detalles as $detalle) {
+                if (strtolower($detalle->concepto_recepcion) === 'aprobado' || strtolower($detalle->concepto_recepcion) === 'aceptado') {
+                    if (empty($detalle->numero_lote) || empty($detalle->fecha_vencimiento)) {
+                        throw new \Exception("El producto '{$detalle->producto_nombre}' fue aprobado pero carece de Lote o Fecha de Vencimiento.");
+                    }
+                }
+            }
+
             $recepcion->update([
                 'estado' => 'CONFIRMADO'
             ]);

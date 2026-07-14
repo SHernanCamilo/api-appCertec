@@ -55,9 +55,9 @@ class ODataController extends Controller
                 break;
             }
         }
-        // También permitir curl/Postman para testing (con header especial)
-        if (!$isOfficeClient && !$request->hasHeader('X-JadeOne-OData')) {
-            return $this->odataError('ClientNotAllowed', 'Este endpoint solo está disponible para Excel y Power Query.', 403);
+        // Restricción estricta: solo clientes de Office/Power Query
+        if (!$isOfficeClient) {
+            return $this->odataError('ClientNotAllowed', 'Por motivos de seguridad, este endpoint solo está disponible desde Microsoft Excel o Power Query.', 403);
         }
 
         $link = OdataLink::where('code', $code)->first();
@@ -136,9 +136,9 @@ class ODataController extends Controller
         $select = $request->query('$select', '');
         $orderby = $request->query('$orderby', '');
 
-        // Protección contra SQL injection en filtros OData
-        if ($filter && preg_match('/;|--|DROP|DELETE|INSERT|UPDATE|EXEC|xp_/i', $filter)) {
-            return $this->odataError('InvalidFilter', 'Filtro no válido.', 400);
+        // Protección robusta contra SQL y JS injection en filtros OData
+        if ($filter && preg_match('/;|--|DROP|DELETE|INSERT|UPDATE|EXEC|xp_|UNION|SCRIPT|ALTER|CREATE|TRUNCATE|\/\*|<script>/i', $filter)) {
+            return $this->odataError('InvalidFilter', 'Por motivos de seguridad, el filtro OData contiene caracteres o sentencias no permitidas.', 400);
         }
 
         $filters = array_merge(
@@ -601,6 +601,15 @@ class ODataController extends Controller
                             ];
                         }
 
+                        // Verificar permisos específicos de OData para esta vista
+                        if (!$this->checkViewPermission($keyUser, $link)) {
+                            return [
+                                'error' => true,
+                                'code' => 'ViewAccessDenied',
+                                'message' => "No tiene permiso asignado para actualizar la vista '{$link->view_name}' desde Excel.",
+                            ];
+                        }
+
                         // Registrar uso
                         $keyRecord->recordUse($request->ip());
 
@@ -633,6 +642,21 @@ class ODataController extends Controller
                             'message' => 'No tiene permiso para acceder a este link.',
                         ];
                     }
+                    $azureUserModel = \App\Models\User::where('email', $azureUser['email'])->first();
+                    if (!$azureUserModel) {
+                        return [
+                            'error' => true,
+                            'code' => 'UserNotFound',
+                            'message' => 'Usuario no encontrado en la base de datos.',
+                        ];
+                    }
+                    if (!$this->checkViewPermission($azureUserModel, $link)) {
+                        return [
+                            'error' => true,
+                            'code' => 'ViewAccessDenied',
+                            'message' => "No tiene permiso asignado para actualizar la vista '{$link->view_name}' desde Excel.",
+                        ];
+                    }
                     return [
                         'error' => false,
                         'email' => $azureUser['email'],
@@ -658,12 +682,49 @@ class ODataController extends Controller
             ];
         }
 
+        if (!$this->checkViewPermission($user, $link)) {
+            return [
+                'error' => true,
+                'code' => 'ViewAccessDenied',
+                'message' => "No tiene permiso asignado para actualizar la vista '{$link->view_name}' desde Excel.",
+            ];
+        }
+
         return [
             'error' => false,
             'email' => $user->email,
             'name' => $user->name ?? $user->email,
             'method' => 'azure_ad',
         ];
+    }
+
+    /**
+     * Verifica si el usuario tiene permiso explícito para esta vista
+     */
+    private function checkViewPermission($user, OdataLink $link): bool
+    {
+        // Si el usuario es admin puede acceder a todo
+        if ($user && method_exists($user, 'hasRole') && $user->hasRole(['admin', 'super-admin'])) {
+            return true;
+        }
+
+        $biGrupo = \App\Models\BiGrupo::where('codigo', strtoupper($link->schema_name))->first();
+        if (!$biGrupo) {
+            return false;
+        }
+
+        $biVista = \App\Models\BiVista::where('id_bi_grupos', $biGrupo->id)
+            ->where('nombre', $link->view_name)
+            ->first();
+
+        if (!$biVista) {
+            return false;
+        }
+
+        return \Illuminate\Support\Facades\DB::table('bi_vista_user_permissions')
+            ->where('bi_vista_id', $biVista->id)
+            ->where('user_id', $user->id)
+            ->exists();
     }
 
     /**
