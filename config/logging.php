@@ -141,6 +141,14 @@ return [
         'emergency' => [
             'path' => storage_path('logs/laravel.log'),
         ],
+
+        'odata' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/odata.log'),
+            'level' => 'debug',
+            'days' => 30,
+            'replace_placeholders' => true,
+        ],
     ],
 
 ];

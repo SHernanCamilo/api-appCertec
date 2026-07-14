@@ -45,6 +45,15 @@ class ODataController extends Controller
      */
     public function queryByLink(Request $request, string $code): mixed
     {
+        // Log dedicado para OData (canal separado para no perder entre otros logs)
+        $odataLog = Log::channel('odata');
+        $odataLog->info('OData request', [
+            'code' => $code,
+            'ip' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+            'url' => $request->fullUrl(),
+        ]);
+
         // Restringir acceso solo a clientes Office/Power Query
         $userAgent = $request->userAgent() ?? '';
         $allowedClients = ['Microsoft.Data.Mashup', 'PowerQuery', 'Excel', 'Power BI', 'OData'];
@@ -57,6 +66,7 @@ class ODataController extends Controller
         }
         // Restricción estricta: solo clientes de Office/Power Query
         if (!$isOfficeClient) {
+            $odataLog->warning('OData: Cliente no permitido', ['user_agent' => $userAgent, 'code' => $code]);
             return $this->odataError('ClientNotAllowed', 'Por motivos de seguridad, este endpoint solo está disponible desde Microsoft Excel o Power Query.', 403);
         }
 
@@ -252,6 +262,9 @@ class ODataController extends Controller
      */
     public function metadata(Request $request, string $code)
     {
+        $odataLog = Log::channel('odata');
+        $odataLog->info('OData $metadata request', ['code' => $code, 'ip' => $request->ip()]);
+
         $link = OdataLink::where('code', $code)->first();
 
         if (!$link) {
@@ -382,8 +395,8 @@ class ODataController extends Controller
                 'code' => $link->code,
                 'name' => $link->name,
                 'visibility' => $link->visibility,
-                'url' => url("/odata/link/{$link->code}"),
-                'excel_url' => url("/odata/link/{$link->code}"),
+                'url' => url("/api/fabric/odata/link/{$link->code}"),
+                'excel_url' => url("/api/fabric/odata/link/{$link->code}"),
                 'expires_at' => $link->expires_at?->toIso8601String(),
             ],
         ];
@@ -391,7 +404,7 @@ class ODataController extends Controller
         // El token público solo se muestra UNA VEZ al crear
         if ($tokenData) {
             $response['data']['public_token'] = $tokenData['token'];
-            $response['data']['full_url'] = url("/odata/link/{$link->code}") . "?token={$tokenData['token']}";
+            $response['data']['full_url'] = url("/api/fabric/odata/link/{$link->code}") . "?token={$tokenData['token']}";
             $response['data']['warning'] = 'Guarda este token. No se puede recuperar después.';
         }
 
@@ -430,7 +443,7 @@ class ODataController extends Controller
                 'visibility' => $l->visibility,
                 'schema' => $l->schema_name,
                 'view' => $l->view_name,
-                'url' => url("/odata/link/{$l->code}"),
+                'url' => url("/api/fabric/odata/link/{$l->code}"),
                 'active' => $l->active,
                 'expires_at' => $l->expires_at?->toIso8601String(),
                 'access_count' => $l->access_count,

@@ -134,17 +134,11 @@ class OdataLink extends Model
 
     /**
      * Genera la URL OData completa para este link.
+     * Usa la ruta pública /api/fabric/odata/link/{code} que NO requiere auth:api.
      */
     public function getOdataUrl(): string
     {
-        $base = url("/odata/link/{$this->code}");
-
-        if ($this->visibility === self::VISIBILITY_PUBLIC) {
-            // Los públicos necesitan el token en la URL
-            return $base; // El token se pasa como query param ?token=xxx
-        }
-
-        return $base;
+        return url("/api/fabric/odata/link/{$this->code}");
     }
 
     /**
