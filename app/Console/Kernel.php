@@ -38,10 +38,11 @@ class Kernel extends ConsoleKernel
 
         // ── Sincronización ERP Indigo ────────────────────────────────────────
         // Sincroniza las órdenes de compra desde la vista de Indigo cada 10 min
-        $schedule->command('indigo:sync-orders')
-            ->everyTenMinutes()
-            ->withoutOverlapping()
-            ->appendOutputTo(storage_path('logs/indigo-sync.log'));
+        // INACTIVADO temporalmente por error de driver sqlsrv (pdo_odbc no disponible)
+        // $schedule->command('indigo:sync-orders')
+        //     ->everyTenMinutes()
+        //     ->withoutOverlapping()
+        //     ->appendOutputTo(storage_path('logs/indigo-sync.log'));
     }
 
     /**
