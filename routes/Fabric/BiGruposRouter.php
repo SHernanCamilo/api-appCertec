@@ -33,3 +33,9 @@ Route::prefix('bi-vistas')->group(function () {
     Route::put('/{id}', [BiVistaController::class, 'update']);
     Route::delete('/{id}', [BiVistaController::class, 'destroy']);
 });
+
+Route::prefix('bi-usuarios')->group(function () {
+    Route::get('/auditoria/esquemas', [\App\Http\Controllers\Fabric\BiUsuarioController::class, 'auditoriaEsquemas']);
+    Route::get('/auditoria', [\App\Http\Controllers\Fabric\BiUsuarioController::class, 'auditoria']);
+    Route::get('/{userId}/permisos', [\App\Http\Controllers\Fabric\BiUsuarioController::class, 'permisos']);
+});
