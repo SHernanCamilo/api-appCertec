@@ -71,6 +71,15 @@ Route::middleware(['auth:api'])->group(function () {
     });
 
     // =========================================================================
+    // OData Link — Endpoint público para Excel/Power Query (sin middleware auth)
+    // =========================================================================
+    Route::prefix('odata/link/{code}')->group(function () {
+        Route::get('', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLink']);
+        Route::get('value', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLink']);
+        Route::get('$metadata', [\App\Http\Controllers\Fabric\ODataController::class, 'metadata']);
+    });
+
+    // =========================================================================
     // Permisos OData (Quien puede actualizar desde Excel por vista)
     // =========================================================================
     Route::prefix('bi-vistas/{id}/permissions')->group(function () {
