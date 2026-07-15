@@ -1,0 +1,44 @@
+# /etc/systemd/system/jade-horizon.service
+# Worker de colas Laravel Horizon para JadeOne API
+#
+# Instalar:
+#   cp docs/deploy/horizon-worker.service /etc/systemd/system/jade-horizon.service
+#   systemctl daemon-reload
+#   systemctl enable jade-horizon
+#   systemctl start jade-horizon
+#
+# Monitorear:
+#   systemctl status jade-horizon
+#   journalctl -u jade-horizon -f
+#
+# Dashboard web:
+#   https://jade-api.medilaser.com.co/horizon (requiere login admin)
+
+[Unit]
+Description=JadeOne Laravel Horizon Queue Worker
+After=network.target redis.service mysql.service
+
+[Service]
+Type=simple
+User=medadminvps
+Group=medadminvps
+WorkingDirectory=/home/medadminvps/api-appCertec
+Environment=PATH=/opt/cpanel/ea-php83/root/usr/bin:/usr/local/bin:/usr/bin
+
+# Horizon maneja múltiples workers automáticamente según config/horizon.php
+ExecStart=/opt/cpanel/ea-php83/root/usr/bin/php artisan horizon
+
+# Si se cae, reiniciar después de 10 segundos
+Restart=always
+RestartSec=10
+
+# Enviar SIGTERM para graceful shutdown (termina jobs en progreso)
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+# Logs
+StandardOutput=append:/home/medadminvps/api-appCertec/storage/logs/horizon-worker.log
+StandardError=append:/home/medadminvps/api-appCertec/storage/logs/horizon-worker.log
+
+[Install]
+WantedBy=multi-user.target

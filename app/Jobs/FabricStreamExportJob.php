@@ -33,7 +33,13 @@ final class FabricStreamExportJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries   = 1;
-    public int $timeout = 600; // 10 min max
+    public int $timeout = 900; // 15 min max (Horizon lo respeta)
+
+    /**
+     * Cola dedicada para exports — aislada de jobs rápidos.
+     * Horizon asigna workers independientes a esta cola.
+     */
+    public string $queue = 'exports';
 
     private const STATUS_PENDING    = 'pending';
     private const STATUS_PROCESSING = 'processing';
