@@ -485,9 +485,11 @@ class ODataController extends Controller
         $request->validate([
             'name' => 'required|string|max:100',
             'expires_days' => 'nullable|integer|min:1|max:365',
+            'scope' => 'nullable|in:private,shared',
         ]);
 
         $user = auth()->user();
+        $scope = $request->input('scope', 'private');
         $keyData = \App\Models\OdataApiKey::generateKey();
 
         $apiKey = \App\Models\OdataApiKey::create([
@@ -495,10 +497,15 @@ class ODataController extends Controller
             'name'       => $request->name,
             'key_hash'   => $keyData['hash'],
             'key_prefix' => $keyData['prefix'],
+            'scope'      => $scope,
             'expires_at' => $request->expires_days
                 ? now()->addDays($request->expires_days)
                 : null,
         ]);
+
+        $instructions = $scope === 'shared'
+            ? 'Key compartida: cualquier usuario con permiso Excel puede usarla con su propio correo + esta key.'
+            : 'En Excel → Fuente OData → Básico → Usuario: ' . $user->email . ' → Contraseña: (pegar la key)';
 
         return response()->json([
             'success' => true,
@@ -507,10 +514,9 @@ class ODataController extends Controller
                 'name'       => $apiKey->name,
                 'key'        => $keyData['key'], // ⚠️ Solo se muestra UNA VEZ
                 'prefix'     => $keyData['prefix'],
+                'scope'      => $scope,
                 'expires_at' => $apiKey->expires_at?->toIso8601String(),
-                'instructions' => [
-                    'excel' => 'En Excel → Fuente OData → Básico → Usuario: ' . $user->email . ' → Contraseña: (pegar la key)',
-                ],
+                'instructions' => $instructions,
             ],
             'warning' => 'Guarda esta key. No se puede recuperar después.',
         ], 201);
@@ -524,7 +530,7 @@ class ODataController extends Controller
     {
         $keys = \App\Models\OdataApiKey::where('user_id', auth()->id())
             ->orderByDesc('created_at')
-            ->get(['id', 'name', 'key_prefix', 'active', 'expires_at', 'last_used_at', 'use_count', 'created_at']);
+            ->get(['id', 'name', 'key_prefix', 'scope', 'active', 'expires_at', 'last_used_at', 'use_count', 'created_at']);
 
         return response()->json([
             'success' => true,
@@ -582,7 +588,7 @@ class ODataController extends Controller
         $user = auth('api')->user();
 
         if (!$user) {
-            // Intentar Basic Auth (email + API Key personal de JadeOne)
+            // Intentar Basic Auth (email + API Key personal o compartida de JadeOne)
             $basicAuth = $request->header('Authorization', '');
             if (str_starts_with($basicAuth, 'Basic ')) {
                 $credentials = base64_decode(substr($basicAuth, 6));
@@ -591,10 +597,26 @@ class ODataController extends Controller
                     $email = $parts[0];
                     $apiKey = $parts[1];
 
-                    // Validar API Key contra la BD
+                    // Validar API Key contra la BD (soporta private y shared)
                     $keyRecord = \App\Models\OdataApiKey::validateKey($email, $apiKey);
                     if ($keyRecord) {
-                        $keyUser = $keyRecord->user;
+                        // Para keys SHARED, el usuario real es quien envía el email (no el dueño de la key)
+                        // Para keys PRIVATE, el usuario es el dueño de la key
+                        if ($keyRecord->isShared()) {
+                            // Key compartida: buscar el usuario real por email
+                            $realUser = \App\Models\User::where('email', strtolower($email))->first();
+                            if (!$realUser) {
+                                return [
+                                    'error' => true,
+                                    'code' => 'UserNotFound',
+                                    'message' => "El usuario '{$email}' no existe en el sistema.",
+                                ];
+                            }
+                            $keyUser = $realUser;
+                        } else {
+                            // Key privada: el usuario es el dueño de la key
+                            $keyUser = $keyRecord->user;
+                        }
 
                         // Verificar permisos del usuario para este link/esquema
                         if (!$link->canAccess($keyUser->email, $request->ip())) {
@@ -629,13 +651,14 @@ class ODataController extends Controller
                         Log::info('OData API Key: autenticación exitosa', [
                             'email' => $keyUser->email,
                             'key_prefix' => $keyRecord->key_prefix,
+                            'scope' => $keyRecord->scope,
                         ]);
 
                         return [
                             'error' => false,
                             'email' => $keyUser->email,
                             'name' => $keyUser->name ?? $keyUser->email,
-                            'method' => 'api_key',
+                            'method' => $keyRecord->isShared() ? 'api_key_shared' : 'api_key',
                         ];
                     } else {
                         Log::warning('OData API Key: key inválida', ['email' => $email]);

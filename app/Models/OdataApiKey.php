@@ -9,8 +9,11 @@ class OdataApiKey extends Model
 {
     protected $table = 'odata_api_keys';
 
+    public const SCOPE_PRIVATE = 'private';
+    public const SCOPE_SHARED  = 'shared';
+
     protected $fillable = [
-        'user_id', 'name', 'key_hash', 'key_prefix',
+        'user_id', 'name', 'key_hash', 'key_prefix', 'scope',
         'active', 'expires_at', 'last_used_at', 'use_count', 'ip_last_used',
     ];
 
@@ -18,6 +21,10 @@ class OdataApiKey extends Model
         'active'       => 'boolean',
         'expires_at'   => 'datetime',
         'last_used_at' => 'datetime',
+    ];
+
+    protected $attributes = [
+        'scope' => 'private',
     ];
 
     protected $hidden = ['key_hash'];
@@ -38,6 +45,14 @@ class OdataApiKey extends Model
     }
 
     /**
+     * ¿Es una key compartida?
+     */
+    public function isShared(): bool
+    {
+        return $this->scope === self::SCOPE_SHARED;
+    }
+
+    /**
      * Registrar uso de la key.
      */
     public function recordUse(?string $ip = null): void
@@ -51,22 +66,46 @@ class OdataApiKey extends Model
 
     /**
      * Validar un API key contra el hash almacenado.
+     *
+     * Flujo:
+     * - Key PRIVATE: el email debe coincidir con el dueño de la key.
+     * - Key SHARED:  cualquier @medilaser.com.co puede usarla (se valida permiso después).
+     *
+     * @param string $email Email del usuario que intenta autenticarse
+     * @param string $apiKey La key en texto plano
+     * @return array{record: self, user: User}|null
      */
     public static function validateKey(string $email, string $apiKey): ?self
     {
         $hash = hash('sha256', $apiKey);
 
+        // Primero buscar key PRIVADA (match exacto: hash + email del dueño)
         $record = self::where('key_hash', $hash)
             ->where('active', true)
+            ->where('scope', self::SCOPE_PRIVATE)
             ->whereHas('user', fn($q) => $q->where('email', strtolower($email)))
             ->with('user')
             ->first();
 
-        if (!$record || !$record->isValid()) {
-            return null;
+        if ($record && $record->isValid()) {
+            return $record;
         }
 
-        return $record;
+        // Si no encontró privada, buscar key COMPARTIDA (solo match por hash)
+        $record = self::where('key_hash', $hash)
+            ->where('active', true)
+            ->where('scope', self::SCOPE_SHARED)
+            ->with('user')
+            ->first();
+
+        if ($record && $record->isValid()) {
+            // Para shared keys, el "user" asociado es quien la creó,
+            // pero el email del request es el usuario real que accede.
+            // Se devuelve el record y la validación de permisos la hace el controlador.
+            return $record;
+        }
+
+        return null;
     }
 
     /**
