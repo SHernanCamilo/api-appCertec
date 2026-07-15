@@ -35,12 +35,6 @@ final class FabricStreamExportJob implements ShouldQueue
     public int $tries   = 1;
     public int $timeout = 900; // 15 min max (Horizon lo respeta)
 
-    /**
-     * Cola dedicada para exports — aislada de jobs rápidos.
-     * Horizon asigna workers independientes a esta cola.
-     */
-    public string $queue = 'exports';
-
     private const STATUS_PENDING    = 'pending';
     private const STATUS_PROCESSING = 'processing';
     private const STATUS_COMPLETED  = 'completed';
@@ -52,7 +46,10 @@ final class FabricStreamExportJob implements ShouldQueue
         private readonly string $schema,
         private readonly string $view,
         private readonly array  $options,
-    ) {}
+    ) {
+        // Cola dedicada para exports — aislada de jobs rápidos.
+        $this->onQueue('exports');
+    }
 
     public function handle(): void
     {
