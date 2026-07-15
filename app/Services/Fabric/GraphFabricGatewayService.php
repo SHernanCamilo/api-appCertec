@@ -1112,6 +1112,74 @@ class GraphFabricGatewayService
         ];
     }
 
+    /**
+     * Ejecutar agregación (GROUP BY) en una vista de Fabric.
+     * Devuelve datos resumidos para tablas dinámicas.
+     */
+    public function aggregate(User $user, string $schema, string $view, array $options): array
+    {
+        if (!$this->tieneAccesoEsquema($user, $schema)) {
+            return [
+                'success' => false,
+                'message' => "Sin acceso al esquema '{$schema}'.",
+                'code'    => 403,
+            ];
+        }
+
+        if (!$this->circuitBreaker->isAvailable()) {
+            return [
+                'success' => false,
+                'message' => 'Servicio temporalmente no disponible.',
+                'code'    => 503,
+            ];
+        }
+
+        $payload = array_merge(
+            $this->userContextPayload($user),
+            [
+                'token'       => $this->tokenAdmin,
+                'schema_name' => $schema,
+                'view'        => $view,
+                'rows'        => $options['rows'] ?? [],
+                'columns'     => $options['columns'] ?? [],
+                'values'      => $options['values'] ?? [],
+                'filters'     => $this->normalizeFiltersPublic($options['filters'] ?? []),
+                'limit'       => min((int)($options['limit'] ?? 10000), 50000),
+                'sort_col'    => $options['sort_col'] ?? '',
+                'sort_dir'    => $options['sort_dir'] ?? 'asc',
+            ]
+        );
+
+        $cacheKey = 'fabric_agg:' . md5(json_encode($payload));
+        $cacheTtl = 300; // 5 minutos
+
+        $cached = Cache::get($cacheKey);
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $response = $this->post('/api/data/aggregate', $payload);
+
+        if ($response === null) {
+            return [
+                'success' => false,
+                'message' => 'Error al ejecutar agregación en Graph-Fabric.',
+                'code'    => 502,
+            ];
+        }
+
+        $result = [
+            'success'     => true,
+            'data'        => $response['items'] ?? [],
+            'aggregation' => $response['aggregation'] ?? [],
+            'meta'        => $response['page_info'] ?? ['total_groups' => 0],
+        ];
+
+        Cache::put($cacheKey, $result, $cacheTtl);
+
+        return $result;
+    }
+
     // =========================================================================
     // HTTP HELPERS
     // =========================================================================

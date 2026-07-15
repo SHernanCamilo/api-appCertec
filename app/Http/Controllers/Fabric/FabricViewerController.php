@@ -492,6 +492,56 @@ class FabricViewerController extends Controller
     // =========================================================================
 
     /**
+    /**
+     * Ejecutar agregación (GROUP BY) en una vista para tablas dinámicas.
+     * POST /api/fabric/viewer/aggregate
+     *
+     * Fabric SQL hace el GROUP BY con millones de filas y devuelve solo
+     * el resultado resumido (~50-500 filas) que el frontend puede pivotear.
+     */
+    public function aggregate(Request $request): JsonResponse
+    {
+        $request->validate([
+            'schema_name' => 'required|string|max:20|alpha_dash',
+            'view'        => 'required|string|max:150|regex:/^[A-Za-z0-9_]+$/',
+            'rows'        => 'required|array|min:1',
+            'rows.*'      => 'string|max:100',
+            'columns'     => 'nullable|array',
+            'columns.*'   => 'string|max:100',
+            'values'      => 'required|array|min:1',
+            'values.*.field'       => 'required|string|max:100',
+            'values.*.aggregation' => 'required|string|in:sum,count,avg,min,max,count_distinct',
+            'filters'     => 'nullable|array',
+            'limit'       => 'nullable|integer|min:1|max:50000',
+            'sort_col'    => 'nullable|string|max:100',
+            'sort_dir'    => 'nullable|in:asc,desc',
+        ]);
+
+        $user   = auth()->user();
+        $schema = strtolower($request->schema_name);
+        $view   = $request->view;
+
+        $result = $this->gateway->aggregate($user, $schema, $view, [
+            'rows'     => $request->input('rows'),
+            'columns'  => $request->input('columns', []),
+            'values'   => $request->input('values'),
+            'filters'  => $request->input('filters', []),
+            'limit'    => $request->input('limit', 10000),
+            'sort_col' => $request->input('sort_col', ''),
+            'sort_dir' => $request->input('sort_dir', 'asc'),
+        ]);
+
+        if (!$result['success']) {
+            return response()->json([
+                'success' => false,
+                'message' => $result['message'] ?? 'Error en agregación.',
+            ], $result['code'] ?? 500);
+        }
+
+        return response()->json($result);
+    }
+
+    /**
      * Retorna el contexto del usuario autenticado:
      * grupos GG-BD-*, esquemas permitidos y departamento.
      * Útil para el frontend al inicializar el visor.

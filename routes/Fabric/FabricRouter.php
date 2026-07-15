@@ -48,6 +48,9 @@ Route::middleware(['auth:api'])->group(function () {
         // Datos paginados de una vista
         Route::post('/data', [FabricViewerController::class, 'data']);
 
+        // Agregación (GROUP BY) para tablas dinámicas
+        Route::post('/aggregate', [FabricViewerController::class, 'aggregate']);
+
         // Export a Excel — síncrono (descarga directa, para datasets pequeños)
         Route::post('/export', [FabricViewerController::class, 'export']);
 
