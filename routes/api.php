@@ -80,6 +80,7 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
 
     // Rutas de empresas
     Route::get('empresas-activas', [App\Http\Controllers\EmpresaController::class, 'activas']);
+    Route::get('empresas/{id}/logo-base64', [App\Http\Controllers\EmpresaController::class, 'logoBase64']);
     Route::apiResource('empresas', App\Http\Controllers\EmpresaController::class);
     Route::patch('empresas/{id}/toggle-estado', [App\Http\Controllers\EmpresaController::class, 'toggleEstado']);
     

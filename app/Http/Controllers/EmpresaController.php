@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Empresa;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
 
 class EmpresaController extends Controller
@@ -190,6 +191,108 @@ class EmpresaController extends Controller
                 'success' => false,
                 'message' => 'Error al obtener las empresas activas',
                 'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Devuelve el logo de la empresa en base64 (evita CORS en el frontend/PDF).
+     */
+    public function logoBase64(string $id): JsonResponse
+    {
+        try {
+            $empresa = Empresa::findOrFail($id);
+            $logo = trim((string) ($empresa->logo ?? ''));
+
+            if ($logo === '') {
+                return response()->json([
+                    'success' => true,
+                    'nombre' => $empresa->nombre,
+                    'logo_url' => null,
+                    'logo_base64' => null,
+                ]);
+            }
+
+            if (str_starts_with($logo, 'data:image')) {
+                return response()->json([
+                    'success' => true,
+                    'nombre' => $empresa->nombre,
+                    'logo_url' => null,
+                    'logo_base64' => $logo,
+                ]);
+            }
+
+            $contents = null;
+            $mime = null;
+
+            if (preg_match('#^https?://#i', $logo)) {
+                try {
+                    $response = Http::timeout(8)
+                        ->withHeaders(['User-Agent' => 'MONICA-LogoFetcher/1.0'])
+                        ->withOptions(['verify' => false])
+                        ->get($logo);
+
+                    if ($response->successful()) {
+                        $contents = $response->body();
+                        $mime = $response->header('Content-Type') ?: null;
+                    }
+                } catch (\Throwable $e) {
+                    $contents = null;
+                }
+            } else {
+                $relative = ltrim($logo, '/');
+                $candidates = [
+                    public_path($relative),
+                    storage_path('app/public/' . $relative),
+                    storage_path('app/' . $relative),
+                    base_path($relative),
+                ];
+
+                foreach ($candidates as $path) {
+                    if (is_file($path)) {
+                        $contents = file_get_contents($path);
+                        $mime = mime_content_type($path) ?: null;
+                        break;
+                    }
+                }
+            }
+
+            if ($contents === false || $contents === null || $contents === '') {
+                return response()->json([
+                    'success' => true,
+                    'nombre' => $empresa->nombre,
+                    'logo_url' => $logo,
+                    'logo_base64' => null,
+                    'message' => 'No se pudo leer el logo de la empresa',
+                ]);
+            }
+
+            if (!$mime) {
+                $finfo = new \finfo(FILEINFO_MIME_TYPE);
+                $mime = $finfo->buffer($contents) ?: 'image/png';
+            }
+
+            if (!str_starts_with((string) $mime, 'image/')) {
+                return response()->json([
+                    'success' => true,
+                    'nombre' => $empresa->nombre,
+                    'logo_url' => $logo,
+                    'logo_base64' => null,
+                    'message' => 'El recurso del logo no es una imagen válida',
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'nombre' => $empresa->nombre,
+                'logo_url' => $logo,
+                'logo_base64' => 'data:' . $mime . ';base64,' . base64_encode($contents),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener el logo de la empresa',
+                'error' => $e->getMessage(),
             ], 500);
         }
     }

@@ -125,6 +125,7 @@ class MicrosoftAuthController extends Controller
                 'direccion' => $user->direccion,
                 'telefono' => $user->telefono,
                 'estado' => $user->estado,
+                'cargo' => $user->cargo,
                 'roles' => $user->rolesCustom->pluck('nombre'),
                 'empresas' => $user->empresas,
                 'sucursal' => $user->sucursal,
