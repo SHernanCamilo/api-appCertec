@@ -106,8 +106,8 @@ final class FabricStreamExportJob implements ShouldQueue
         $payload = [
             'token'       => $token,
             'groups'      => $gateway->getGruposBd($user),
-            // Misma lógica que el listado de vistas: app (sede/sucursal) + fallback users_grups
-            'department'  => $siteContext['department'],
+            // Department alineado a la vista (ej: NvaGral → NVA aunque el usuario también tenga EAL)
+            'department'  => $gateway->resolveDepartmentForGrantView($user, $this->view),
             'user_email'  => $user->email,
             'user_name'   => $user->name ?? $user->email,
             'schema_name' => $this->schema,

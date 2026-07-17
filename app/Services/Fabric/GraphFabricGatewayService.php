@@ -1103,7 +1103,7 @@ class GraphFabricGatewayService
         }
 
         $response = $this->post('/api/catalog/columns', array_merge(
-            $this->userContextPayload($user),
+            $this->userContextPayload($user, $viewName),
             [
                 'token'       => $this->tokenAdmin,
                 'schema_name' => $schema,
@@ -1179,7 +1179,7 @@ class GraphFabricGatewayService
         $offset = max(0, (int)($options['offset'] ?? 0));
 
         $payload = array_merge(
-            $this->userContextPayload($user),
+            $this->userContextPayload($user, $view),
             [
                 'token'       => $this->tokenAdmin,
                 'schema_name' => $schema,
@@ -1279,7 +1279,7 @@ class GraphFabricGatewayService
             ];
         }
 
-        $userContext = $this->userContextPayload($user);
+        $userContext = $this->userContextPayload($user, $view);
         $payload = array_merge(
             [
                 'token'        => $this->tokenAdmin,
@@ -1446,7 +1446,7 @@ class GraphFabricGatewayService
         }
 
         $payload = array_merge(
-            $this->userContextPayload($user),
+            $this->userContextPayload($user, $view),
             [
                 'token'       => $this->tokenAdmin,
                 'schema_name' => $schema,
@@ -1514,19 +1514,59 @@ class GraphFabricGatewayService
     }
 
     /**
-     * Contexto del usuario autenticado para Graph-Fabric (GRANT).
-     * Solo envía lo que el GRANT entiende: groups + department.
-     * department = users_grups ∪ prefijos Sucursal/Sede (ver resolveSiteContext).
-     *
-     * @return array{groups: string[], department: ?string, user_email: string, user_name: string}
+     * Department a enviar al GRANT para una vista concreta.
+     * GRANT solo acepta un department: si el usuario tiene varias sedes,
+     * se envía el prefijo que coincide con el nombre de la vista.
      */
-    private function userContextPayload(User $user): array
+    public function resolveDepartmentForGrantView(User $user, ?string $viewName = null): ?string
     {
         $siteContext = $this->resolveSiteContext($user);
 
+        if ($siteContext['is_national']) {
+            return 'NAL';
+        }
+
+        $codes = $siteContext['site_codes'];
+        if ($codes === []) {
+            return $siteContext['department'];
+        }
+
+        if ($viewName === null || trim($viewName) === '') {
+            return $siteContext['department'];
+        }
+
+        $viewLower = strtolower($viewName);
+        $matched   = [];
+        foreach ($codes as $code) {
+            if (str_contains($viewLower, strtolower($code))) {
+                $matched[] = $code;
+            }
+        }
+
+        if (count($matched) === 1) {
+            return $matched[0];
+        }
+
+        // Varias coincidencias o vista sin sufijo claro → NAL para que GRANT no bloquee
+        if (count($codes) > 1) {
+            return 'NAL';
+        }
+
+        return $codes[0];
+    }
+
+    /**
+     * Contexto del usuario autenticado para Graph-Fabric (GRANT).
+     * Solo envía lo que el GRANT entiende: groups + department.
+     * Si se indica $viewName, el department se alinea a esa vista (multi-sede).
+     *
+     * @return array{groups: string[], department: ?string, user_email: string, user_name: string}
+     */
+    public function userContextPayload(User $user, ?string $viewName = null): array
+    {
         return [
             'groups'     => $this->getGruposBd($user),
-            'department' => $siteContext['department'],
+            'department' => $this->resolveDepartmentForGrantView($user, $viewName),
             'user_email' => $user->email,
             'user_name'  => $user->name ?? $user->email,
         ];
