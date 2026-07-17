@@ -48,10 +48,12 @@ class SedeController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'nombre' => 'required|string|max:50',
+            'prefijo' => 'nullable|string|max:10',
             'id_Sucursal' => 'required|integer|exists:config_ubi_sucursales,id'
         ], [
             'nombre.required' => 'El nombre de la sede es obligatorio',
             'nombre.max' => 'El nombre no puede exceder 50 caracteres',
+            'prefijo.max' => 'El prefijo no puede exceder 10 caracteres',
             'id_Sucursal.required' => 'Debe seleccionar una sucursal',
             'id_Sucursal.exists' => 'La sucursal seleccionada no existe'
         ]);
@@ -64,7 +66,9 @@ class SedeController extends Controller
         }
 
         try {
-            $sede = Sede::create($request->all());
+            $data = $validator->validated();
+            $data['prefijo'] = $this->normalizarPrefijo($data['prefijo'] ?? null);
+            $sede = Sede::create($data);
             $sede->load(['sucursal.empresa']);
             
             return response()->json([
@@ -103,6 +107,7 @@ class SedeController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'nombre' => 'sometimes|required|string|max:50',
+            'prefijo' => 'sometimes|nullable|string|max:10',
             'id_Sucursal' => 'sometimes|required|integer|exists:config_ubi_sucursales,id'
         ]);
 
@@ -115,7 +120,11 @@ class SedeController extends Controller
 
         try {
             $sede = Sede::findOrFail($id);
-            $sede->update($request->all());
+            $data = $validator->validated();
+            if (array_key_exists('prefijo', $data)) {
+                $data['prefijo'] = $this->normalizarPrefijo($data['prefijo']);
+            }
+            $sede->update($data);
             $sede->load(['sucursal.empresa']);
             
             return response()->json([
@@ -190,5 +199,12 @@ class SedeController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    private function normalizarPrefijo(?string $prefijo): ?string
+    {
+        $prefijo = trim((string) $prefijo);
+
+        return $prefijo === '' ? null : strtoupper($prefijo);
     }
 }

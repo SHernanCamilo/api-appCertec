@@ -41,10 +41,12 @@ class SucursalController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'nombre' => 'required|string|max:50',
+            'prefijo' => 'nullable|string|max:10',
             'id_Empresa' => 'required|integer|exists:ent_empresas,id'
         ], [
             'nombre.required' => 'El nombre de la sucursal es obligatorio',
             'nombre.max' => 'El nombre no puede exceder 50 caracteres',
+            'prefijo.max' => 'El prefijo no puede exceder 10 caracteres',
             'id_Empresa.required' => 'Debe seleccionar una empresa',
             'id_Empresa.exists' => 'La empresa seleccionada no existe'
         ]);
@@ -57,7 +59,9 @@ class SucursalController extends Controller
         }
 
         try {
-            $sucursal = Sucursal::create($request->all());
+            $data = $validator->validated();
+            $data['prefijo'] = $this->normalizarPrefijo($data['prefijo'] ?? null);
+            $sucursal = Sucursal::create($data);
             $sucursal->load('empresa');
             
             return response()->json([
@@ -96,6 +100,7 @@ class SucursalController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'nombre' => 'sometimes|required|string|max:50',
+            'prefijo' => 'sometimes|nullable|string|max:10',
             'id_Empresa' => 'sometimes|required|integer|exists:ent_empresas,id'
         ]);
 
@@ -108,7 +113,11 @@ class SucursalController extends Controller
 
         try {
             $sucursal = Sucursal::findOrFail($id);
-            $sucursal->update($request->all());
+            $data = $validator->validated();
+            if (array_key_exists('prefijo', $data)) {
+                $data['prefijo'] = $this->normalizarPrefijo($data['prefijo']);
+            }
+            $sucursal->update($data);
             $sucursal->load('empresa');
             
             return response()->json([
@@ -161,5 +170,12 @@ class SucursalController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    private function normalizarPrefijo(?string $prefijo): ?string
+    {
+        $prefijo = trim((string) $prefijo);
+
+        return $prefijo === '' ? null : strtoupper($prefijo);
     }
 }

@@ -114,15 +114,26 @@ class BiVista extends Model
      */
     public function visibleParaDepartamento(?string $departamentoUsuario): bool
     {
+        $site = self::extractSiteCode($departamentoUsuario);
+
+        return $this->visibleParaSiteCodes(
+            $site !== null ? [$site] : [],
+            in_array($site, ['NAL', 'NAC', 'MA'], true)
+        );
+    }
+
+    /**
+     * Visible si la vista no restringe departamentos, o si alguno de los
+     * site_codes del usuario (o nacional) está permitido.
+     *
+     * @param  string[]  $siteCodes
+     */
+    public function visibleParaSiteCodes(array $siteCodes, bool $isNational = false): bool
+    {
         $permitidos = $this->departamentos;
 
         if ($permitidos === null || $permitidos === []) {
             return true;
-        }
-
-        $site = self::extractSiteCode($departamentoUsuario);
-        if ($site === null) {
-            return false;
         }
 
         $normalizados = array_map(
@@ -130,6 +141,19 @@ class BiVista extends Model
             $permitidos
         );
 
-        return in_array($site, $normalizados, true);
+        if ($isNational) {
+            return in_array('NAL', $normalizados, true)
+                || in_array('NAC', $normalizados, true)
+                || in_array('MA', $normalizados, true);
+        }
+
+        foreach ($siteCodes as $code) {
+            $code = strtoupper(trim((string) $code));
+            if ($code !== '' && in_array($code, $normalizados, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

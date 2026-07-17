@@ -8,6 +8,8 @@ use App\Models\BiGrupo;
 use App\Models\BiVista;
 use App\Models\BiVistaDelegacion;
 use App\Models\BiVistaDelegacionUsuario;
+use App\Models\Sede;
+use App\Models\Sucursal;
 use App\Services\Fabric\FabricCircuitBreaker;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -20,6 +22,7 @@ use Illuminate\Support\Facades\Cache;
  * Responsabilidades:
  *   - Leer los grupos GG-BD-* del usuario desde users_grups
  *   - Leer el departamento del usuario desde users_grups
+ *   - Resolver sedes/sucursales desde seg_empresa_user (con recursivo)
  *   - Actuar como proxy seguro: validar que el usuario tiene acceso
  *     al esquema solicitado antes de reenviar la solicitud a la API Py
  *   - Reenviar solicitudes a la API Python con TOKEN_ADMIN + contexto del usuario
@@ -186,12 +189,170 @@ class GraphFabricGatewayService
 
     /**
      * Retorna el departamento del usuario (ej: "MA-TIC", "FLA-ADM").
+     * Fuente: users_grups (Azure). Complementado por resolveSiteContext().
      */
     public function getDepartamento(User $user): ?string
     {
         return UserGrup::where('id_user', $user->id)
             ->where('tipo', UserGrup::TIPO_DEPARTAMENTO)
             ->value('permiso');
+    }
+
+    /**
+     * Resuelve sedes efectivas del usuario para filtrar vistas:
+     *   1) Asignaciones del aplicativo (seg_empresa_user + prefijos) — tienen prioridad
+     *   2) Departamento Azure (users_grups) — solo si no hay restricción org por sede
+     *
+     * GRANT solo entiende un department. Si hay varias sedes:
+     *   - Se envía NAL al GRANT para traer el catálogo completo
+     *   - Laravel filtra por site_codes (no es nacional real)
+     *
+     * @return array{department: ?string, site_codes: string[], is_national: bool}
+     */
+    public function resolveSiteContext(User $user): array
+    {
+        $azureDepartment = $this->getDepartamento($user);
+        $org             = $this->resolveOrgSiteAccess($user);
+
+        // Empresa recursiva en el aplicativo → nacional
+        if ($org['is_national']) {
+            return [
+                'department'  => 'NAL',
+                'site_codes'  => ['NAL'],
+                'is_national' => true,
+            ];
+        }
+
+        // Si el usuario tiene sedes/sucursales concretas en el app, esas limitan el acceso
+        if ($org['codes'] !== []) {
+            $codes = $org['codes'];
+
+            return [
+                // Varias sedes: GRANT trae todo; Laravel recorta por site_codes
+                'department'  => count($codes) === 1 ? $codes[0] : 'NAL',
+                'site_codes'  => $codes,
+                'is_national' => false,
+            ];
+        }
+
+        // Sin restricción org → usar Azure
+        if ($azureDepartment !== null && trim($azureDepartment) !== '') {
+            $deptUpper = strtoupper(trim($azureDepartment));
+            $parts     = preg_split('/[-\s]+/', $deptUpper) ?: [];
+
+            if (in_array('NAL', $parts, true) || in_array('NAC', $parts, true)) {
+                return [
+                    'department'  => 'NAL',
+                    'site_codes'  => ['NAL'],
+                    'is_national' => true,
+                ];
+            }
+
+            $azureCode = BiVista::extractSiteCode($azureDepartment);
+            if ($azureCode !== null && in_array($azureCode, ['NAL', 'NAC', 'MA'], true)) {
+                return [
+                    'department'  => 'NAL',
+                    'site_codes'  => ['NAL'],
+                    'is_national' => true,
+                ];
+            }
+
+            return [
+                'department'  => $azureDepartment,
+                'site_codes'  => $azureCode ? [$azureCode] : [],
+                'is_national' => false,
+            ];
+        }
+
+        return [
+            'department'  => null,
+            'site_codes'  => [],
+            'is_national' => false,
+        ];
+    }
+
+    /**
+     * Prefijos desde asignaciones organizacionales del usuario.
+     *
+     * @return array{codes: string[], is_national: bool}
+     */
+    private function resolveOrgSiteAccess(User $user): array
+    {
+        $user->loadMissing('empresas');
+
+        $codes      = [];
+        $isNational = false;
+
+        foreach ($user->empresas as $empresa) {
+            $pivot      = $empresa->pivot;
+            $sucursalId = $pivot->id_sucursal ?? null;
+            $sedeId     = $pivot->id_sede ?? null;
+            $recursivo  = (bool) ($pivot->recursivo ?? false);
+
+            // Empresa completa (recursivo) → ve todas las sedes
+            if ($recursivo && !$sucursalId && !$sedeId) {
+                $isNational = true;
+                continue;
+            }
+
+            // Sucursal recursiva → todas las sedes de esa sucursal
+            if ($recursivo && $sucursalId && !$sedeId) {
+                $sucursal = Sucursal::with('sedes')->find($sucursalId);
+                if ($sucursal === null) {
+                    continue;
+                }
+
+                $prefijoSucursal = $this->normalizarPrefijoSite($sucursal->prefijo ?? null);
+                if ($prefijoSucursal !== null) {
+                    $codes[] = $prefijoSucursal;
+                }
+
+                foreach ($sucursal->sedes as $sede) {
+                    $prefijoSede = $this->normalizarPrefijoSite($sede->prefijo ?? null)
+                        ?? $prefijoSucursal;
+                    if ($prefijoSede !== null) {
+                        $codes[] = $prefijoSede;
+                    }
+                }
+                continue;
+            }
+
+            // Sede específica
+            if ($sedeId) {
+                $sede = Sede::with('sucursal')->find($sedeId);
+                if ($sede === null) {
+                    continue;
+                }
+
+                $prefijo = $this->normalizarPrefijoSite($sede->prefijo ?? null)
+                    ?? $this->normalizarPrefijoSite($sede->sucursal->prefijo ?? null);
+                if ($prefijo !== null) {
+                    $codes[] = $prefijo;
+                }
+                continue;
+            }
+
+            // Sucursal sin recursivo (solo ese nodo)
+            if ($sucursalId) {
+                $sucursal = Sucursal::find($sucursalId);
+                $prefijo  = $this->normalizarPrefijoSite($sucursal->prefijo ?? null);
+                if ($prefijo !== null) {
+                    $codes[] = $prefijo;
+                }
+            }
+        }
+
+        return [
+            'codes'       => array_values(array_unique(array_filter($codes))),
+            'is_national' => $isNational,
+        ];
+    }
+
+    private function normalizarPrefijoSite(?string $prefijo): ?string
+    {
+        $prefijo = strtoupper(trim((string) $prefijo));
+
+        return $prefijo === '' ? null : $prefijo;
     }
 
     /**
@@ -385,6 +546,117 @@ class GraphFabricGatewayService
     }
 
     /**
+     * Filtra vistas por prefijos de sede del usuario (post-GRANT).
+     * Necesario cuando el usuario tiene varias sedes: GRANT recibe NAL
+     * y aquí se dejan solo las vistas de sus site_codes (ej: EAL, NVA).
+     */
+    private function filterViewsBySiteCodes(array $response, User $user): array
+    {
+        if (!isset($response['schemas']) || !is_array($response['schemas'])) {
+            return $response;
+        }
+
+        $siteContext = $this->resolveSiteContext($user);
+        if ($siteContext['is_national'] || $siteContext['site_codes'] === []) {
+            return $response;
+        }
+
+        $allowed = array_map('strtolower', $siteContext['site_codes']);
+        $known   = $this->knownSiteCodesLower();
+
+        foreach ($response['schemas'] as &$schemaBlock) {
+            $schemaBlock['views'] = array_values(array_filter(
+                $schemaBlock['views'] ?? [],
+                function ($view) use ($allowed, $known) {
+                    $name = strtolower((string) ($view['view_name'] ?? ''));
+                    if ($name === '') {
+                        return false;
+                    }
+
+                    $hasAnyKnownSite = false;
+                    foreach ($known as $code) {
+                        if (str_contains($name, $code)) {
+                            $hasAnyKnownSite = true;
+                            break;
+                        }
+                    }
+
+                    // Vistas sin sede en el nombre = nacionales/padre → no visibles a usuario de sede
+                    if (!$hasAnyKnownSite) {
+                        return false;
+                    }
+
+                    foreach ($allowed as $code) {
+                        if (str_contains($name, $code)) {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+            ));
+
+            $schemaBlock['view_count'] = count($schemaBlock['views']);
+        }
+        unset($schemaBlock);
+
+        $response['total_views'] = array_sum(
+            array_map(fn ($block) => count($block['views'] ?? []), $response['schemas'])
+        );
+
+        return $response;
+    }
+
+    /**
+     * Códigos de sede conocidos en nombres de vistas Fabric.
+     *
+     * @return string[]
+     */
+    private function knownSiteCodesLower(): array
+    {
+        return ['cmi', 'eal', 'fla', 'kta', 'tja', 'nva', 'dta', 'pto', 'nal'];
+    }
+
+    /**
+     * Valida que el usuario pueda ver una vista concreta por sede.
+     */
+    public function tieneAccesoVistaPorSede(User $user, string $viewName): bool
+    {
+        $siteContext = $this->resolveSiteContext($user);
+        if ($siteContext['is_national']) {
+            return true;
+        }
+
+        if ($siteContext['site_codes'] === []) {
+            return true;
+        }
+
+        $name    = strtolower($viewName);
+        $allowed = array_map('strtolower', $siteContext['site_codes']);
+        $known   = $this->knownSiteCodesLower();
+
+        $hasAnyKnownSite = false;
+        foreach ($known as $code) {
+            if (str_contains($name, $code)) {
+                $hasAnyKnownSite = true;
+                break;
+            }
+        }
+
+        if (!$hasAnyKnownSite) {
+            return false;
+        }
+
+        foreach ($allowed as $code) {
+            if (str_contains($name, $code)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Aplica restricciones de departamento definidas en bi_vistas.
      * Ej: VW_AG_Agendas solo para MA y NAL aunque Fabric la muestre a todas las sedes.
      */
@@ -394,8 +666,10 @@ class GraphFabricGatewayService
             return $response;
         }
 
-        $departamento = $this->getDepartamento($user);
-        $configIndex  = $this->getBiVistasConfigBySchema();
+        $siteContext = $this->resolveSiteContext($user);
+        $siteCodes   = $siteContext['site_codes'];
+        $isNational  = $siteContext['is_national'];
+        $configIndex = $this->getBiVistasConfigBySchema();
 
         foreach ($response['schemas'] as &$schemaBlock) {
             $schema  = strtolower($schemaBlock['schema'] ?? '');
@@ -412,7 +686,7 @@ class GraphFabricGatewayService
 
             $schemaBlock['views'] = array_values(array_filter(
                 $schemaBlock['views'] ?? [],
-                function ($view) use ($byNombre, $departamento) {
+                function ($view) use ($byNombre, $siteCodes, $isNational) {
                     $nombre = strtolower($view['view_name'] ?? '');
                     $cfg    = $byNombre[$nombre] ?? null;
 
@@ -425,7 +699,7 @@ class GraphFabricGatewayService
                         'departamentos' => $cfg['departamentos'],
                     ]);
 
-                    return $vista->visibleParaDepartamento($departamento);
+                    return $vista->visibleParaSiteCodes($siteCodes, $isNational);
                 }
             ));
 
@@ -624,7 +898,9 @@ class GraphFabricGatewayService
     public function getViewsForUser(User $user, ?string $schema = null, bool $forceRefresh = false, ?int $tipo = null): array
     {
         $grupos       = $this->getGruposBd($user, $tipo);
-        $departamento = $this->getDepartamento($user);
+        $siteContext  = $this->resolveSiteContext($user);
+        $departamento = $siteContext['department'];
+        $siteCodes    = $siteContext['site_codes'];
 
         if (empty($grupos)) {
             $mensaje = $tipo === null
@@ -654,7 +930,7 @@ class GraphFabricGatewayService
             $user->id,
             $schemaKey,
             $tipoKey,
-            md5(($departamento ?? '') . implode(',', $grupos))
+            md5(($departamento ?? '') . implode(',', $siteCodes) . implode(',', $grupos))
         );
 
         if ($forceRefresh) {
@@ -696,12 +972,15 @@ class GraphFabricGatewayService
 
         return [
             'success'           => true,
-            'data'              => $this->filterViewsByDelegacion(
-                $this->filterViewsByBiVistasDepartamento(
-                    $this->filterViewsByUserSchemas(
-                        $this->enrichViewsResponse($filteredResponse, $user, $tipo),
-                        $user,
-                        $tipo
+            'data'              => $this->filterViewsBySiteCodes(
+                $this->filterViewsByDelegacion(
+                    $this->filterViewsByBiVistasDepartamento(
+                        $this->filterViewsByUserSchemas(
+                            $this->enrichViewsResponse($filteredResponse, $user, $tipo),
+                            $user,
+                            $tipo
+                        ),
+                        $user
                     ),
                     $user
                 ),
@@ -711,6 +990,8 @@ class GraphFabricGatewayService
             'esquemas'          => $this->getEsquemasPermitidos($user, $tipo),
             'esquemas_catalogo' => $this->getEsquemasCatalogoUsuario($user, $tipo),
             'departamento'      => $departamento,
+            'site_codes'        => $siteCodes,
+            'is_national'       => $siteContext['is_national'],
             'tipo'              => $tipo,
         ];
     }
@@ -813,6 +1094,14 @@ class GraphFabricGatewayService
             ];
         }
 
+        if (!$this->tieneAccesoVistaPorSede($user, $viewName)) {
+            return [
+                'success' => false,
+                'message' => "Sin acceso a la vista '{$viewName}' por sede.",
+                'code'    => 403,
+            ];
+        }
+
         $response = $this->post('/api/catalog/columns', array_merge(
             $this->userContextPayload($user),
             [
@@ -854,6 +1143,14 @@ class GraphFabricGatewayService
             return [
                 'success' => false,
                 'message' => "Sin acceso al esquema '{$schema}'.",
+                'code'    => 403,
+            ];
+        }
+
+        if (!$this->tieneAccesoVistaPorSede($user, $view)) {
+            return [
+                'success' => false,
+                'message' => "Sin acceso a la vista '{$view}' por sede.",
                 'code'    => 403,
             ];
         }
@@ -973,17 +1270,23 @@ class GraphFabricGatewayService
             ];
         }
 
+        if (!$this->tieneAccesoVistaPorSede($user, $view)) {
+            return [
+                'success' => false,
+                'content' => null,
+                'message' => "Sin acceso a la vista '{$view}' por sede.",
+                'code'    => 403,
+            ];
+        }
+
+        $userContext = $this->userContextPayload($user);
         $payload = array_merge(
             [
                 'token'        => $this->tokenAdmin,
-                'user_context' => $this->userContextPayload($user),  // API Py export espera user_context
+                'user_context' => $userContext,
             ],
+            $userContext,
             [
-                // También enviar sueltos para compatibilidad con ambos endpoints
-                'groups'      => $this->getGruposBd($user),
-                'department'  => $this->getDepartamento($user),
-                'user_email'  => $user->email,
-                'user_name'   => $user->name ?? $user->email,
                 'schema_name' => $schema,
                 'view'        => $view,
                 'columns'     => $options['columns'] ?? [],
@@ -1126,6 +1429,14 @@ class GraphFabricGatewayService
             ];
         }
 
+        if (!$this->tieneAccesoVistaPorSede($user, $view)) {
+            return [
+                'success' => false,
+                'message' => "Sin acceso a la vista '{$view}' por sede.",
+                'code'    => 403,
+            ];
+        }
+
         if (!$this->circuitBreaker->isAvailable()) {
             return [
                 'success' => false,
@@ -1203,18 +1514,21 @@ class GraphFabricGatewayService
     }
 
     /**
-     * Contexto del usuario autenticado para Graph-Fabric.
-     * Con TOKEN_ADMIN, Python usa estos datos en lugar del perfil admin hardcodeado.
+     * Contexto del usuario autenticado para Graph-Fabric (GRANT).
+     * Solo envía lo que el GRANT entiende: groups + department.
+     * department = users_grups ∪ prefijos Sucursal/Sede (ver resolveSiteContext).
      *
-     * @return array{grupos: string[], department: ?string, user_email: string, user_name: string}
+     * @return array{groups: string[], department: ?string, user_email: string, user_name: string}
      */
     private function userContextPayload(User $user): array
     {
+        $siteContext = $this->resolveSiteContext($user);
+
         return [
-            'groups'      => $this->getGruposBd($user),
-            'department'  => $this->getDepartamento($user),
-            'user_email'  => $user->email,
-            'user_name'   => $user->name ?? $user->email,
+            'groups'     => $this->getGruposBd($user),
+            'department' => $siteContext['department'],
+            'user_email' => $user->email,
+            'user_name'  => $user->name ?? $user->email,
         ];
     }
 

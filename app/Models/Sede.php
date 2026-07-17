@@ -19,6 +19,7 @@ class Sede extends Model
      */
     protected $fillable = [
         'nombre',
+        'prefijo',
         'id_Sucursal'
     ];
 

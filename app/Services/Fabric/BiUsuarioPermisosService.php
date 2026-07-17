@@ -37,6 +37,7 @@ class BiUsuarioPermisosService
             ->orderBy('tipo')
             ->orderBy('permiso')
             ->get(['tipo', 'permiso', 'origen']);
+        $siteContext = $this->gateway->resolveSiteContext($user);
 
         return [
             'usuario' => [
@@ -50,7 +51,9 @@ class BiUsuarioPermisosService
                 'id'     => $e->id,
                 'nombre' => $e->nombre,
             ])->values()->all(),
-            'departamento'          => $this->gateway->getDepartamento($user),
+            'departamento'          => $siteContext['department'],
+            'site_codes'            => $siteContext['site_codes'],
+            'is_national'           => $siteContext['is_national'],
             'grupos_totales'        => $this->gateway->getGruposBd($user),
             'esquemas_totales'      => $this->gateway->getEsquemasPermitidos($user),
             'grupos_directos'       => $gruposDirectos,

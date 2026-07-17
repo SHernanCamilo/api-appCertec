@@ -557,6 +557,7 @@ class FabricViewerController extends Controller
         $user = auth()->user();
         $tipo = $request->filled('tipo') ? (int) $request->query('tipo') : null;
         $esquemasCatalogo = $this->gateway->getEsquemasCatalogoUsuario($user, $tipo);
+        $siteContext = $this->gateway->resolveSiteContext($user);
 
         return response()->json([
             'success'                 => true,
@@ -565,7 +566,9 @@ class FabricViewerController extends Controller
             'esquemas'                => $this->gateway->getEsquemasPermitidos($user, $tipo),
             'esquemas_catalogo'       => $esquemasCatalogo,
             'tiene_vistas_delegadas'  => collect($esquemasCatalogo)->contains(fn ($e) => !empty($e['es_delegado'])),
-            'departamento'            => $this->gateway->getDepartamento($user),
+            'departamento'            => $siteContext['department'],
+            'site_codes'              => $siteContext['site_codes'],
+            'is_national'             => $siteContext['is_national'],
             'catalogo'                => array_values($this->gateway->getCatalogoGrupos()),
             'tipo'                    => $tipo,
         ]);
