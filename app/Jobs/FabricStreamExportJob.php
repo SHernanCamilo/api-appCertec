@@ -102,10 +102,12 @@ final class FabricStreamExportJob implements ShouldQueue
         $tmpFile = "{$dir}/data.tmp";
         $tmpHandle = fopen($tmpFile, 'w');
 
+        $siteContext = $gateway->resolveSiteContext($user);
         $payload = [
             'token'       => $token,
             'groups'      => $gateway->getGruposBd($user),
-            'department'  => $gateway->getDepartamento($user),
+            // Misma lógica que el listado de vistas: app (sede/sucursal) + fallback users_grups
+            'department'  => $siteContext['department'],
             'user_email'  => $user->email,
             'user_name'   => $user->name ?? $user->email,
             'schema_name' => $this->schema,

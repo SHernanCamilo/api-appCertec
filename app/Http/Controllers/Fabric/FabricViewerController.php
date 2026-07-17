@@ -345,6 +345,13 @@ class FabricViewerController extends Controller
             ], 403);
         }
 
+        if (!$this->gateway->tieneAccesoVistaPorSede($user, $viewName)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso a la vista '{$viewName}' por sede.",
+            ], 403);
+        }
+
         $jobId = \App\Jobs\FabricStreamExportJob::dispatch_and_track(
             $user->id,
             $schema,
