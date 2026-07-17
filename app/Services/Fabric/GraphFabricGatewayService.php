@@ -1379,7 +1379,7 @@ class GraphFabricGatewayService
      */
     public function queryAsSystem(string $schema, string $view, array $options = []): array
     {
-        $limit  = min((int)($options['limit'] ?? 500), 10000);
+        $limit  = min((int)($options['limit'] ?? 500), 20000);
         $offset = max(0, (int)($options['offset'] ?? 0));
 
         $payload = [
