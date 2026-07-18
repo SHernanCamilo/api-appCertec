@@ -115,12 +115,13 @@ class ODataController extends Controller
     private function serviceDocument(string $code, OdataLink $link): JsonResponse
     {
         $baseUrl = url("/api/fabric/odata/link/{$code}");
+        $entityName = str_replace('VW_', '', $link->view_name);
 
         return response()->json([
             '@odata.context' => "{$baseUrl}/\$metadata",
             'value' => [
                 [
-                    'name' => 'value',
+                    'name' => $entityName,
                     'kind' => 'EntitySet',
                     'url'  => 'value',
                 ],
