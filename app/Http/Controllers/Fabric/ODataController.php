@@ -115,12 +115,13 @@ class ODataController extends Controller
     private function serviceDocument(string $code, OdataLink $link): JsonResponse
     {
         $baseUrl = url("/api/fabric/odata/link/{$code}");
+        $entityName = str_replace('VW_', '', $link->view_name);
 
         return response()->json([
             '@odata.context' => "{$baseUrl}/\$metadata",
             'value' => [
                 [
-                    'name' => 'value',
+                    'name' => $entityName,
                     'kind' => 'EntitySet',
                     'url'  => 'value',
                 ],
@@ -226,8 +227,9 @@ class ODataController extends Controller
         }
 
         // Construir respuesta OData
+        $entityName = str_replace('VW_', '', $link->view_name);
         $response = [
-            '@odata.context' => url("/api/fabric/odata/link/{$code}/\$metadata#value"),
+            '@odata.context' => url("/api/fabric/odata/link/{$code}/\$metadata#{$entityName}"),
             'value' => $indexedItems,
         ];
 
@@ -291,6 +293,8 @@ class ODataController extends Controller
             $properties .= "        <Property Name=\"{$name}\" Type=\"{$edmType}\" Nullable=\"true\"/>\n";
         }
 
+        $entityName = str_replace('VW_', '', $link->view_name);
+
         $edmx = '<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
   <edmx:DataServices>
@@ -299,7 +303,7 @@ class ODataController extends Controller
         <Key><PropertyRef Name="__id"/></Key>
 ' . $properties . '      </EntityType>
       <EntityContainer Name="Container">
-        <EntitySet Name="value" EntityType="Fabric.Row"/>
+        <EntitySet Name="' . $entityName . '" EntityType="Fabric.Row"/>
       </EntityContainer>
     </Schema>
   </edmx:DataServices>
