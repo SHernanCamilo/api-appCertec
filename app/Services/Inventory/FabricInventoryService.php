@@ -128,75 +128,85 @@ class FabricInventoryService
     }
 
     /**
-     * Obtener órdenes de compra de Indigo desde Fabric.
-     * Vista: in.Inventory_OrdenesDeCompra_DigiPharma
+     * Obtener órdenes de compra de Indigo desde SQL Server (Azure).
+     * Conexión: sqlsrv_indigo → ssindigo.database.windows.net
+     * Vista: ViewInternal.Inventory_OrdenesDeCompra_DigiPharma
+     *
+     * NOTA: Requiere pdo_sqlsrv instalado en la VPS.
      */
     public function getIndigoOrders(array $filters = []): array
     {
         $limit  = min((int) ($filters['limit'] ?? 100), 5000);
         $offset = (int) ($filters['offset'] ?? 0);
 
-        $fabricFilters = [];
-        if (!empty($filters['fecha_desde'])) {
-            $fabricFilters['Fecha'] = ">={$filters['fecha_desde']}";
-        }
-        if (!empty($filters['search'])) {
-            $fabricFilters['OrdenCompra'] = "%{$filters['search']}%";
-        }
-        if (!empty($filters['proveedor'])) {
-            $fabricFilters['Proveedor'] = "%{$filters['proveedor']}%";
-        }
+        try {
+            $query = \Illuminate\Support\Facades\DB::connection('sqlsrv_indigo')
+                ->table(\Illuminate\Support\Facades\DB::raw(
+                    env('MSSQL_PURCHASEORDER_VIEW', 'ViewInternal.Inventory_OrdenesDeCompra_DigiPharma')
+                ));
 
-        $result = $this->gateway->queryAsSystem(self::SCHEMA, self::VIEW_ORDENES_INDIGO, [
-            'filters'  => $fabricFilters,
-            'limit'    => $limit,
-            'offset'   => $offset,
-            'sort_col' => 'Fecha',
-            'sort_dir' => 'desc',
-        ]);
+            if (!empty($filters['fecha_desde'])) {
+                $query->where('Fecha', '>=', $filters['fecha_desde']);
+            }
+            if (!empty($filters['search'])) {
+                $query->where('OrdenCompra', 'LIKE', "%{$filters['search']}%");
+            }
+            if (!empty($filters['proveedor'])) {
+                $query->where('Proveedor', 'LIKE', "%{$filters['proveedor']}%");
+            }
 
-        if (!$result['success']) {
-            Log::error('FabricInventory: Error obteniendo órdenes Indigo', ['error' => $result['message'] ?? '']);
-            return ['success' => false, 'message' => $result['message'] ?? 'Error consultando Indigo', 'data' => []];
+            $data = $query->orderByDesc('Fecha')
+                ->offset($offset)
+                ->limit($limit)
+                ->get()
+                ->map(fn($row) => (array) $row)
+                ->toArray();
+
+            return [
+                'success' => true,
+                'data'    => $data,
+                'meta'    => ['total' => count($data), 'limit' => $limit, 'offset' => $offset],
+            ];
+        } catch (\Exception $e) {
+            Log::error('FabricInventory: Error consultando Indigo SQL Server', [
+                'error' => $e->getMessage(),
+            ]);
+            return [
+                'success' => false,
+                'message' => 'Error conectando a SQL Server Indigo: ' . $e->getMessage(),
+                'data'    => [],
+            ];
         }
-
-        return [
-            'success' => true,
-            'data'    => $result['data'] ?? [],
-            'meta'    => $result['meta'] ?? ['total' => count($result['data'] ?? []), 'limit' => $limit, 'offset' => $offset],
-        ];
     }
 
     /**
-     * Obtener proveedores desde Fabric (vista de Indigo).
+     * Obtener proveedores desde SQL Server (vista de Indigo).
+     * Vista: ViewInternal.FQ45_V_CXP_Proveedores en ssindigo.database.windows.net
      * Cachea el resultado 30 minutos.
      */
     public function getSuppliers(): array
     {
-        $cacheKey = 'inv_suppliers_fabric';
+        $cacheKey = 'inv_suppliers_sqlsrv';
         $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
         if ($cached) return $cached;
 
-        // Los proveedores están en la vista de órdenes — extraemos únicos
-        $result = $this->gateway->queryAsSystem(self::SCHEMA, self::VIEW_ORDENES_INDIGO, [
-            'columns' => ['Proveedor', 'NitProveedor'],
-            'limit'   => 5000,
-        ]);
+        try {
+            $data = \Illuminate\Support\Facades\DB::connection('sqlsrv_indigo')
+                ->table(\Illuminate\Support\Facades\DB::raw('ViewInternal.FQ45_V_CXP_Proveedores'))
+                ->select('*')
+                ->limit(5000)
+                ->get()
+                ->map(fn($row) => (array) $row)
+                ->toArray();
 
-        if (!$result['success']) {
-            return ['success' => false, 'data' => []];
+            $response = ['success' => true, 'data' => $data];
+            \Illuminate\Support\Facades\Cache::put($cacheKey, $response, 1800);
+            return $response;
+        } catch (\Exception $e) {
+            Log::error('FabricInventory: Error obteniendo proveedores de SQL Server', [
+                'error' => $e->getMessage(),
+            ]);
+            return ['success' => false, 'data' => [], 'message' => $e->getMessage()];
         }
-
-        // Deduplicar por NIT
-        $suppliers = collect($result['data'] ?? [])
-            ->filter(fn($r) => !empty($r['Proveedor']))
-            ->unique('NitProveedor')
-            ->values()
-            ->toArray();
-
-        $response = ['success' => true, 'data' => $suppliers];
-        \Illuminate\Support\Facades\Cache::put($cacheKey, $response, 1800); // 30 min
-
-        return $response;
     }
 }
