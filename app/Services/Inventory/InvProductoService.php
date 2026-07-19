@@ -9,12 +9,12 @@ use Illuminate\Support\Facades\Http;
 class InvProductoService
 {
     protected InvimaService $invimaService;
-    protected GraphQLClientService $graphClient;
+    protected FabricInventoryService $fabricService;
 
-    public function __construct(InvimaService $invimaService, GraphQLClientService $graphClient)
+    public function __construct(InvimaService $invimaService, FabricInventoryService $fabricService)
     {
         $this->invimaService = $invimaService;
-        $this->graphClient = $graphClient;
+        $this->fabricService = $fabricService;
     }
 
     // =========================================================================
@@ -29,7 +29,7 @@ class InvProductoService
         // Si el origen solicitado es "external", se busca en Microsoft Fabric vía GraphQLClient
         if (($filters['source'] ?? '') === 'external') {
             try {
-                return $this->graphClient->getProducts($filters);
+                return $this->fabricService->getProducts($filters);
             } catch (\Exception $e) {
                 Log::error('Error fetching external products: ' . $e->getMessage());
                 return ['success' => false, 'message' => 'Error al obtener productos externos', 'data' => []];

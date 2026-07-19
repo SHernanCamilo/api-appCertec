@@ -15,6 +15,8 @@ class TrustHosts extends Middleware
     {
         return [
             $this->allSubdomainsOfApplicationUrl(),
+            'jade-api.medilaser.com.co',
+            '*.medilaser.com.co',
         ];
     }
 }
