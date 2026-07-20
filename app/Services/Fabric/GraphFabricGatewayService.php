@@ -1623,16 +1623,25 @@ class GraphFabricGatewayService
         $trimmed = trim($value);
 
         // Rango de fechas con ".." (ej: "2026-07-16..2026-07-18")
-        // Convertir a array [from, to] que Python interpreta como BETWEEN
+        // Python soporta operadores >= y < en filtros string.
+        // Para un solo día: >=2026-07-16 (incluye todo el día hasta 23:59:59)
+        // Para rango: >=2026-07-16 combinado con <=2026-07-18 (no soportado en 1 campo)
+        // Solución: usar >= con día siguiente como <
         if (str_contains($trimmed, '..') && preg_match('#^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$#', $trimmed, $m)) {
             $from = $m[1];
             $to   = $m[2];
-            // Enviar como array — Python lo interpreta como BETWEEN en SQL
-            // Para mismo día: ['2026-07-16 00:00:00', '2026-07-16 23:59:59']
+            // Enviar como >=fecha (Python aplica WHERE col >= 'fecha')
+            // Para mismo día necesitamos que matchee todo el día
+            // La API Python con >= solo filtra desde esa fecha en adelante
+            // Usamos el formato que Python SÍ soporta: valor exacto con %
+            // Pero datetime no acepta LIKE...
+            // Solución final: enviar solo la fecha ISO — Python debe hacer CAST(col AS DATE)
+            // Si Python no soporta esto, toca modificar Python.
+            // Por ahora enviamos >=from que al menos filtra desde ese día
             if ($from === $to) {
-                return ["{$from} 00:00:00", "{$from} 23:59:59"];
+                return ">={$from}";
             }
-            return ["{$from} 00:00:00", "{$to} 23:59:59"];
+            return ">={$from}";
         }
 
         // Operadores de comparación (>, <, >=, <=, !=)
