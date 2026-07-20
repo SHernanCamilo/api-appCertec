@@ -1622,25 +1622,41 @@ class GraphFabricGatewayService
 
         $trimmed = trim($value);
 
+        // Rango de fechas con ".." (ej: "2026-07-16..2026-07-18")
+        // Convertir a formato que Python interpreta como BETWEEN
+        if (str_contains($trimmed, '..') && preg_match('#^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$#', $trimmed, $m)) {
+            $from = $m[1];
+            $to   = $m[2];
+            // Si from == to (mismo día), usar LIKE para matchear datetime del día completo
+            // Python interpreta % como LIKE: WHERE col LIKE '2026-07-16%'
+            if ($from === $to) {
+                return "{$from}%";
+            }
+            // Para rango de varios días, enviar como array [from, to] que Python interpreta como BETWEEN
+            return [$from, $to];
+        }
+
+        // Operadores de comparación (>, <, >=, <=, !=)
+        if (preg_match('#^([><!]=?)(\d{4}-\d{2}-\d{2}.*)$#', $trimmed, $m)) {
+            return $trimmed; // Pasar directo, Python lo interpreta
+        }
+
         // Ya viene en ISO (yyyy-mm-dd, con hora opcional) → no tocar.
         if (preg_match('#^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$#', $trimmed)) {
             return $trimmed;
         }
 
         // Fecha local con separador / o - : acepta uno o dos dígitos en día/mes
-        // y hora opcional (dd/mm/yyyy, d/m/yyyy, dd-mm-yyyy HH:mm, etc.)
         if (preg_match('#^(\d{1,2})[/-](\d{1,2})[/-](\d{4})([ T]\d{1,2}:\d{2}(:\d{2})?)?$#', $trimmed, $m)) {
             $sep    = str_contains($trimmed, '/') ? '/' : '-';
             $hasHms = isset($m[5]) && $m[5] !== '';
             $fmt    = "d{$sep}m{$sep}Y" . (isset($m[4]) && $m[4] !== '' ? ($hasHms ? ' H:i:s' : ' H:i') : '');
             try {
                 $carbon = \Carbon\Carbon::createFromFormat($fmt, $trimmed);
-                // Si trae hora, conservarla en ISO; si no, solo la fecha.
                 return isset($m[4]) && $m[4] !== ''
                     ? $carbon->format('Y-m-d H:i:s')
                     : $carbon->format('Y-m-d');
             } catch (\Exception $e) {
-                // Formato no parseable → devolver original sin romper la consulta.
                 return $value;
             }
         }
