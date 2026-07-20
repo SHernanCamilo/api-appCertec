@@ -1623,17 +1623,16 @@ class GraphFabricGatewayService
         $trimmed = trim($value);
 
         // Rango de fechas con ".." (ej: "2026-07-16..2026-07-18")
-        // Convertir a formato que Python interpreta como BETWEEN
+        // Convertir a array [from, to] que Python interpreta como BETWEEN
         if (str_contains($trimmed, '..') && preg_match('#^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$#', $trimmed, $m)) {
             $from = $m[1];
             $to   = $m[2];
-            // Si from == to (mismo día), usar LIKE para matchear datetime del día completo
-            // Python interpreta % como LIKE: WHERE col LIKE '2026-07-16%'
+            // Enviar como array — Python lo interpreta como BETWEEN en SQL
+            // Para mismo día: ['2026-07-16 00:00:00', '2026-07-16 23:59:59']
             if ($from === $to) {
-                return "{$from}%";
+                return ["{$from} 00:00:00", "{$from} 23:59:59"];
             }
-            // Para rango de varios días, enviar como array [from, to] que Python interpreta como BETWEEN
-            return [$from, $to];
+            return ["{$from} 00:00:00", "{$to} 23:59:59"];
         }
 
         // Operadores de comparación (>, <, >=, <=, !=)
