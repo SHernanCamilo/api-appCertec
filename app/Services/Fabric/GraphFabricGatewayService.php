@@ -1626,17 +1626,17 @@ class GraphFabricGatewayService
         $trimmed = trim($value);
 
         // Rango de fechas con ".." (ej: "2026-07-16..2026-07-18")
-        // NOTA: La API Python no soporta operadores ni BETWEEN en columnas datetime.
-        // SQL Server rechaza LIKE y operadores en datetime2.
-        // Los filtros de fecha se manejan client-side en Ag-Grid (filterParams.comparator).
-        // NO enviar al backend — retornar null para que se omita.
-        if (str_contains($trimmed, '..') && preg_match('#^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$#', $trimmed)) {
-            return null; // Se omite — filtrado client-side en Ag-Grid
+        // Python soporta: array [from, to] → BETWEEN, y "from..to" string → BETWEEN
+        // Para un solo día: ["2026-07-16", "2026-07-16"] → BETWEEN inicio y fin del día
+        if (str_contains($trimmed, '..') && preg_match('#^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$#', $trimmed, $m)) {
+            $from = $m[1];
+            $to   = $m[2];
+            return [$from, $to];
         }
 
-        // Operadores de comparación (>, <, >=, <=) — solo para columnas no-datetime
-        if (preg_match('#^([><!]=?)(.+)$#', $trimmed)) {
-            return null; // No soportado por Python actualmente
+        // Operadores de comparación (>=, <=, >, <) — Python los soporta en string
+        if (preg_match('#^([><!]=?)(\d{4}-\d{2}-\d{2}.*)$#', $trimmed)) {
+            return $trimmed;
         }
 
         // Ya viene en ISO (yyyy-mm-dd, con hora opcional) → no tocar.
