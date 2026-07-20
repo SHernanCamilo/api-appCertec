@@ -1627,11 +1627,12 @@ class GraphFabricGatewayService
 
         // Rango de fechas con ".." (ej: "2026-07-16..2026-07-18")
         // Python soporta: array [from, to] → BETWEEN, y "from..to" string → BETWEEN
-        // Para un solo día: ["2026-07-16", "2026-07-16"] → BETWEEN inicio y fin del día
         if (str_contains($trimmed, '..') && preg_match('#^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$#', $trimmed, $m)) {
             $from = $m[1];
             $to   = $m[2];
-            return [$from, $to];
+            // Para BETWEEN con datetime2: el "to" debe incluir fin del día
+            // BETWEEN '2026-07-16' AND '2026-07-16 23:59:59' incluye todo el día
+            return ["{$from} 00:00:00", "{$to} 23:59:59"];
         }
 
         // Operadores de comparación (>=, <=, >, <) — Python los soporta en string
