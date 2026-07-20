@@ -1584,13 +1584,16 @@ class GraphFabricGatewayService
         }
 
         // Convertir fechas al formato ISO (yyyy-mm-dd) que SQL Server espera.
-        // Un formato mal parseado provoca el error ODBC 22007 (241):
-        // "Conversion failed when converting date and/or time from character string".
+        // Filtros de fecha con ".." se omiten (se manejan client-side).
+        $normalized = [];
         foreach ($filters as $key => $value) {
-            $filters[$key] = $this->normalizeFilterValue($value);
+            $result = $this->normalizeFilterValue($value);
+            if ($result !== null) {
+                $normalized[$key] = $result;
+            }
         }
 
-        return $filters;
+        return empty($normalized) ? new \stdClass() : $normalized;
     }
 
     /**
@@ -1623,30 +1626,17 @@ class GraphFabricGatewayService
         $trimmed = trim($value);
 
         // Rango de fechas con ".." (ej: "2026-07-16..2026-07-18")
-        // Python soporta operadores >= y < en filtros string.
-        // Para un solo día: >=2026-07-16 (incluye todo el día hasta 23:59:59)
-        // Para rango: >=2026-07-16 combinado con <=2026-07-18 (no soportado en 1 campo)
-        // Solución: usar >= con día siguiente como <
-        if (str_contains($trimmed, '..') && preg_match('#^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$#', $trimmed, $m)) {
-            $from = $m[1];
-            $to   = $m[2];
-            // Enviar como >=fecha (Python aplica WHERE col >= 'fecha')
-            // Para mismo día necesitamos que matchee todo el día
-            // La API Python con >= solo filtra desde esa fecha en adelante
-            // Usamos el formato que Python SÍ soporta: valor exacto con %
-            // Pero datetime no acepta LIKE...
-            // Solución final: enviar solo la fecha ISO — Python debe hacer CAST(col AS DATE)
-            // Si Python no soporta esto, toca modificar Python.
-            // Por ahora enviamos >=from que al menos filtra desde ese día
-            if ($from === $to) {
-                return ">={$from}";
-            }
-            return ">={$from}";
+        // NOTA: La API Python no soporta operadores ni BETWEEN en columnas datetime.
+        // SQL Server rechaza LIKE y operadores en datetime2.
+        // Los filtros de fecha se manejan client-side en Ag-Grid (filterParams.comparator).
+        // NO enviar al backend — retornar null para que se omita.
+        if (str_contains($trimmed, '..') && preg_match('#^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$#', $trimmed)) {
+            return null; // Se omite — filtrado client-side en Ag-Grid
         }
 
-        // Operadores de comparación (>, <, >=, <=, !=)
-        if (preg_match('#^([><!]=?)(\d{4}-\d{2}-\d{2}.*)$#', $trimmed, $m)) {
-            return $trimmed; // Pasar directo, Python lo interpreta
+        // Operadores de comparación (>, <, >=, <=) — solo para columnas no-datetime
+        if (preg_match('#^([><!]=?)(.+)$#', $trimmed)) {
+            return null; // No soportado por Python actualmente
         }
 
         // Ya viene en ISO (yyyy-mm-dd, con hora opcional) → no tocar.
