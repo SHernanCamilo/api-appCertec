@@ -149,11 +149,10 @@ final class FabricStreamExportJob implements ShouldQueue
             // Guardar headers
             if (empty($headers)) {
                 $headers = array_keys($items[0]);
-                // Escribir headers como primera línea
                 fwrite($tmpHandle, json_encode($headers) . "\n");
             }
 
-            // Escribir cada fila como JSON line (una por línea)
+            // Escribir cada fila como JSON line
             foreach ($items as $row) {
                 $values = [];
                 foreach ($headers as $h) {
