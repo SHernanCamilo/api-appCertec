@@ -345,7 +345,7 @@ class FabricViewerController extends Controller
             ], 403);
         }
 
-        if (!$this->gateway->tieneAccesoVistaPorSede($user, $viewName)) {
+        if (!$this->gateway->tieneAccesoVistaPorSede($user, $viewName, $schema)) {
             return response()->json([
                 'success' => false,
                 'message' => "Sin acceso a la vista '{$viewName}' por sede.",

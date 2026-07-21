@@ -549,6 +549,9 @@ class GraphFabricGatewayService
      * Filtra vistas por prefijos de sede del usuario (post-GRANT).
      * Necesario cuando el usuario tiene varias sedes: GRANT recibe NAL
      * y aquí se dejan solo las vistas de sus site_codes (ej: EAL, NVA).
+     *
+     * Las vistas delegadas al usuario (bi_vista_delegacion_usuarios) no se
+     * restringen por sede: deben verse aunque sean nacionales u otra sede.
      */
     private function filterViewsBySiteCodes(array $response, User $user): array
     {
@@ -561,16 +564,22 @@ class GraphFabricGatewayService
             return $response;
         }
 
-        $allowed = array_map('strtolower', $siteContext['site_codes']);
-        $known   = $this->knownSiteCodesLower();
+        $allowed          = array_map('strtolower', $siteContext['site_codes']);
+        $known            = $this->knownSiteCodesLower();
+        $delegadasUsuario = $this->getUserDelegatedViewNamesSet($user);
 
         foreach ($response['schemas'] as &$schemaBlock) {
             $schemaBlock['views'] = array_values(array_filter(
                 $schemaBlock['views'] ?? [],
-                function ($view) use ($allowed, $known) {
+                function ($view) use ($allowed, $known, $delegadasUsuario) {
                     $name = strtolower((string) ($view['view_name'] ?? ''));
                     if ($name === '') {
                         return false;
+                    }
+
+                    // Delegación explícita al usuario → siempre visible (sin filtro de sede)
+                    if (!empty($view['es_delegada']) || isset($delegadasUsuario[$name])) {
+                        return true;
                     }
 
                     $hasAnyKnownSite = false;
@@ -619,9 +628,14 @@ class GraphFabricGatewayService
 
     /**
      * Valida que el usuario pueda ver una vista concreta por sede.
+     * Las vistas delegadas al usuario omiten la restricción de sede.
      */
-    public function tieneAccesoVistaPorSede(User $user, string $viewName): bool
+    public function tieneAccesoVistaPorSede(User $user, string $viewName, ?string $schema = null): bool
     {
+        if ($this->tieneVistaDelegadaAlUsuario($user, $viewName, $schema)) {
+            return true;
+        }
+
         $siteContext = $this->resolveSiteContext($user);
         if ($siteContext['is_national']) {
             return true;
@@ -659,6 +673,7 @@ class GraphFabricGatewayService
     /**
      * Aplica restricciones de departamento definidas en bi_vistas.
      * Ej: VW_AG_Agendas solo para MA y NAL aunque Fabric la muestre a todas las sedes.
+     * Las vistas delegadas al usuario no se restringen por departamento/sede.
      */
     private function filterViewsByBiVistasDepartamento(array $response, User $user): array
     {
@@ -666,10 +681,11 @@ class GraphFabricGatewayService
             return $response;
         }
 
-        $siteContext = $this->resolveSiteContext($user);
-        $siteCodes   = $siteContext['site_codes'];
-        $isNational  = $siteContext['is_national'];
-        $configIndex = $this->getBiVistasConfigBySchema();
+        $siteContext      = $this->resolveSiteContext($user);
+        $siteCodes        = $siteContext['site_codes'];
+        $isNational       = $siteContext['is_national'];
+        $configIndex      = $this->getBiVistasConfigBySchema();
+        $delegadasUsuario = $this->getUserDelegatedViewNamesSet($user);
 
         foreach ($response['schemas'] as &$schemaBlock) {
             $schema  = strtolower($schemaBlock['schema'] ?? '');
@@ -686,9 +702,14 @@ class GraphFabricGatewayService
 
             $schemaBlock['views'] = array_values(array_filter(
                 $schemaBlock['views'] ?? [],
-                function ($view) use ($byNombre, $siteCodes, $isNational) {
+                function ($view) use ($byNombre, $siteCodes, $isNational, $delegadasUsuario) {
                     $nombre = strtolower($view['view_name'] ?? '');
-                    $cfg    = $byNombre[$nombre] ?? null;
+
+                    if (isset($delegadasUsuario[$nombre])) {
+                        return true;
+                    }
+
+                    $cfg = $byNombre[$nombre] ?? null;
 
                     if ($cfg === null) {
                         return true;
@@ -715,8 +736,14 @@ class GraphFabricGatewayService
     }
 
     /**
-     * Restringe vistas según delegación empresa ↔ bi_vistas.
-     * Si la empresa del usuario NO tiene filas en bi_vista_delegaciones para el esquema, no restringe.
+     * Aplica delegación de vistas (empresa / usuario).
+     *
+     * - Esquema con acceso directo (users_grups GG-BD-*): no se restringe el
+     *   listado; se marcan las vistas delegadas al usuario (aditivo).
+     * - Esquema solo por delegación: solo se dejan las vistas del pool
+     *   empresa/usuario y se marcan como delegadas.
+     *
+     * Las vistas marcadas `es_delegada` omiten el filtro de sede posterior.
      */
     private function filterViewsByDelegacion(array $response, User $user): array
     {
@@ -729,8 +756,16 @@ class GraphFabricGatewayService
             return $response;
         }
 
-        $delegacionIndex       = $this->getDelegacionIndex();
-        $userDelegacionIndex   = $this->getDelegacionUsuarioIndex();
+        $directSchemas = array_flip(
+            collect($this->getGruposBdDirectos($user))
+                ->map(fn ($g) => strtolower($this->extractSchema($g)))
+                ->filter()
+                ->unique()
+                ->all()
+        );
+
+        $delegacionIndex     = $this->getDelegacionIndex();
+        $userDelegacionIndex = $this->getDelegacionUsuarioIndex();
 
         foreach ($response['schemas'] as &$schemaBlock) {
             $schema  = strtolower($schemaBlock['schema'] ?? '');
@@ -740,37 +775,62 @@ class GraphFabricGatewayService
                 continue;
             }
 
+            $delegadasSchema = $this->collectDelegatedNamesForSchema(
+                $user,
+                $grupoId,
+                $empresaIds,
+                $delegacionIndex,
+                $userDelegacionIndex
+            );
+            $hasDirect = isset($directSchemas[$schema]);
+
+            if ($hasDirect) {
+                // Acceso por esquema: conservar todas; marcar solo las delegadas al usuario
+                $userOnlyNames = $this->collectUserDelegatedNamesForSchema(
+                    $user,
+                    $grupoId,
+                    $empresaIds,
+                    $userDelegacionIndex
+                );
+                $userOnlySet = array_flip($userOnlyNames);
+
+                foreach ($schemaBlock['views'] as &$view) {
+                    $nombre = strtolower((string) ($view['view_name'] ?? ''));
+                    if ($nombre !== '' && isset($userOnlySet[$nombre])) {
+                        $view['es_delegada'] = true;
+                    }
+                }
+                unset($view);
+
+                $schemaBlock['view_count'] = count($schemaBlock['views'] ?? []);
+                continue;
+            }
+
+            // Solo por delegación: whitelist usuario (si existe) o pool empresa
+            $userOnlyNames = $this->collectUserDelegatedNamesForSchema(
+                $user,
+                $grupoId,
+                $empresaIds,
+                $userDelegacionIndex
+            );
+            $permitidos = $userOnlyNames !== []
+                ? $userOnlyNames
+                : $delegadasSchema;
+            $permitidosSet = array_flip($permitidos);
+
             $schemaBlock['views'] = array_values(array_filter(
                 $schemaBlock['views'] ?? [],
-                function ($view) use ($empresaIds, $delegacionIndex, $userDelegacionIndex, $grupoId, $user) {
-                    $nombre = strtolower($view['view_name'] ?? '');
+                function ($view) use ($permitidosSet) {
+                    $nombre = strtolower((string) ($view['view_name'] ?? ''));
 
-                    foreach ($empresaIds as $empresaId) {
-                        $userKey = $user->id . '.' . $empresaId . '.' . $grupoId;
-
-                        if (isset($userDelegacionIndex[$userKey])) {
-                            $permitidos = array_map('strtolower', $userDelegacionIndex[$userKey]);
-                            if (in_array($nombre, $permitidos, true)) {
-                                return true;
-                            }
-                            continue;
-                        }
-
-                        $key = $empresaId . '.' . $grupoId;
-
-                        if (!isset($delegacionIndex[$key])) {
-                            return true;
-                        }
-
-                        $permitidos = array_map('strtolower', $delegacionIndex[$key]);
-                        if (in_array($nombre, $permitidos, true)) {
-                            return true;
-                        }
-                    }
-
-                    return false;
+                    return $nombre !== '' && isset($permitidosSet[$nombre]);
                 }
             ));
+
+            foreach ($schemaBlock['views'] as &$view) {
+                $view['es_delegada'] = true;
+            }
+            unset($view);
 
             $schemaBlock['view_count'] = count($schemaBlock['views']);
         }
@@ -781,6 +841,147 @@ class GraphFabricGatewayService
         );
 
         return $response;
+    }
+
+    /**
+     * Nombres de vistas delegadas (usuario ∪ empresa) para un esquema.
+     *
+     * @param  array<string, array<int, string>>  $delegacionIndex
+     * @param  array<string, array<int, string>>  $userDelegacionIndex
+     * @return string[] lowercase
+     */
+    private function collectDelegatedNamesForSchema(
+        User $user,
+        int $grupoId,
+        array $empresaIds,
+        array $delegacionIndex,
+        array $userDelegacionIndex
+    ): array {
+        $names = [];
+
+        foreach ($empresaIds as $empresaId) {
+            $userKey = $user->id . '.' . $empresaId . '.' . $grupoId;
+            if (isset($userDelegacionIndex[$userKey])) {
+                foreach ($userDelegacionIndex[$userKey] as $nombre) {
+                    $names[strtolower($nombre)] = true;
+                }
+            }
+
+            $key = $empresaId . '.' . $grupoId;
+            if (isset($delegacionIndex[$key])) {
+                foreach ($delegacionIndex[$key] as $nombre) {
+                    $names[strtolower($nombre)] = true;
+                }
+            }
+        }
+
+        return array_keys($names);
+    }
+
+    /**
+     * Solo vistas delegadas explícitamente al usuario (bi_vista_delegacion_usuarios).
+     *
+     * @param  array<string, array<int, string>>  $userDelegacionIndex
+     * @return string[] lowercase
+     */
+    private function collectUserDelegatedNamesForSchema(
+        User $user,
+        int $grupoId,
+        array $empresaIds,
+        array $userDelegacionIndex
+    ): array {
+        $names = [];
+
+        foreach ($empresaIds as $empresaId) {
+            $userKey = $user->id . '.' . $empresaId . '.' . $grupoId;
+            if (!isset($userDelegacionIndex[$userKey])) {
+                continue;
+            }
+
+            foreach ($userDelegacionIndex[$userKey] as $nombre) {
+                $names[strtolower($nombre)] = true;
+            }
+        }
+
+        return array_keys($names);
+    }
+
+    /**
+     * Set lowercase de nombres de vistas delegadas al usuario (todas las empresas).
+     *
+     * @return array<string, true>
+     */
+    private function getUserDelegatedViewNamesSet(User $user): array
+    {
+        if (!Schema::hasTable('bi_vista_delegacion_usuarios')) {
+            return [];
+        }
+
+        $empresaIds = $user->empresas()->pluck('ent_empresas.id')->map(fn ($id) => (int) $id)->all();
+        if ($empresaIds === []) {
+            return [];
+        }
+
+        $set   = [];
+        $index = $this->getDelegacionUsuarioIndex();
+        $prefix = $user->id . '.';
+
+        foreach ($index as $key => $nombres) {
+            if (!str_starts_with((string) $key, $prefix)) {
+                continue;
+            }
+
+            // key = user_id.empresa_id.grupo_id
+            $parts = explode('.', (string) $key);
+            if (count($parts) < 3) {
+                continue;
+            }
+
+            $empresaId = (int) $parts[1];
+            if (!in_array($empresaId, $empresaIds, true)) {
+                continue;
+            }
+
+            foreach ($nombres as $nombre) {
+                $set[strtolower($nombre)] = true;
+            }
+        }
+
+        return $set;
+    }
+
+    /**
+     * ¿La vista está en bi_vista_delegacion_usuarios para este usuario?
+     */
+    private function tieneVistaDelegadaAlUsuario(User $user, string $viewName, ?string $schema = null): bool
+    {
+        $nombre = strtolower(trim($viewName));
+        if ($nombre === '') {
+            return false;
+        }
+
+        if ($schema !== null && $schema !== '') {
+            $empresaIds = $user->empresas()->pluck('ent_empresas.id')->map(fn ($id) => (int) $id)->all();
+            if ($empresaIds === []) {
+                return false;
+            }
+
+            $grupoId = $this->resolveGrupoIdBySchema($schema);
+            if ($grupoId === null) {
+                return false;
+            }
+
+            $names = $this->collectUserDelegatedNamesForSchema(
+                $user,
+                $grupoId,
+                $empresaIds,
+                $this->getDelegacionUsuarioIndex()
+            );
+
+            return in_array($nombre, $names, true);
+        }
+
+        return isset($this->getUserDelegatedViewNamesSet($user)[$nombre]);
     }
 
     /**
@@ -1094,7 +1295,7 @@ class GraphFabricGatewayService
             ];
         }
 
-        if (!$this->tieneAccesoVistaPorSede($user, $viewName)) {
+        if (!$this->tieneAccesoVistaPorSede($user, $viewName, $schema)) {
             return [
                 'success' => false,
                 'message' => "Sin acceso a la vista '{$viewName}' por sede.",
@@ -1147,7 +1348,7 @@ class GraphFabricGatewayService
             ];
         }
 
-        if (!$this->tieneAccesoVistaPorSede($user, $view)) {
+        if (!$this->tieneAccesoVistaPorSede($user, $view, $schema)) {
             return [
                 'success' => false,
                 'message' => "Sin acceso a la vista '{$view}' por sede.",
@@ -1270,7 +1471,7 @@ class GraphFabricGatewayService
             ];
         }
 
-        if (!$this->tieneAccesoVistaPorSede($user, $view)) {
+        if (!$this->tieneAccesoVistaPorSede($user, $view, $schema)) {
             return [
                 'success' => false,
                 'content' => null,
@@ -1429,7 +1630,7 @@ class GraphFabricGatewayService
             ];
         }
 
-        if (!$this->tieneAccesoVistaPorSede($user, $view)) {
+        if (!$this->tieneAccesoVistaPorSede($user, $view, $schema)) {
             return [
                 'success' => false,
                 'message' => "Sin acceso a la vista '{$view}' por sede.",
