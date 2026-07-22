@@ -243,11 +243,14 @@ class BiDelegacionController extends Controller
                 ->all();
 
             DB::transaction(function () use ($empresaId, $grupo, $userId, $validIds) {
+                // delete() de query builder no dispara eventos del modelo → limpiar caché a mano
                 BiVistaDelegacionUsuario::query()
                     ->where('user_id', $userId)
                     ->where('empresa_id', $empresaId)
                     ->where('id_bi_grupos', $grupo->id)
                     ->delete();
+
+                \Illuminate\Support\Facades\Cache::forget('bi_vista_delegacion_usuarios_index');
 
                 foreach ($validIds as $vistaId) {
                     BiVistaDelegacionUsuario::create([

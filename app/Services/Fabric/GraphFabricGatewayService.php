@@ -1124,6 +1124,10 @@ class GraphFabricGatewayService
             ];
         }
 
+        // Si hay vistas delegadas de otra sede, el GRANT debe ir como NAL
+        // (mismo patrón que multi-sede); Laravel recorta después.
+        $grantDepartment = $this->resolveDepartmentForGrantView($user);
+
         $schemaKey = $schema ? strtolower($schema) : 'all';
         $tipoKey   = $tipo ?? 'all';
         $cacheKey  = sprintf(
@@ -1131,7 +1135,7 @@ class GraphFabricGatewayService
             $user->id,
             $schemaKey,
             $tipoKey,
-            md5(($departamento ?? '') . implode(',', $siteCodes) . implode(',', $grupos))
+            md5(($grantDepartment ?? '') . ($departamento ?? '') . implode(',', $siteCodes) . implode(',', $grupos))
         );
 
         if ($forceRefresh) {
@@ -1718,6 +1722,10 @@ class GraphFabricGatewayService
      * Department a enviar al GRANT para una vista concreta.
      * GRANT solo acepta un department: si el usuario tiene varias sedes,
      * se envía el prefijo que coincide con el nombre de la vista.
+     *
+     * Si el usuario tiene vistas delegadas (otra sede / nacionales), se envía
+     * NAL para que Graph-Fabric no las elimine antes de que Laravel aplique
+     * el filtro de sede + bypass de delegación.
      */
     public function resolveDepartmentForGrantView(User $user, ?string $viewName = null): ?string
     {
@@ -1727,12 +1735,23 @@ class GraphFabricGatewayService
             return 'NAL';
         }
 
+        // Vista específicamente delegada al usuario → no restringir por sede en GRANT
+        if ($viewName !== null && trim($viewName) !== ''
+            && $this->tieneVistaDelegadaAlUsuario($user, $viewName)) {
+            return 'NAL';
+        }
+
         $codes = $siteContext['site_codes'];
         if ($codes === []) {
             return $siteContext['department'];
         }
 
+        // Listado de catálogo: con delegaciones hay que traer todo el esquema
         if ($viewName === null || trim($viewName) === '') {
+            if ($this->usuarioTieneVistasDelegadas($user)) {
+                return 'NAL';
+            }
+
             return $siteContext['department'];
         }
 
@@ -1749,11 +1768,17 @@ class GraphFabricGatewayService
         }
 
         // Varias coincidencias o vista sin sufijo claro → NAL para que GRANT no bloquee
-        if (count($codes) > 1) {
+        if (count($codes) > 1 || $this->usuarioTieneVistasDelegadas($user)) {
             return 'NAL';
         }
 
         return $codes[0];
+    }
+
+    /** ¿Tiene al menos una vista en bi_vista_delegacion_usuarios? */
+    private function usuarioTieneVistasDelegadas(User $user): bool
+    {
+        return $this->getUserDelegatedViewNamesSet($user) !== [];
     }
 
     /**
