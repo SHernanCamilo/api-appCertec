@@ -62,6 +62,9 @@ Route::middleware(['auth:api'])->group(function () {
             ->where('view', '[A-Za-z0-9_]+');
         Route::get('/export/status/{jobId}', [FabricViewerController::class, 'exportStatus']);
         Route::get('/export/download/{jobId}', [FabricViewerController::class, 'exportDownload']);
+
+        // SSE Stream — sin JWT, el jobId es token implícito (no pasa por auth middleware)
+        // Se registra en routes/api.php fuera del grupo auth.
     });
 
     // =========================================================================

@@ -495,10 +495,110 @@ class FabricViewerController extends Controller
     }
 
     // =========================================================================
-    // INFO DEL USUARIO (debug / contexto)
+    // EXPORT SSE — Server-Sent Events (reemplaza polling)
     // =========================================================================
 
     /**
+     * Stream SSE del progreso de un export.
+     * No requiere JWT — el jobId actúa como token implícito.
+     *
+     * GET /api/fabric/viewer/export/stream/{jobId}
+     *
+     * Envía eventos:
+     *   data: {"progress":45,"rows":12000,"status":"processing","message":"..."}\n\n
+     *
+     * Cierra cuando status === 'completed' o 'failed', o tras 10 min de timeout.
+     */
+    public function exportStream(string $jobId): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        // Validar formato de jobId (UUID o similar)
+        if (!preg_match('/^[a-zA-Z0-9\-_]{10,80}$/', $jobId)) {
+            abort(400, 'jobId inválido.');
+        }
+
+        return response()->stream(function () use ($jobId) {
+            // Desactivar buffers de salida (Apache/nginx pueden bufferear SSE)
+            if (ob_get_level()) {
+                ob_end_clean();
+            }
+
+            $cacheKey   = "fabric_export:{$jobId}";
+            $maxSeconds = 600; // 10 min timeout
+            $startTime  = time();
+            $interval   = 1_500_000; // 1.5 segundos en microsegundos
+
+            // Enviar comentario SSE inicial para abrir conexión
+            echo ": stream opened\n\n";
+            if (ob_get_level()) ob_flush();
+            flush();
+
+            while ((time() - $startTime) < $maxSeconds) {
+                // Si el cliente cerró la conexión, salir
+                if (connection_aborted()) {
+                    break;
+                }
+
+                $status = \Illuminate\Support\Facades\Cache::get($cacheKey);
+
+                if ($status === null) {
+                    // Job no encontrado — puede que aún no se haya encolado
+                    $elapsed = time() - $startTime;
+                    if ($elapsed > 30) {
+                        // Después de 30s sin data, asumir expirado
+                        echo "data: " . json_encode([
+                            'status'   => 'failed',
+                            'progress' => 0,
+                            'rows'     => 0,
+                            'message'  => 'Export no encontrado o expirado.',
+                        ]) . "\n\n";
+                        flush();
+                        break;
+                    }
+                    // Enviar heartbeat mientras espera
+                    echo ": waiting\n\n";
+                    flush();
+                    usleep($interval);
+                    continue;
+                }
+
+                // Construir payload SSE
+                $payload = [
+                    'status'   => $status['status'] ?? 'pending',
+                    'progress' => (int) ($status['progress'] ?? 0),
+                    'rows'     => (int) ($status['rows'] ?? 0),
+                    'message'  => $status['message'] ?? '',
+                ];
+
+                // Agregar campos extra cuando completado
+                if (($status['status'] ?? '') === 'completed') {
+                    $payload['filename']        = $status['filename'] ?? null;
+                    $payload['file_size_human']  = $status['file_size_human'] ?? null;
+                }
+
+                echo "data: " . json_encode($payload) . "\n\n";
+                if (ob_get_level()) ob_flush();
+                flush();
+
+                // Si terminó (completado o fallido), cerrar stream
+                if (in_array($status['status'] ?? '', ['completed', 'failed'], true)) {
+                    break;
+                }
+
+                usleep($interval);
+            }
+        }, 200, [
+            'Content-Type'                => 'text/event-stream',
+            'Cache-Control'               => 'no-cache, no-store, must-revalidate',
+            'Connection'                  => 'keep-alive',
+            'X-Accel-Buffering'           => 'no', // Nginx: desactivar proxy_buffering
+            'Access-Control-Allow-Origin' => '*',
+        ]);
+    }
+
+    // =========================================================================
+    // INFO DEL USUARIO (debug / contexto)
+    // =========================================================================
+
     /**
      * Ejecutar agregación (GROUP BY) en una vista para tablas dinámicas.
      * POST /api/fabric/viewer/aggregate

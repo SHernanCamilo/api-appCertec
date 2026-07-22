@@ -288,6 +288,11 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('fabric')->group(fu
     require __DIR__ . '/Fabric/FabricRouter.php';
 });
 
+// ── SSE Export Stream — PÚBLICO (sin JWT, jobId es token implícito)
+// EventSource no soporta headers Authorization → ruta sin auth middleware.
+Route::get('/fabric/viewer/export/stream/{jobId}', [\App\Http\Controllers\Fabric\FabricViewerController::class, 'exportStream'])
+    ->where('jobId', '[a-zA-Z0-9\-_]{10,80}');
+
 // ── OData Endpoint PÚBLICO — sin auth:api (tiene su propia autenticación por token/Azure AD)
 // Excel/Power Query se conecta directamente a esta URL.
 Route::prefix('fabric/odata')->group(function () {

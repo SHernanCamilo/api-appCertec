@@ -12,3 +12,18 @@
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteRule ^ index.php [L]
 </IfModule>
+
+# SSE (Server-Sent Events) — desactivar buffering para export stream
+<IfModule mod_headers.c>
+    <LocationMatch "^/api/fabric/viewer/export/stream/">
+        Header set Cache-Control "no-cache, no-store, must-revalidate"
+        Header set X-Accel-Buffering "no"
+    </LocationMatch>
+</IfModule>
+<IfModule mod_proxy.c>
+    <LocationMatch "^/api/fabric/viewer/export/stream/">
+        SetEnv proxy-sendchunked 1
+        SetEnv proxy-initial-not-pooled 1
+        SetEnv no-gzip 1
+    </LocationMatch>
+</IfModule>
