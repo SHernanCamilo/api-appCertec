@@ -149,6 +149,16 @@ class ODataController extends Controller
         $select = $request->query('$select', '');
         $orderby = $request->query('$orderby', '');
 
+        // Protección para vistas pesadas: si max_rows > 500K y NO hay filtro,
+        // limitar a las primeras filas para evitar timeout de Graph-Fabric.
+        // Power Query mostrará las columnas y el usuario puede agregar filtros.
+        $isHeavyView = ($link->max_rows ?? 100000) > 500000;
+        $hasUserFilter = !empty($filter);
+        if ($isHeavyView && !$hasUserFilter && $skip === 0) {
+            // Primera página sin filtro → devolver máximo 20K filas como muestra
+            $top = min($top, 20000);
+        }
+
         // Protección robusta contra SQL y JS injection en filtros OData
         if ($filter && preg_match('/;|--|DROP|DELETE|INSERT|UPDATE|EXEC|xp_|UNION|SCRIPT|ALTER|CREATE|TRUNCATE|\/\*|<script>/i', $filter)) {
             return $this->odataError('InvalidFilter', 'Por motivos de seguridad, el filtro OData contiene caracteres o sentencias no permitidas.', 400);
@@ -158,6 +168,10 @@ class ODataController extends Controller
             $link->filters ?? [],
             $this->parseODataFilter($filter)
         );
+
+        // Convertir filtros de rango OData (__gte, __lte, __gt, __lt) al formato
+        // que Graph-Fabric Python entiende (operadores >= <= > < en string, o BETWEEN array)
+        $filters = $this->convertRangeFilters($filters);
 
         $columns = $select
             ? array_map('trim', explode(',', $select))
@@ -973,18 +987,121 @@ class ODataController extends Controller
 
         foreach ($parts as $part) {
             $part = trim($part);
+
+            // Equality: Field eq 'value' or Field eq 123
             if (preg_match("/^(\w+)\s+eq\s+'([^']+)'$/i", $part, $m)) {
                 $filters[$m[1]] = $m[2];
             } elseif (preg_match("/^(\w+)\s+eq\s+(\d+)$/i", $part, $m)) {
                 $filters[$m[1]] = (int) $m[2];
+
+            // Greater than or equal: Field ge 'value' or Field ge datetime'...'
+            } elseif (preg_match("/^(\w+)\s+ge\s+'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__gte'] = $m[2];
+            } elseif (preg_match("/^(\w+)\s+ge\s+datetime'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__gte'] = $m[2];
+            } elseif (preg_match("/^(\w+)\s+ge\s+(\d[\d\-T:.Z]+)$/i", $part, $m)) {
+                $filters[$m[1] . '__gte'] = $m[2];
+
+            // Less than or equal: Field le 'value'
+            } elseif (preg_match("/^(\w+)\s+le\s+'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__lte'] = $m[2];
+            } elseif (preg_match("/^(\w+)\s+le\s+datetime'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__lte'] = $m[2];
+            } elseif (preg_match("/^(\w+)\s+le\s+(\d[\d\-T:.Z]+)$/i", $part, $m)) {
+                $filters[$m[1] . '__lte'] = $m[2];
+
+            // Greater than: Field gt 'value'
+            } elseif (preg_match("/^(\w+)\s+gt\s+'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__gt'] = $m[2];
+            } elseif (preg_match("/^(\w+)\s+gt\s+datetime'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__gt'] = $m[2];
+            } elseif (preg_match("/^(\w+)\s+gt\s+(\d[\d\-T:.Z]+)$/i", $part, $m)) {
+                $filters[$m[1] . '__gt'] = $m[2];
+
+            // Less than: Field lt 'value'
+            } elseif (preg_match("/^(\w+)\s+lt\s+'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__lt'] = $m[2];
+            } elseif (preg_match("/^(\w+)\s+lt\s+datetime'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__lt'] = $m[2];
+            } elseif (preg_match("/^(\w+)\s+lt\s+(\d[\d\-T:.Z]+)$/i", $part, $m)) {
+                $filters[$m[1] . '__lt'] = $m[2];
+
+            // Not equal: Field ne 'value'
+            } elseif (preg_match("/^(\w+)\s+ne\s+'([^']+)'$/i", $part, $m)) {
+                $filters[$m[1] . '__ne'] = $m[2];
+
+            // Contains: contains(Field, 'value')
             } elseif (preg_match("/^contains\((\w+),\s*'([^']+)'\)$/i", $part, $m)) {
                 $filters[$m[1]] = "%{$m[2]}%";
+
+            // Starts with: startswith(Field, 'value')
             } elseif (preg_match("/^startswith\((\w+),\s*'([^']+)'\)$/i", $part, $m)) {
                 $filters[$m[1]] = "{$m[2]}%";
             }
         }
 
         return $filters;
+    }
+
+    /**
+     * Convierte filtros con sufijos __gte, __lte, __gt, __lt al formato
+     * que Graph-Fabric Python entiende.
+     *
+     * Ejemplo entrada:  ['Fecha_comprobante__gte' => '2026-01-01', 'Fecha_comprobante__lte' => '2026-07-22']
+     * Ejemplo salida:   ['Fecha_comprobante' => ['2026-01-01 00:00:00', '2026-07-22 23:59:59']]  (BETWEEN)
+     *
+     * Si solo hay un bound (gte sin lte), usa operador:
+     *   ['Fecha_comprobante' => '>=2026-01-01']
+     */
+    private function convertRangeFilters(array $filters): array
+    {
+        $ranges = [];
+        $output = [];
+
+        foreach ($filters as $key => $value) {
+            if (preg_match('/^(.+)__(gte|lte|gt|lt|ne)$/', $key, $m)) {
+                $field = $m[1];
+                $op = $m[2];
+                $ranges[$field][$op] = $value;
+            } else {
+                $output[$key] = $value;
+            }
+        }
+
+        // Procesar rangos agrupados por campo
+        foreach ($ranges as $field => $ops) {
+            if (isset($ops['gte']) && isset($ops['lte'])) {
+                // BETWEEN — Python lo soporta como array [from, to]
+                $from = $ops['gte'];
+                $to = $ops['lte'];
+                // Agregar hora para cubrir todo el día si es solo fecha
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) $from .= ' 00:00:00';
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) $to .= ' 23:59:59';
+                $output[$field] = [$from, $to];
+            } elseif (isset($ops['gt']) && isset($ops['lt'])) {
+                // Rango abierto — usar BETWEEN con ajuste
+                $from = $ops['gt'];
+                $to = $ops['lt'];
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) $from .= ' 00:00:01';
+                if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) $to .= ' 23:59:58';
+                $output[$field] = [$from, $to];
+            } else {
+                // Solo un bound — usar operador individual
+                foreach ($ops as $op => $val) {
+                    $opSymbol = match($op) {
+                        'gte' => '>=',
+                        'lte' => '<=',
+                        'gt'  => '>',
+                        'lt'  => '<',
+                        'ne'  => '!=',
+                        default => '=',
+                    };
+                    $output[$field] = "{$opSymbol}{$val}";
+                }
+            }
+        }
+
+        return $output;
     }
 
     private function parseOrderBy(string $orderby): array
