@@ -14,24 +14,19 @@
 </IfModule>
 
 # Compresión gzip — Power Query y Excel soportan Accept-Encoding: gzip
-# Reduce ~70% el tamaño de las respuestas OData JSON (20K filas: ~8MB → ~2MB)
+# Reduce ~70% el tamaño de las respuestas OData JSON
 <IfModule mod_deflate.c>
     AddOutputFilterByType DEFLATE application/json
     AddOutputFilterByType DEFLATE text/event-stream
-    DeflateCompressionLevel 6
 </IfModule>
 
 # SSE (Server-Sent Events) — desactivar buffering para export stream
 <IfModule mod_headers.c>
-    <LocationMatch "^/api/fabric/viewer/export/stream/">
+    <If "%{REQUEST_URI} =~ m#/api/fabric/viewer/export/stream/#">
         Header set Cache-Control "no-cache, no-store, must-revalidate"
         Header set X-Accel-Buffering "no"
-    </LocationMatch>
+    </If>
 </IfModule>
-<IfModule mod_proxy.c>
-    <LocationMatch "^/api/fabric/viewer/export/stream/">
-        SetEnv proxy-sendchunked 1
-        SetEnv proxy-initial-not-pooled 1
-        SetEnv no-gzip 1
-    </LocationMatch>
+<IfModule mod_env.c>
+    SetEnvIf Request_URI "/api/fabric/viewer/export/stream/" no-gzip
 </IfModule>
