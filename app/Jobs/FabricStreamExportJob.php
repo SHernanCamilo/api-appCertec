@@ -285,12 +285,60 @@ final class FabricStreamExportJob implements ShouldQueue
 
         // Leer datos del tmp file
         $handle = fopen($tmpFile, 'r');
-        fgets($handle); // Skip header line
+        fgets($handle); // Skip header line (json de headers)
         $row = 5;
+
+        // Detectar columnas que son fechas (por nombre o contenido del header)
+        $dateColumns = [];
+        // Leer primera línea de datos para detectar fechas
+        $firstDataLine = fgets($handle);
+        if ($firstDataLine) {
+            $firstValues = json_decode(trim($firstDataLine), true);
+            if ($firstValues) {
+                foreach ($firstValues as $i => $val) {
+                    if (is_string($val) && preg_match('/^\d{4}-\d{2}-\d{2}/', $val)) {
+                        $dateColumns[$i] = true;
+                    }
+                }
+                // Escribir la primera fila
+                foreach ($firstValues as $i => $val) {
+                    $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
+                    if (isset($dateColumns[$i]) && is_string($val) && $val !== '') {
+                        $dateStr = str_replace('T', ' ', substr($val, 0, 19));
+                        try {
+                            $timestamp = \PhpOffice\PhpSpreadsheet\Shared\Date::PHPToExcel(new \DateTime($dateStr));
+                            $sheet->setCellValue("{$col}{$row}", $timestamp);
+                            $sheet->getStyle("{$col}{$row}")->getNumberFormat()->setFormatCode('yyyy-mm-dd hh:mm');
+                        } catch (\Exception $e) {
+                            $sheet->setCellValue("{$col}{$row}", $val);
+                        }
+                    } else {
+                        $sheet->setCellValueExplicit("{$col}{$row}", $val ?? '', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+                    }
+                }
+                $row++;
+            }
+        }
+
+        // Resto de filas
         while (($line = fgets($handle)) !== false) {
             $values = json_decode(trim($line), true);
             if ($values) {
-                $sheet->fromArray([$values], null, "A{$row}");
+                foreach ($values as $i => $val) {
+                    $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
+                    if (isset($dateColumns[$i]) && is_string($val) && $val !== '') {
+                        $dateStr = str_replace('T', ' ', substr($val, 0, 19));
+                        try {
+                            $timestamp = \PhpOffice\PhpSpreadsheet\Shared\Date::PHPToExcel(new \DateTime($dateStr));
+                            $sheet->setCellValue("{$col}{$row}", $timestamp);
+                            $sheet->getStyle("{$col}{$row}")->getNumberFormat()->setFormatCode('yyyy-mm-dd hh:mm');
+                        } catch (\Exception $e) {
+                            $sheet->setCellValue("{$col}{$row}", $val);
+                        }
+                    } else {
+                        $sheet->setCellValueExplicit("{$col}{$row}", $val ?? '', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+                    }
+                }
                 $row++;
             }
         }
