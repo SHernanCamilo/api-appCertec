@@ -259,7 +259,6 @@ class ODataController extends Controller
         return response()->json($response, 200, [
             'OData-Version'    => '4.0',
             'Content-Type'     => 'application/json; odata.metadata=minimal',
-            'Content-Encoding' => 'identity', // Apache mod_deflate lo comprimirá si el cliente acepta gzip
             'Vary'             => 'Accept-Encoding',
             'X-Cache-TTL'      => (string) $odataCacheTtl,
             'X-Page-Size'      => (string) $top,
