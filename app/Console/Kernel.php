@@ -43,6 +43,15 @@ class Kernel extends ConsoleKernel
         //     ->everyTenMinutes()
         //     ->withoutOverlapping()
         //     ->appendOutputTo(storage_path('logs/indigo-sync.log'));
+
+        // ── OData Cache Warmup ───────────────────────────────────────────────
+        // Pre-calienta Redis con las vistas OData más consultadas (top 10, 3 páginas)
+        // Cuando Excel refresque, la respuesta sale de cache → 0 espera en Fabric
+        $schedule->command('odata:warm-cache --top=10 --pages=3')
+            ->everyThirtyMinutes()
+            ->withoutOverlapping()
+            ->runInBackground()
+            ->appendOutputTo(storage_path('logs/odata-warm-cache.log'));
     }
 
     /**

@@ -19,7 +19,7 @@ class OdataLink extends Model
     protected $fillable = [
         'code', 'name', 'visibility', 'created_by', 'created_by_email',
         'schema_name', 'view_name', 'columns', 'filters',
-        'sort_col', 'sort_dir', 'max_rows',
+        'sort_col', 'sort_dir', 'max_rows', 'cache_ttl', 'page_size',
         'token_hash', 'expires_at', 'allowed_ips', 'allowed_users',
         'active', 'access_count', 'last_accessed_at',
     ];
@@ -29,6 +29,8 @@ class OdataLink extends Model
         'access_count' => 0,
         'sort_dir'     => 'asc',
         'max_rows'     => 100000,
+        'cache_ttl'    => 120,
+        'page_size'    => 20000,
     ];
 
     protected $casts = [
@@ -37,6 +39,8 @@ class OdataLink extends Model
         'allowed_ips'      => 'array',
         'allowed_users'    => 'array',
         'active'           => 'boolean',
+        'cache_ttl'        => 'integer',
+        'page_size'        => 'integer',
         'expires_at'       => 'datetime',
         'last_accessed_at' => 'datetime',
     ];

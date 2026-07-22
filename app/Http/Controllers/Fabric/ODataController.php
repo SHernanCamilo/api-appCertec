@@ -141,7 +141,9 @@ class ODataController extends Controller
         $userEmail = $authResult['email'];
         $userName = $authResult['name'];
 
-        $top = min((int) $request->query('$top', '20000'), 20000);
+        // Page size configurable por link (max 50K) — menos roundtrips = refresh más rápido
+        $maxPageSize = min((int) ($link->page_size ?? 20000), 50000);
+        $top = min((int) $request->query('$top', (string) $maxPageSize), $maxPageSize);
         $skip = max((int) $request->query('$skip', '0'), 0);
         $filter = $request->query('$filter', '');
         $select = $request->query('$select', '');
@@ -169,9 +171,10 @@ class ODataController extends Controller
 
         $startTime = microtime(true);
 
-        // Cache OData: misma consulta (link + offset + filtros) → respuesta cacheada 2 min
-        $odataCacheKey = 'odata_qry:' . md5("{$code}:{$skip}:{$top}:" . json_encode($filters));
-        $odataCacheTtl = 120; // 2 minutos
+        // Cache TTL configurable por link (default 120s = 2 min)
+        // Vistas estables (catálogos, maestros) pueden usar 1800s (30 min) o 3600s (1h)
+        $odataCacheTtl = max(30, (int) ($link->cache_ttl ?? 120));
+        $odataCacheKey = 'odata_qry:' . md5("{$code}:{$skip}:{$top}:" . json_encode($filters) . ':' . json_encode($columns));
 
         $result = \Illuminate\Support\Facades\Cache::remember($odataCacheKey, $odataCacheTtl, function () use ($link, $columns, $filters, $top, $skip, $sortCol, $sortDir) {
             return $this->gateway->queryAsSystem(
@@ -199,24 +202,29 @@ class ODataController extends Controller
         $items = $result['data'] ?? [];
         $hasNext = $result['meta']['has_next'] ?? (count($items) === $top);
 
-        // Registrar acceso
+        // Registrar acceso (no bloquea la respuesta)
         $link->recordAccess();
-        OdataAccessLog::create([
-            'odata_link_id' => $link->id,
-            'user_email' => $userEmail,
-            'user_name' => $userName,
-            'schema_name' => $link->schema_name,
-            'view_name' => $link->view_name,
-            'visibility' => $link->visibility,
-            'filter_applied' => $filter ?: null,
-            'top' => $top,
-            'skip' => $skip,
-            'rows_returned' => count($items),
-            'elapsed_ms' => $elapsedMs,
-            'ip_address' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-            'auth_method' => $authResult['method'],
-        ]);
+        try {
+            OdataAccessLog::create([
+                'odata_link_id' => $link->id,
+                'user_email' => $userEmail,
+                'user_name' => $userName,
+                'schema_name' => $link->schema_name,
+                'view_name' => $link->view_name,
+                'visibility' => $link->visibility,
+                'filter_applied' => $filter ?: null,
+                'top' => $top,
+                'skip' => $skip,
+                'rows_returned' => count($items),
+                'elapsed_ms' => $elapsedMs,
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'auth_method' => $authResult['method'],
+            ]);
+        } catch (\Throwable $e) {
+            // No interrumpir la respuesta OData si falla el log
+            Log::warning('OData access log failed', ['error' => $e->getMessage()]);
+        }
 
         // Agregar __id como Key a cada fila (Excel OData lo requiere)
         $indexedItems = [];
@@ -249,8 +257,13 @@ class ODataController extends Controller
         }
 
         return response()->json($response, 200, [
-            'OData-Version' => '4.0',
-            'Content-Type' => 'application/json; odata.metadata=minimal',
+            'OData-Version'    => '4.0',
+            'Content-Type'     => 'application/json; odata.metadata=minimal',
+            'Content-Encoding' => 'identity', // Apache mod_deflate lo comprimirá si el cliente acepta gzip
+            'Vary'             => 'Accept-Encoding',
+            'X-Cache-TTL'      => (string) $odataCacheTtl,
+            'X-Page-Size'      => (string) $top,
+            'X-Rows-Returned'  => (string) count($items),
         ]);
     }
 
@@ -350,6 +363,8 @@ class ODataController extends Controller
             'sort_col' => 'nullable|string|max:100',
             'sort_dir' => 'nullable|in:asc,desc',
             'max_rows' => 'nullable|integer|min:100|max:1000000',
+            'cache_ttl' => 'nullable|integer|min:30|max:86400',
+            'page_size' => 'nullable|integer|min:1000|max:50000',
             'expires_at' => 'nullable|date|after:now',
             'allowed_ips' => 'nullable|array',
             'allowed_users' => 'nullable|array',
@@ -386,6 +401,8 @@ class ODataController extends Controller
             'sort_col' => $request->sort_col,
             'sort_dir' => $request->sort_dir ?? 'asc',
             'max_rows' => $request->max_rows ?? 100000,
+            'cache_ttl' => $request->cache_ttl ?? 120,
+            'page_size' => $request->page_size ?? 20000,
             'token_hash' => $tokenData['hash'] ?? null,
             'expires_at' => $request->expires_at,
             'allowed_ips' => $request->allowed_ips,
