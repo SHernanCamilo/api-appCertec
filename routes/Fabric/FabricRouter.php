@@ -97,6 +97,20 @@ Route::middleware(['auth:api'])->group(function () {
     });
 
     // =========================================================================
+    // Métricas Graph-Fabric — Dashboard de monitoreo en tiempo real
+    // Solo admins (se valida en frontend vía módulo)
+    // =========================================================================
+    Route::prefix('metrics')->group(function () {
+        Route::get('/service', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'service']);
+        Route::get('/top-views', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'topViews']);
+        Route::get('/top-users', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'topUsers']);
+        Route::get('/slow', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'slowQueries']);
+        Route::get('/history', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'history']);
+        Route::get('/fabric/active', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'fabricActive']);
+        Route::get('/fabric/summary', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'fabricSummary']);
+    });
+
+    // =========================================================================
     // OData API Keys — Generar/Listar/Revocar (requiere autenticación)
     // =========================================================================
     Route::prefix('odata/api-keys')->group(function () {
