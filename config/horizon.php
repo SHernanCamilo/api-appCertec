@@ -147,6 +147,22 @@ return [
                 'timeout' => 300,
                 'nice' => 0,
             ],
+
+            // Workers DEDICADOS para exports (misma config que production)
+            'export-workers' => [
+                'connection' => 'redis',
+                'queue' => ['exports'],
+                'balance' => 'auto',
+                'autoScalingStrategy' => 'size',
+                'minProcesses' => 1,
+                'maxProcesses' => 3,
+                'maxTime' => 3600,
+                'maxJobs' => 50,
+                'memory' => 1024,
+                'tries' => 1,
+                'timeout' => 900,
+                'nice' => 10,
+            ],
         ],
     ],
 
