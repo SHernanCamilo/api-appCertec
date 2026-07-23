@@ -769,15 +769,27 @@ class ODataController extends Controller
     }
 
     /**
-     * Verifica si el usuario tiene permiso explícito para esta vista
+     * Verifica si el usuario tiene permiso explícito para esta vista.
+     * Valida AMBOS requisitos:
+     *   1. El dominio del email está en allowed_domains (activo)
+     *   2. El usuario está asignado en bi_vista_user_permissions para esa vista
+     *
+     * Admins (roles admin/super-admin) bypasean la validación.
      */
     private function checkViewPermission($user, OdataLink $link): bool
     {
-        // Si el usuario es admin puede acceder a todo
+        // Admins siempre tienen acceso
         if ($user && method_exists($user, 'hasRole') && $user->hasRole(['admin', 'super-admin'])) {
             return true;
         }
 
+        // 1. Validar dominio del email en allowed_domains
+        if (!$this->isDomainAllowed($user->email)) {
+            Log::info('OData: dominio no permitido', ['email' => $user->email]);
+            return false;
+        }
+
+        // 2. Validar permiso específico en bi_vista_user_permissions
         $biGrupo = \App\Models\BiGrupo::where('codigo', strtoupper($link->schema_name))->first();
         if (!$biGrupo) {
             return false;
@@ -795,6 +807,14 @@ class ODataController extends Controller
             ->where('bi_vista_id', $biVista->id)
             ->where('user_id', $user->id)
             ->exists();
+    }
+
+    /**
+     * Verifica si el dominio del email está en la tabla allowed_domains y activo.
+     */
+    private function isDomainAllowed(string $email): bool
+    {
+        return \App\Models\AllowedDomain::isEmailAllowed($email);
     }
 
     /**

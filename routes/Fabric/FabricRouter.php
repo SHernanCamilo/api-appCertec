@@ -86,6 +86,17 @@ Route::middleware(['auth:api'])->group(function () {
     });
 
     // =========================================================================
+    // Dominios Permitidos OData (qué dominios pueden actualizar desde Excel)
+    // =========================================================================
+    Route::prefix('odata/allowed-domains')->group(function () {
+        Route::get('/', [\App\Http\Controllers\AllowedDomainController::class, 'index']);
+        Route::post('/', [\App\Http\Controllers\AllowedDomainController::class, 'store']);
+        Route::put('/{id}', [\App\Http\Controllers\AllowedDomainController::class, 'update']);
+        Route::delete('/{id}', [\App\Http\Controllers\AllowedDomainController::class, 'destroy']);
+        Route::patch('/{id}/toggle', [\App\Http\Controllers\AllowedDomainController::class, 'toggleStatus']);
+    });
+
+    // =========================================================================
     // OData API Keys — Generar/Listar/Revocar (requiere autenticación)
     // =========================================================================
     Route::prefix('odata/api-keys')->group(function () {
