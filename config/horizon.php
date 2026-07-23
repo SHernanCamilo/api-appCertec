@@ -136,7 +136,7 @@ return [
         'local' => [
             'default-workers' => [
                 'connection' => 'redis',
-                'queue' => ['default', 'exports', 'sync', 'notifications'],
+                'queue' => ['default', 'sync', 'notifications'],
                 'balance' => 'auto',
                 'minProcesses' => 1,
                 'maxProcesses' => 3,

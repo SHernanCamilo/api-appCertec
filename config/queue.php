@@ -66,7 +66,7 @@ return [
             'driver' => 'redis',
             'connection' => 'default',
             'queue' => env('REDIS_QUEUE', 'default'),
-            'retry_after' => 600, // 10 min para exports largos
+            'retry_after' => 960, // 16 min — debe ser MAYOR que el timeout del job más largo (900s = 15 min)
             'block_for' => null,
             'after_commit' => false,
         ],
