@@ -629,10 +629,15 @@ class GraphFabricGatewayService
     /**
      * Valida que el usuario pueda ver una vista concreta por sede.
      * Las vistas delegadas al usuario omiten la restricción de sede.
+     * Las vistas de formularios BI (config bi_fabric) solo exigen esquema.
      */
     public function tieneAccesoVistaPorSede(User $user, string $viewName, ?string $schema = null): bool
     {
         if ($this->tieneVistaDelegadaAlUsuario($user, $viewName, $schema)) {
+            return true;
+        }
+
+        if ($this->esVistaFormularioSoloEsquema($viewName, $schema)) {
             return true;
         }
 
@@ -664,6 +669,55 @@ class GraphFabricGatewayService
         foreach ($allowed as $code) {
             if (str_contains($name, $code)) {
                 return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Vistas usadas por formularios BI dedicados (ej. Certificado SOAT).
+     * Solo requieren acceso al esquema; no se filtran por sede.
+     *
+     * @see config/bi_fabric.php
+     */
+    public function esVistaFormularioSoloEsquema(string $viewName, ?string $schema = null): bool
+    {
+        $views = config('bi_fabric.vistas_formulario_solo_esquema', []);
+        if (!is_array($views) || $views === []) {
+            return false;
+        }
+
+        $name = strtolower(trim($viewName));
+        if ($name === '') {
+            return false;
+        }
+
+        $qualified = $schema !== null && trim($schema) !== ''
+            ? strtolower(trim($schema)) . '.' . $name
+            : null;
+
+        foreach ($views as $entry) {
+            $entry = strtolower(trim((string) $entry));
+            if ($entry === '') {
+                continue;
+            }
+
+            if ($qualified !== null && $entry === $qualified) {
+                return true;
+            }
+
+            // Permite coincidencia solo por nombre si el config no trae schema
+            if (!str_contains($entry, '.') && $entry === $name) {
+                return true;
+            }
+
+            // Si no hay schema en la llamada, comparar por el nombre de la vista del config
+            if ($qualified === null && str_contains($entry, '.')) {
+                $parts = explode('.', $entry, 2);
+                if (($parts[1] ?? '') === $name) {
+                    return true;
+                }
             }
         }
 
@@ -1738,6 +1792,12 @@ class GraphFabricGatewayService
         // Vista específicamente delegada al usuario → no restringir por sede en GRANT
         if ($viewName !== null && trim($viewName) !== ''
             && $this->tieneVistaDelegadaAlUsuario($user, $viewName)) {
+            return 'NAL';
+        }
+
+        // Formularios BI con vista nacional → GRANT como nacional (solo valida esquema)
+        if ($viewName !== null && trim($viewName) !== ''
+            && $this->esVistaFormularioSoloEsquema($viewName)) {
             return 'NAL';
         }
 

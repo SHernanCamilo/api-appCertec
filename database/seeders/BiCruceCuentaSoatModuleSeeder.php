@@ -43,6 +43,7 @@ class BiCruceCuentaSoatModuleSeeder extends Seeder
             [
                 'id_modulo_padre' => $formularios->id,
                 'nombre' => 'Cruce cuenta SOAT',
+                // Vista nacional: listada en config/bi_fabric.php (solo_esquema, sin filtro sede)
                 'descripcion' => 'Consulta facturación SOAT por cédula (fr.VW_Billing_Facturacion_Soat)',
                 'icono' => 'bi bi-card-heading',
                 'ruta' => '/inteligenciaNegocios/formularios/cruceCuentaSoat',
