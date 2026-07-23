@@ -80,6 +80,190 @@ final class FabricStreamExportJob implements ShouldQueue
      */
     private function exportToExcel(User $user): void
     {
+        // Intentar R2 cache primero (12x más rápido para vistas grandes)
+        if ($this->tryExportFromR2($user)) {
+            return; // R2 resolvió el export completo
+        }
+
+        // Fallback: descargar de Fabric request por request
+        $this->exportFromFabricDirect($user);
+    }
+
+    /**
+     * Fast-path: Export desde R2 Parquet cache (~47s para 450K filas vs 9 min).
+     * Retorna true si R2 resolvió el export, false para caer al fallback.
+     */
+    private function tryExportFromR2(User $user): bool
+    {
+        $url     = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
+        $token   = env('TOKEN_ADMIN', '');
+        $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
+
+        $this->updateStatus(self::STATUS_PROCESSING, null, [
+            'progress' => 5,
+            'rows'     => 0,
+            'message'  => 'Verificando cache R2...',
+        ]);
+
+        try {
+            $response = Http::timeout(120)
+                ->connectTimeout(10)
+                ->post($url . '/api/data/export/r2', [
+                    'token'       => $token,
+                    'user_email'  => $user->email,
+                    'user_name'   => $user->name ?? $user->email,
+                    'department'  => $gateway->resolveDepartmentForGrantView($user, $this->view),
+                    'groups'      => $gateway->getGruposBd($user),
+                    'schema_name' => $this->schema,
+                    'view'        => $this->view,
+                    'filters'     => $gateway->normalizeFiltersPublic($this->options['filters'] ?? []),
+                    'columns'     => $this->options['columns'] ?? [],
+                    'max_rows'    => min((int)($this->options['max_rows'] ?? 500000), 1000000),
+                    'format'      => 'gzip',
+                ]);
+
+            if ($response->status() !== 200) {
+                // R2 no disponible (202 = generando, otro = error) → fallback
+                Log::info('FabricStreamExportJob: R2 no disponible, usando Fabric directo', [
+                    'job_id' => $this->jobId,
+                    'status' => $response->status(),
+                ]);
+                return false;
+            }
+
+            // R2 respondió con datos — decodificar NDJSON gzip
+            $this->updateStatus(self::STATUS_PROCESSING, null, [
+                'progress' => 20,
+                'rows'     => 0,
+                'message'  => 'Descargando desde cache R2...',
+            ]);
+
+            $gzipData = $response->body();
+            $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
+
+            // Preparar directorio
+            $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
+            $dir      = storage_path("app/fabric_exports/{$this->jobId}");
+            if (!is_dir($dir)) {
+                mkdir($dir, 0775, true);
+            }
+            $filePath = "{$dir}/{$filename}";
+
+            // Decodificar gzip → NDJSON → escribir a tmp file
+            $ndjson = gzdecode($gzipData);
+            unset($gzipData); // Liberar RAM
+
+            if (!$ndjson) {
+                Log::warning('FabricStreamExportJob: gzdecode falló', ['job_id' => $this->jobId]);
+                return false;
+            }
+
+            $this->updateStatus(self::STATUS_PROCESSING, null, [
+                'progress' => 40,
+                'rows'     => $totalRows,
+                'message'  => "Procesando {$totalRows} filas desde R2...",
+            ]);
+
+            // Escribir a archivo temporal
+            $tmpFile = "{$dir}/data.tmp";
+            $lines = explode("\n", trim($ndjson));
+            unset($ndjson); // Liberar RAM
+
+            $headers = [];
+            $tmpHandle = fopen($tmpFile, 'w');
+            $rowCount = 0;
+
+            foreach ($lines as $line) {
+                if (empty($line)) continue;
+                $row = json_decode($line, true);
+                if (!$row) continue;
+
+                if (empty($headers)) {
+                    $headers = array_keys($row);
+                    fwrite($tmpHandle, json_encode($headers) . "\n");
+                }
+
+                $values = [];
+                foreach ($headers as $h) {
+                    $val = $row[$h] ?? '';
+                    if (is_string($val)) {
+                        $val = str_replace(["\r\n", "\r", "\n", "\t"], ' ', $val);
+                    }
+                    $values[] = $val;
+                }
+                fwrite($tmpHandle, json_encode($values, JSON_UNESCAPED_UNICODE) . "\n");
+                $rowCount++;
+            }
+            fclose($tmpHandle);
+            unset($lines);
+
+            if ($rowCount === 0) {
+                @unlink($tmpFile);
+                $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos con los filtros aplicados.', [
+                    'rows' => 0, 'progress' => 100,
+                ]);
+                return true;
+            }
+
+            $this->updateStatus(self::STATUS_PROCESSING, null, [
+                'progress' => 70,
+                'rows'     => $rowCount,
+                'message'  => 'Generando archivo Excel (desde R2)...',
+            ]);
+
+            // Generar Excel
+            $this->writeXlsxFromTmpFile($tmpFile, $filePath, $headers, $rowCount);
+            @unlink($tmpFile);
+
+            // Si >20K filas, es CSV
+            $format = 'xlsx';
+            if ($rowCount > 20000) {
+                $csvFilePath = str_replace('.xlsx', '.csv', $filePath);
+                if (file_exists($filePath)) {
+                    rename($filePath, $csvFilePath);
+                }
+                $filePath = $csvFilePath;
+                $filename = str_replace('.xlsx', '.csv', $filename);
+                $format = 'csv';
+            }
+
+            $fileSize    = filesize($filePath);
+            $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
+
+            $this->updateStatus(self::STATUS_COMPLETED, null, [
+                'progress'        => 100,
+                'rows'            => $rowCount,
+                'filename'        => $filename,
+                'file_path'       => $storagePath,
+                'file_size'       => $fileSize,
+                'file_size_human' => $this->humanFileSize($fileSize),
+                'format'          => $format,
+                'source'          => 'r2',
+            ]);
+
+            Log::info('FabricStreamExportJob: Excel generado desde R2', [
+                'job_id' => $this->jobId,
+                'rows'   => $rowCount,
+                'size'   => $fileSize,
+                'source' => 'r2',
+            ]);
+
+            return true;
+
+        } catch (\Throwable $e) {
+            Log::warning('FabricStreamExportJob: R2 falló, usando fallback', [
+                'job_id' => $this->jobId,
+                'error'  => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Fallback: Export descargando de Fabric request por request (lento pero confiable).
+     */
+    private function exportFromFabricDirect(User $user): void
+    {
         $url     = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token   = env('TOKEN_ADMIN', '');
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
