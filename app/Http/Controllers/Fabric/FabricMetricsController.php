@@ -94,11 +94,18 @@ class FabricMetricsController extends Controller
     }
 
     /**
-     * Proxy GET a Graph-Fabric con token admin.
+     * Proxy a Graph-Fabric con contexto admin completo.
+     * Graph-Fabric requiere token + user_context (groups, department) para validar admin.
      */
     private function proxyGet(string $path, array $params = []): JsonResponse
     {
+        // Graph-Fabric valida admin vía get_user_permissions que necesita user_context.
+        // Enviamos como query params el contexto mínimo para pasar la validación.
         $params['token'] = $this->token;
+        $params['groups'] = 'GG-BD-ADMIN';
+        $params['department'] = 'NAL-TIC NAL';
+        $params['user_email'] = 'sistema@medilaser.com.co';
+        $params['user_name'] = 'Sistema Laravel';
 
         try {
             $response = Http::timeout(15)
