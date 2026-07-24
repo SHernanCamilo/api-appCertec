@@ -102,7 +102,7 @@ final class FabricStreamExportJob implements ShouldQueue
         $this->updateStatus(self::STATUS_PROCESSING, null, [
             'progress' => 5,
             'rows'     => 0,
-            'message'  => 'Verificando cache R2...',
+            'message'  => 'Descargando de R2 (puede tardar 30-60s)...',
         ]);
 
         try {
