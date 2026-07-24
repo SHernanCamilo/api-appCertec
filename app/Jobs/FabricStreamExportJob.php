@@ -568,6 +568,19 @@ final class FabricStreamExportJob implements ShouldQueue
         while (($line = fgets($handle)) !== false) {
             $values = json_decode(trim($line), true);
             if ($values) {
+                // Limpiar decimales: 79249439.0000 → 79249439 | 1234.5600 → 1234.56
+                $values = array_map(function ($v) {
+                    if (is_numeric($v) && is_string($v) && str_contains($v, '.')) {
+                        // Valor numérico con decimales — limpiar ceros trailing
+                        $cleaned = rtrim(rtrim($v, '0'), '.');
+                        return $cleaned;
+                    }
+                    if (is_float($v)) {
+                        // Float de PHP — remover .0000 innecesarios
+                        return (floor($v) == $v) ? (int) $v : $v;
+                    }
+                    return $v;
+                }, $values);
                 fputcsv($out, $values, ';', '"', '\\');
             }
         }
