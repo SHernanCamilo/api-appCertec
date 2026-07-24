@@ -288,6 +288,14 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('fabric')->group(fu
     require __DIR__ . '/Fabric/FabricRouter.php';
 });
 
+// ── Dashboard de Rendimiento API (Organización > Servicios > Rendimiento)
+Route::middleware(['auth:api'])->prefix('system/performance')->group(function () {
+    Route::get('/', [\App\Http\Controllers\System\ApiPerformanceController::class, 'index']);
+    Route::get('/horizon', [\App\Http\Controllers\System\ApiPerformanceController::class, 'horizon']);
+    Route::get('/jobs', [\App\Http\Controllers\System\ApiPerformanceController::class, 'jobs']);
+    Route::get('/failed-jobs', [\App\Http\Controllers\System\ApiPerformanceController::class, 'failedJobs']);
+});
+
 // ── SSE Export Stream — PÚBLICO (sin JWT, jobId es token implícito)
 // EventSource no soporta headers Authorization → ruta sin auth middleware.
 Route::get('/fabric/viewer/export/stream/{jobId}', [\App\Http\Controllers\Fabric\FabricViewerController::class, 'exportStream'])
