@@ -131,14 +131,13 @@ final class FabricStreamExportJob implements ShouldQueue
                 return false;
             }
 
-            // R2 respondió con datos — decodificar NDJSON gzip
+            // R2 respondió con datos — escribir gzip a disco y decodificar por streaming
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => 20,
                 'rows'     => 0,
                 'message'  => 'Descargando desde cache R2...',
             ]);
 
-            $gzipData = $response->body();
             $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
 
             // Preparar directorio
@@ -149,33 +148,36 @@ final class FabricStreamExportJob implements ShouldQueue
             }
             $filePath = "{$dir}/{$filename}";
 
-            // Decodificar gzip → NDJSON → escribir a tmp file
-            $ndjson = gzdecode($gzipData);
-            unset($gzipData); // Liberar RAM
+            // Escribir gzip a disco (NO decodificar en RAM)
+            $gzipFile = "{$dir}/r2_data.gz";
+            file_put_contents($gzipFile, $response->body());
+            unset($response); // Liberar RAM del response
 
-            if (!$ndjson) {
-                Log::warning('FabricStreamExportJob: gzdecode falló', ['job_id' => $this->jobId]);
-                return false;
-            }
-
+            // Decodificar gzip por streaming → escribir a tmp file línea por línea
             $this->updateStatus(self::STATUS_PROCESSING, null, [
-                'progress' => 40,
+                'progress' => 35,
                 'rows'     => $totalRows,
                 'message'  => "Procesando {$totalRows} filas desde R2...",
             ]);
 
-            // Escribir a archivo temporal
             $tmpFile = "{$dir}/data.tmp";
-            $lines = explode("\n", trim($ndjson));
-            unset($ndjson); // Liberar RAM
-
             $headers = [];
-            $tmpHandle = fopen($tmpFile, 'w');
             $rowCount = 0;
 
-            foreach ($lines as $line) {
-                if (empty($line)) continue;
-                $row = json_decode($line, true);
+            $gzStream = gzopen($gzipFile, 'rb');
+            $tmpHandle = fopen($tmpFile, 'w');
+
+            if (!$gzStream || !$tmpHandle) {
+                @unlink($gzipFile);
+                Log::warning('FabricStreamExportJob: No se pudo abrir stream gz', ['job_id' => $this->jobId]);
+                return false;
+            }
+
+            while (!gzeof($gzStream)) {
+                $line = gzgets($gzStream, 1048576); // 1 MB max por línea
+                if ($line === false || trim($line) === '') continue;
+
+                $row = json_decode(trim($line), true);
                 if (!$row) continue;
 
                 if (empty($headers)) {
@@ -193,9 +195,21 @@ final class FabricStreamExportJob implements ShouldQueue
                 }
                 fwrite($tmpHandle, json_encode($values, JSON_UNESCAPED_UNICODE) . "\n");
                 $rowCount++;
+
+                // Actualizar progreso cada 50K filas
+                if ($rowCount % 50000 === 0) {
+                    $progress = min(65, 35 + intval($rowCount / max($totalRows, 1) * 30));
+                    $this->updateStatus(self::STATUS_PROCESSING, null, [
+                        'progress' => $progress,
+                        'rows'     => $rowCount,
+                        'message'  => "Procesando... ({$rowCount} filas)",
+                    ]);
+                }
             }
+
+            gzclose($gzStream);
             fclose($tmpHandle);
-            unset($lines);
+            @unlink($gzipFile); // Limpiar archivo gzip temporal
 
             if ($rowCount === 0) {
                 @unlink($tmpFile);
