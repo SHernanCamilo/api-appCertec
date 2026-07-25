@@ -2020,6 +2020,24 @@ class GraphFabricGatewayService
                     'error'    => $errType,
                 ]);
 
+                // Registrar en tabla de errores BI para monitoreo y auto-mantenimiento
+                if ($errSchema && $errView) {
+                    try {
+                        \App\Models\BiVistaErrorLog::registrar(
+                            schema: $errSchema,
+                            view: $errView,
+                            errorType: $errorCategory === 'TIMEOUT' ? \App\Models\BiVistaErrorLog::TYPE_TIMEOUT : \App\Models\BiVistaErrorLog::TYPE_FABRIC_ERROR,
+                            message: is_string($detail) ? substr($detail, 0, 500) : ($errType ?? 'Error desconocido'),
+                            detail: is_string($detail) ? $detail : json_encode($detail),
+                            userEmail: $body['user_email'] ?? null,
+                            department: $body['department'] ?? null,
+                            category: $errorCategory,
+                        );
+                    } catch (\Throwable $logErr) {
+                        // No interrumpir el flujo si falla el log
+                    }
+                }
+
                 // 5xx = problema del servidor Py → registrar fallo
                 if ($status >= 500) {
                     $this->circuitBreaker->recordFailure();
@@ -2041,6 +2059,28 @@ class GraphFabricGatewayService
                 'view'   => $body['view'] ?? null,
                 'error'  => $e->getMessage(),
             ]);
+
+            // Registrar timeout en tabla de errores BI
+            $tSchema = $body['schema_name'] ?? null;
+            $tView = $body['view'] ?? null;
+            if ($tSchema && $tView) {
+                try {
+                    \App\Models\BiVistaErrorLog::registrar(
+                        schema: $tSchema,
+                        view: $tView,
+                        errorType: \App\Models\BiVistaErrorLog::TYPE_TIMEOUT,
+                        message: 'Timeout: ' . substr($e->getMessage(), 0, 200),
+                        detail: $e->getMessage(),
+                        userEmail: $body['user_email'] ?? null,
+                        department: $body['department'] ?? null,
+                        elapsedMs: $this->timeout * 1000,
+                        category: 'TIMEOUT',
+                    );
+                } catch (\Throwable $logErr) {
+                    // No interrumpir
+                }
+            }
+
             return null;
         } catch (\Exception $e) {
             $this->circuitBreaker->recordFailure();

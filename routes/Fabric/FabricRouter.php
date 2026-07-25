@@ -108,6 +108,12 @@ Route::middleware(['auth:api'])->group(function () {
         Route::get('/history', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'history']);
         Route::get('/fabric/active', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'fabricActive']);
         Route::get('/fabric/summary', [\App\Http\Controllers\Fabric\FabricMetricsController::class, 'fabricSummary']);
+
+        // Logs de errores BI (timeout, fabric_error) — monitoreo y auto-mantenimiento
+        Route::get('/error-logs', [\App\Http\Controllers\Fabric\BiVistaErrorLogController::class, 'index']);
+        Route::get('/error-logs/by-view', [\App\Http\Controllers\Fabric\BiVistaErrorLogController::class, 'byView']);
+        Route::post('/error-logs/{id}/resolve', [\App\Http\Controllers\Fabric\BiVistaErrorLogController::class, 'resolve']);
+        Route::post('/error-logs/resolve-view', [\App\Http\Controllers\Fabric\BiVistaErrorLogController::class, 'resolveView']);
     });
 
     // =========================================================================
