@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use App\Services\GLPI\GLPIService;
 use App\Services\GLPI\GLPIComputerService;
+use App\Services\GLPI\GLPIComputerBulkService;
 use App\Services\MatrizObsolescenciaCalculatorService;
 use App\Models\MatrizObsolescencia\MatzobsActivosC;
 use App\Models\MatrizObsolescencia\MatzobsActivosD;
@@ -28,7 +29,10 @@ class SincronizarActivosGlpi extends Command
                            {--full-sync : Realizar sincronización completa de todos los activos}
                            {--skip-calculations : Omitir cálculos automáticos después de la sincronización}
                            {--calculate-only : Solo calcular valores, no sincronizar desde GLPI}
-                           {--sync-id= : ID de sincronización para actualizar progreso en cache}';
+                           {--sync-id= : ID de sincronización para actualizar progreso en cache}
+                           {--legacy-fetch : Usar la lectura antigua (una llamada por campo y por equipo)}
+                           {--compare-fetch= : Comparar N activos entre la lectura masiva y la antigua sin escribir en la base}
+                           {--modified-since= : Traer solo equipos con date_mod posterior a esta fecha (Y-m-d H:i:s)}';
 
     /**
      * The console command description.
@@ -38,13 +42,16 @@ class SincronizarActivosGlpi extends Command
     protected $glpiService;
     protected $glpiComputerService;
     protected $calculatorService;
+    protected $bulkService;
     protected $syncId = null; // ID de sincronización para progreso
+    protected $legacyFetch = false; // Lectura antigua: una llamada por campo y por equipo
     
     // Cache para evitar llamadas duplicadas
     protected $deviceMemoryTypeCache = [];
     protected $deviceProcessorCache = [];
     protected $agentCache = [];
     protected $agentParamsCache = []; // Cache para parámetros de agentes (empresa, sede, sucursal)
+    protected $diskCache = []; // Discos por equipo, para no pedirlos una vez por cada campo
     
     // Contadores para throttling
     protected $apiCallCount = 0;
@@ -56,12 +63,17 @@ class SincronizarActivosGlpi extends Command
     protected $pauseBetweenApiCalls = 50000; // microsegundos (0.05 segundos - reducido)
     protected $maxMemoryUsagePercent = 80; // Porcentaje máximo de memoria antes de limpiar caches
 
-    public function __construct(GLPIService $glpiService, GLPIComputerService $glpiComputerService, MatrizObsolescenciaCalculatorService $calculatorService)
-    {
+    public function __construct(
+        GLPIService $glpiService,
+        GLPIComputerService $glpiComputerService,
+        MatrizObsolescenciaCalculatorService $calculatorService,
+        GLPIComputerBulkService $bulkService
+    ) {
         parent::__construct();
         $this->glpiService = $glpiService;
         $this->glpiComputerService = $glpiComputerService;
         $this->calculatorService = $calculatorService;
+        $this->bulkService = $bulkService;
     }
 
     /**
@@ -81,6 +93,12 @@ class SincronizarActivosGlpi extends Command
         $skipCalculations = $this->option('skip-calculations');
         $calculateOnly = $this->option('calculate-only');
         $this->syncId = $this->option('sync-id'); // Capturar sync-id para progreso
+        $this->legacyFetch = (bool) $this->option('legacy-fetch');
+        $modifiedSince = $this->option('modified-since');
+
+        if ($compareFetch = (int) $this->option('compare-fetch')) {
+            return $this->handleCompareFetch($compareFetch);
+        }
 
         // Si solo se van a calcular valores, ejecutar el comando de cálculo
         if ($calculateOnly) {
@@ -128,6 +146,14 @@ class SincronizarActivosGlpi extends Command
         $this->info("   - Días de sincronización: {$syncDays}");
         $this->info("   - Sincronización completa: " . ($fullSync ? 'Sí' : 'No'));
         $this->info("   - Omitir cálculos: " . ($skipCalculations ? 'Sí' : 'No'));
+        $this->info("   - Lectura: " . ($this->legacyFetch ? 'antigua (una llamada por campo)' : 'masiva (/search + forcedisplay)'));
+        if ($modifiedSince) {
+            $this->info("   - Solo modificados desde: {$modifiedSince}");
+
+            if ($this->legacyFetch) {
+                $this->warn('   ⚠️  --modified-since se ignora con --legacy-fetch');
+            }
+        }
         if ($this->syncId) {
             $this->info("   - Sync ID: {$this->syncId}");
         }
@@ -153,7 +179,9 @@ class SincronizarActivosGlpi extends Command
 
         // Si es sincronización completa, obtener el total de activos en GLPI
         if ($fullSync) {
-            $totalAssets = $this->getTotalAssetsCount();
+            $totalAssets = $modifiedSince
+                ? $this->bulkService->contar($modifiedSince)
+                : $this->getTotalAssetsCount();
             if ($totalAssets > 0) {
                 $limit = $totalAssets;
                 $this->info("� Total de activos en GLPI: {$totalAssets}");
@@ -174,7 +202,7 @@ class SincronizarActivosGlpi extends Command
             $progressBar->setFormat('verbose');
 
             try {
-                $result = $this->processBatch($currentOffset, $currentBatchSize, $force, $syncDays, $progressBar, $skipCalculations);
+                $result = $this->processBatch($currentOffset, $currentBatchSize, $force, $syncDays, $progressBar, $skipCalculations, $modifiedSince);
                 
                 $progressBar->finish();
                 $this->newLine();
@@ -276,35 +304,6 @@ class SincronizarActivosGlpi extends Command
             }
         }
 
-        // Ejecutar cálculos finales si no se omitieron
-        if (!$skipCalculations && ($totalStats['created'] > 0 || $totalStats['updated'] > 0)) {
-            $this->info("\n🧮 Ejecutando cálculos automáticos para activos sincronizados...");
-            
-            try {
-                // Obtener IDs de activos que fueron creados o actualizados
-                $recentlyUpdated = MatzobsActivosC::where('date_u_sincronizacion', '>=', $startTime)
-                    ->pluck('id')
-                    ->toArray();
-                
-                if (!empty($recentlyUpdated)) {
-                    $calculationResult = $this->calculatorService->calcularValoresLote($recentlyUpdated, $batchSize);
-                    
-                    $this->info("✅ Cálculos completados:");
-                    $this->info("   - Activos calculados: {$calculationResult['exitosos']}");
-                    if ($calculationResult['errores'] > 0) {
-                        $this->warn("   - Errores en cálculos: {$calculationResult['errores']}");
-                    }
-                    
-                    $totalStats['calculations'] = $calculationResult;
-                }
-            } catch (\Exception $e) {
-                $this->warn("⚠️  Error ejecutando cálculos automáticos: " . $e->getMessage());
-                Log::channel('glpi_sync')->warning("Error en cálculos automáticos", [
-                    'error' => $e->getMessage()
-                ]);
-            }
-        }
-
         if ($checkDeleted || $fullSync) {
             $this->info("\n🔍 Verificando activos eliminados en GLPI...");
             $deletedCount = $this->checkDeletedAssets();
@@ -368,6 +367,175 @@ class SincronizarActivosGlpi extends Command
         }
     }
     
+    /**
+     * Compara el resultado del mapeo entre la lectura masiva y la antigua sobre los
+     * mismos activos, sin escribir en la base. Es el paso que demuestra que el
+     * cambio de origen de datos no altera lo que se guarda en la matriz.
+     */
+    private function handleCompareFetch(int $cantidad)
+    {
+        $this->info("🔬 Comparando lectura masiva contra lectura antigua en {$cantidad} activos");
+        $this->warn('   No se escribe nada en la base de datos.');
+
+        if (!$this->testGlpiConnection()) {
+            $this->error('❌ No se pudo conectar con GLPI.');
+            return 1;
+        }
+
+        $inicioMasivo = microtime(true);
+        $equiposMasivos = $this->bulkService->traerPagina(0, $cantidad, $this->option('modified-since'));
+        $segundosMasivo = microtime(true) - $inicioMasivo;
+
+        if (empty($equiposMasivos)) {
+            $this->error('❌ La lectura masiva no devolvió equipos.');
+            return 1;
+        }
+
+        $this->info('📦 Lectura masiva: ' . count($equiposMasivos) . ' equipos en ' . round($segundosMasivo, 2) . 's');
+
+        $campos = [
+            'nombre_equipo', 'agente', 'serial', 'ubicacion', 'usuario_glpi',
+            'id_empresa', 'id_sede', 'id_sucursal', 'placa',
+            'marca', 'tipo', 'referencia', 'sistema_operativo',
+            'tamano_ram', 'generacion_ram', 'procesador', 'numero_procesador',
+            'tipo_disco', 'tamano_disco', 'interfaz_conexion',
+        ];
+
+        $diferencias = [];
+        $iguales = 0;
+        $segundosAntiguo = 0;
+
+        $barra = $this->output->createProgressBar(count($equiposMasivos));
+        $barra->start();
+
+        foreach ($equiposMasivos as $equipoMasivo) {
+            $idGlpi = $equipoMasivo['id'];
+
+            try {
+                $inicioAntiguo = microtime(true);
+                $equipoAntiguo = $this->traerEquipoLegacy($idGlpi);
+                $segundosAntiguo += microtime(true) - $inicioAntiguo;
+
+                $valoresMasivos = $this->mapearParaComparar($equipoMasivo, false);
+                $valoresAntiguos = $this->mapearParaComparar($equipoAntiguo, true);
+
+                $difEquipo = [];
+                foreach ($campos as $campo) {
+                    $a = $valoresAntiguos[$campo] ?? null;
+                    $b = $valoresMasivos[$campo] ?? null;
+
+                    if ((string) $a !== (string) $b) {
+                        $difEquipo[$campo] = ['antigua' => $a, 'masiva' => $b];
+                    }
+                }
+
+                if (empty($difEquipo)) {
+                    $iguales++;
+                } else {
+                    $diferencias[$equipoMasivo['name'] . " (id {$idGlpi})"] = $difEquipo;
+                }
+
+            } catch (\Exception $e) {
+                $diferencias[$equipoMasivo['name'] . " (id {$idGlpi})"] = [
+                    'error' => ['antigua' => $e->getMessage(), 'masiva' => '-'],
+                ];
+            }
+
+            $barra->advance();
+        }
+
+        $barra->finish();
+        $this->newLine(2);
+
+        $total = count($equiposMasivos);
+        $this->info("✅ Idénticos: {$iguales} de {$total}");
+
+        if (!empty($diferencias)) {
+            $this->warn('⚠️  Con diferencias: ' . count($diferencias));
+
+            foreach ($diferencias as $equipo => $campos) {
+                $this->newLine();
+                $this->line("── {$equipo}");
+                $this->table(
+                    ['Campo', 'Lectura antigua', 'Lectura masiva'],
+                    array_map(
+                        fn($campo, $valores) => [
+                            $campo,
+                            $this->formatearValor($valores['antigua']),
+                            $this->formatearValor($valores['masiva']),
+                        ],
+                        array_keys($campos),
+                        $campos
+                    )
+                );
+            }
+        }
+
+        $this->newLine();
+        $this->info('⏱️  Tiempo de lectura para ' . $total . ' activos:');
+        $this->line('   - masiva:  ' . round($segundosMasivo, 2) . 's');
+        $this->line('   - antigua: ' . round($segundosAntiguo, 2) . 's');
+
+        if ($segundosMasivo > 0) {
+            $this->line('   - más rápida: ' . round($segundosAntiguo / max($segundosMasivo, 0.001), 1) . 'x');
+        }
+
+        return empty($diferencias) ? 0 : 2;
+    }
+
+    /**
+     * Trae un equipo por el camino antiguo, completando dispositivos si hace falta.
+     */
+    private function traerEquipoLegacy(int $idGlpi)
+    {
+        $computer = $this->glpiComputerService->getComputer($idGlpi, [
+            'expand_dropdowns' => true,
+            'with_devices' => true,
+            'with_infocoms' => true,
+        ]);
+
+        if (!isset($computer['devices']) || empty($computer['devices'])) {
+            $computer['devices'] = $this->glpiComputerService->getComputerDevices($idGlpi);
+        }
+
+        return $computer;
+    }
+
+    /**
+     * Ejecuta el mapeo real (mismas reglas de negocio) con los caches limpios para
+     * que ningún dato sembrado por un camino contamine al otro.
+     */
+    private function mapearParaComparar($computer, bool $legacy)
+    {
+        $modoAnterior = $this->legacyFetch;
+        $this->legacyFetch = $legacy;
+        $this->clearCaches();
+
+        try {
+            $activoC = $this->mapActivoC($computer);
+            $activoD = $this->mapActivoD($computer);
+        } finally {
+            $this->legacyFetch = $modoAnterior;
+        }
+
+        unset($activoC['date_u_sincronizacion'], $activoC['usuario_modificacion'], $activoC['puntaje']);
+
+        return array_merge($activoC, $activoD);
+    }
+
+    private function formatearValor($valor): string
+    {
+        if ($valor === null) {
+            return '(null)';
+        }
+
+        if ($valor === '') {
+            return '(vacío)';
+        }
+
+        return mb_strimwidth((string) $valor, 0, 60, '...');
+    }
+
     /**
      * Controla el throttling de llamadas API para evitar sobrecarga
      */
@@ -439,6 +607,7 @@ class SincronizarActivosGlpi extends Command
         $this->deviceProcessorCache = [];
         $this->agentCache = [];
         $this->agentParamsCache = [];
+        $this->diskCache = [];
         
         // Forzar garbage collection
         if (function_exists('gc_collect_cycles')) {
@@ -619,26 +788,18 @@ class SincronizarActivosGlpi extends Command
         }
     }
 
-    private function processBatch($offset, $batchSize, $force, $syncDays, $progressBar, $skipCalculations = false)
+    private function processBatch($offset, $batchSize, $force, $syncDays, $progressBar, $skipCalculations = false, $modifiedSince = null)
     {
         Log::channel('glpi_sync')->info("Iniciando lote", [
             'offset' => $offset,
             'batch_size' => $batchSize,
-            'sync_days' => $syncDays
+            'sync_days' => $syncDays,
+            'legacy_fetch' => $this->legacyFetch
         ]);
 
-        // Obtener activos de GLPI usando el servicio existente con retry
-        $computers = $this->apiCallWithRetry(function() use ($offset, $batchSize) {
-            return $this->glpiComputerService->getAllComputers([
-                'range' => "{$offset}-" . ($offset + $batchSize - 1),
-                'expand_dropdowns' => true,
-                'with_devices' => true,
-                'with_softwares' => false, // No necesitamos software para matriz de obsolescencia
-                'with_connections' => false,
-                'with_networkports' => false,
-                'with_infocoms' => true // Información financiera para fechas
-            ]);
-        });
+        $computers = $this->legacyFetch
+            ? $this->fetchBatchLegacy($offset, $batchSize)
+            : $this->fetchBatchBulk($offset, $batchSize, $modifiedSince);
 
         $stats = [
             'processed' => 0,
@@ -657,8 +818,9 @@ class SincronizarActivosGlpi extends Command
 
         foreach ($computers as $computer) {
             try {
-                // Obtener dispositivos adicionales si no están incluidos
-                if (!isset($computer['devices']) || empty($computer['devices'])) {
+                // La lectura antigua necesita completar los dispositivos; la masiva
+                // ya los trae resueltos en la misma respuesta.
+                if ($this->legacyFetch && (!isset($computer['devices']) || empty($computer['devices']))) {
                     $computer['devices'] = $this->apiCallWithRetry(function() use ($computer) {
                         return $this->glpiComputerService->getComputerDevices($computer['id']);
                     });
@@ -694,6 +856,93 @@ class SincronizarActivosGlpi extends Command
         ]);
 
         return $stats;
+    }
+
+    /**
+     * Lectura masiva: una sola petición por lote con todos los campos resueltos.
+     */
+    private function fetchBatchBulk($offset, $batchSize, $modifiedSince = null)
+    {
+        $computers = $this->apiCallWithRetry(function() use ($offset, $batchSize, $modifiedSince) {
+            return $this->bulkService->traerPagina($offset, $batchSize, $modifiedSince);
+        });
+
+        // El tag del agente ya viene en la búsqueda, así que se siembra el cache que
+        // extractAgentTag consulta antes de llamar a la API.
+        foreach ($computers as $computer) {
+            if (!empty($computer['_pf']['agente'])) {
+                $this->agentCache[$computer['id']] = $computer['_pf']['agente'];
+            }
+        }
+
+        return $computers;
+    }
+
+    /**
+     * Lectura antigua, conservada para poder comparar y como plan de rollback.
+     */
+    private function fetchBatchLegacy($offset, $batchSize)
+    {
+        $computers = $this->apiCallWithRetry(function() use ($offset, $batchSize) {
+            return $this->glpiComputerService->getAllComputers([
+                'range' => "{$offset}-" . ($offset + $batchSize - 1),
+                'expand_dropdowns' => true,
+                'with_devices' => true,
+                'with_softwares' => false, // No necesitamos software para matriz de obsolescencia
+                'with_connections' => false,
+                'with_networkports' => false,
+                'with_infocoms' => true // Información financiera para fechas
+            ]);
+        });
+
+        return is_array($computers) ? $computers : [$computers];
+    }
+
+    /**
+     * Discos de un equipo, resueltos una sola vez.
+     *
+     * Antes cada uno de los tres campos de disco creaba su propio
+     * ComputerDetailController, que abría una sesión nueva de GLPI y repetía las
+     * mismas peticiones: 12 llamadas por equipo para los mismos datos.
+     */
+    private function getComputerDisks($computer)
+    {
+        $computerId = $computer['id'];
+
+        if (isset($this->diskCache[$computerId])) {
+            return $this->diskCache[$computerId];
+        }
+
+        $discos = $this->legacyFetch
+            ? $this->getComputerDisksLegacy($computerId)
+            : $this->bulkService->discosDeEquipo($computerId);
+
+        $this->diskCache[$computerId] = $discos;
+
+        return $discos;
+    }
+
+    private function getComputerDisksLegacy($computerId)
+    {
+        try {
+            $controller = new \App\Http\Controllers\GLPI\ComputerDetailController($this->glpiService);
+            $respuesta = $controller->getDiskInfo($computerId);
+
+            if ($respuesta->getStatusCode() !== 200) {
+                return [];
+            }
+
+            $datos = json_decode($respuesta->getContent(), true);
+
+            return $datos['success'] ? ($datos['data']['disks'] ?? []) : [];
+
+        } catch (\Exception $e) {
+            Log::channel('glpi_sync')->warning("Error obteniendo discos (lectura antigua) del equipo {$computerId}", [
+                'error' => $e->getMessage()
+            ]);
+
+            return [];
+        }
     }
 
     private function syncComputer($computer, $force, $syncDays = 7, &$stats = null)
@@ -1405,6 +1654,11 @@ class SincronizarActivosGlpi extends Command
      */
     private function extractUserName($computer)
     {
+        // La lectura masiva ya resolvió el usuario contra el directorio en memoria
+        if (array_key_exists('usuario_glpi', $computer['_pf'] ?? [])) {
+            return $computer['_pf']['usuario_glpi'];
+        }
+
         $userId = null;
         
         // Buscar en el array de links el segundo href que contiene "User"
@@ -1469,6 +1723,10 @@ class SincronizarActivosGlpi extends Command
      */
     private function extractOperatingSystem($computer)
     {
+        if (isset($computer['_pf']['sistema_operativo'])) {
+            return $computer['_pf']['sistema_operativo'];
+        }
+
         $computerId = $computer['id'] ?? null;
         
         if (!$computerId) {
@@ -1887,12 +2145,11 @@ class SincronizarActivosGlpi extends Command
     private function extractDiskType($computer)
     {
         try {
-            // Método 1: Usar el ComputerDetailController para obtener información completa de discos
-            $computerDetailController = new \App\Http\Controllers\GLPI\ComputerDetailController($this->glpiService);
-            $diskInfoResponse = $computerDetailController->getDiskInfo($computer['id']);
+            // Los discos se resuelven una sola vez por equipo y se reutilizan
+            $discos = $this->getComputerDisks($computer);
             
-            if ($diskInfoResponse->getStatusCode() === 200) {
-                $diskData = json_decode($diskInfoResponse->getContent(), true);
+            if (!empty($discos)) {
+                $diskData = ['success' => true, 'data' => ['disks' => $discos]];
                 
                 if ($diskData['success'] && !empty($diskData['data']['disks'])) {
                     // Determinar el tipo de disco basado en la interfaz y designación
@@ -1969,12 +2226,11 @@ class SincronizarActivosGlpi extends Command
     private function extractDiskSize($computer)
     {
         try {
-            // Método 1: Usar el ComputerDetailController para obtener información completa de discos
-            $computerDetailController = new \App\Http\Controllers\GLPI\ComputerDetailController($this->glpiService);
-            $diskInfoResponse = $computerDetailController->getDiskInfo($computer['id']);
+            // Los discos se resuelven una sola vez por equipo y se reutilizan
+            $discos = $this->getComputerDisks($computer);
             
-            if ($diskInfoResponse->getStatusCode() === 200) {
-                $diskData = json_decode($diskInfoResponse->getContent(), true);
+            if (!empty($discos)) {
+                $diskData = ['success' => true, 'data' => ['disks' => $discos]];
                 
                 if ($diskData['success'] && !empty($diskData['data']['disks'])) {
                     // Calcular capacidad total excluyendo discos SD y USB
@@ -1992,7 +2248,7 @@ class SincronizarActivosGlpi extends Command
                             continue;
                         }
                         
-                        $totalCapacidadMiB += (int) ($disk['capacity'] ?? 0);
+                        $totalCapacidadMiB += (int) ($disk['capacity'] ?? $disk['capacity_mb'] ?? 0);
                     }
                     
                     if ($totalCapacidadMiB > 0) {
@@ -2066,12 +2322,11 @@ class SincronizarActivosGlpi extends Command
     private function extractDiskInterface($computer)
     {
         try {
-            // Método 1: Usar el ComputerDetailController para obtener información completa de discos
-            $computerDetailController = new \App\Http\Controllers\GLPI\ComputerDetailController($this->glpiService);
-            $diskInfoResponse = $computerDetailController->getDiskInfo($computer['id']);
+            // Los discos se resuelven una sola vez por equipo y se reutilizan
+            $discos = $this->getComputerDisks($computer);
             
-            if ($diskInfoResponse->getStatusCode() === 200) {
-                $diskData = json_decode($diskInfoResponse->getContent(), true);
+            if (!empty($discos)) {
+                $diskData = ['success' => true, 'data' => ['disks' => $discos]];
                 
                 if ($diskData['success'] && !empty($diskData['data']['disks'])) {
                     // Tomar la interfaz del primer disco (o combinar si hay múltiples)
