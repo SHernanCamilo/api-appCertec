@@ -102,16 +102,17 @@ return [
             ],
 
             // Workers DEDICADOS para exports Excel/CSV (aislados, no bloquean la API)
+            // ⚠️ Limitado a 1 proceso para prevenir OOM (cada export puede usar ~1.5GB real)
             'export-workers' => [
                 'connection' => 'redis',
                 'queue' => ['exports'],
                 'balance' => 'auto',
                 'autoScalingStrategy' => 'size',
                 'minProcesses' => 1,
-                'maxProcesses' => 3,
+                'maxProcesses' => 1,  // Solo 1 export a la vez (previene OOM en 16GB)
                 'maxTime' => 3600,
-                'maxJobs' => 50,  // Reciclar después de 50 exports (liberar memoria)
-                'memory' => 1024, // 1 GB por worker (exports grandes)
+                'maxJobs' => 30,  // Reciclar después de 30 exports (liberar memoria)
+                'memory' => 768,  // 768MB límite (PhpSpreadsheet puede usar 2x internamente)
                 'tries' => 1,
                 'timeout' => 900, // 15 min max por export
                 'nice' => 10,     // Prioridad baja (no afectar API)
@@ -148,17 +149,17 @@ return [
                 'nice' => 0,
             ],
 
-            // Workers DEDICADOS para exports (misma config que production)
+            // Workers DEDICADOS para exports (mismo límite que production)
             'export-workers' => [
                 'connection' => 'redis',
                 'queue' => ['exports'],
                 'balance' => 'auto',
                 'autoScalingStrategy' => 'size',
                 'minProcesses' => 1,
-                'maxProcesses' => 3,
+                'maxProcesses' => 1,
                 'maxTime' => 3600,
-                'maxJobs' => 50,
-                'memory' => 1024,
+                'maxJobs' => 30,
+                'memory' => 768,
                 'tries' => 1,
                 'timeout' => 900,
                 'nice' => 10,
