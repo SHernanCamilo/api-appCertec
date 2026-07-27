@@ -18,6 +18,8 @@ Route::prefix('bi-grupos')->group(function () {
     Route::put('/{id}/delegaciones', [BiDelegacionController::class, 'update']);
     Route::get('/{id}/delegaciones-usuarios', [BiDelegacionController::class, 'showUsuario']);
     Route::put('/{id}/delegaciones-usuarios', [BiDelegacionController::class, 'updateUsuario']);
+    Route::get('/{id}/delegaciones-esquemas', [BiDelegacionController::class, 'showEsquema']);
+    Route::put('/{id}/delegaciones-esquemas', [BiDelegacionController::class, 'updateEsquema']);
     Route::get('/', [BiGrupoController::class, 'index']);
     Route::post('/', [BiGrupoController::class, 'store']);
     Route::get('/{id}', [BiGrupoController::class, 'show']);

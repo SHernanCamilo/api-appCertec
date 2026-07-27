@@ -6,10 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Models\BiGrupo;
 use App\Models\BiVista;
 use App\Models\BiVistaDelegacion;
+use App\Models\BiVistaDelegacionEsquema;
 use App\Models\BiVistaDelegacionUsuario;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class BiDelegacionController extends Controller
@@ -250,7 +252,7 @@ class BiDelegacionController extends Controller
                     ->where('id_bi_grupos', $grupo->id)
                     ->delete();
 
-                \Illuminate\Support\Facades\Cache::forget('bi_vista_delegacion_usuarios_index');
+                Cache::forget('bi_vista_delegacion_usuarios_index');
 
                 foreach ($validIds as $vistaId) {
                     BiVistaDelegacionUsuario::create([
@@ -274,6 +276,149 @@ class BiDelegacionController extends Controller
             ]);
         } catch (\Exception $e) {
             return $this->error('Error al guardar delegación por usuario', $e);
+        }
+    }
+
+    /**
+     * GET /api/fabric/bi-grupos/{id}/delegaciones-esquemas?destino_id=X
+     *
+     * Lista vistas del esquema origen (id) y cuáles están delegadas al esquema destino.
+     * Quien tenga el esquema destino podrá ver esas vistas del origen.
+     */
+    public function showEsquema(Request $request, int $id): JsonResponse
+    {
+        $request->validate([
+            'destino_id' => 'required|exists:bi_grupos,id',
+        ]);
+
+        try {
+            $origen  = BiGrupo::findOrFail($id);
+            $destino = BiGrupo::findOrFail((int) $request->destino_id);
+
+            if ((int) $destino->id === (int) $origen->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El esquema destino debe ser distinto al esquema origen.',
+                ], 422);
+            }
+
+            if ($origen->empresa_id === null || $destino->empresa_id === null
+                || (int) $origen->empresa_id !== (int) $destino->empresa_id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Solo se puede delegar entre esquemas de la misma empresa.',
+                ], 422);
+            }
+
+            $vistas = BiVista::query()
+                ->where('id_bi_grupos', $origen->id)
+                ->orderBy('nombre')
+                ->get(['id', 'nombre', 'descripcion', 'estado']);
+
+            $delegadas = BiVistaDelegacionEsquema::query()
+                ->where('id_bi_grupos_origen', $origen->id)
+                ->where('id_bi_grupos_destino', $destino->id)
+                ->pluck('id_bi_vista')
+                ->all();
+
+            $delegadasSet = array_flip($delegadas);
+
+            $items = $vistas->map(fn (BiVista $v) => [
+                'id'          => $v->id,
+                'nombre'      => $v->nombre,
+                'descripcion' => $v->descripcion,
+                'estado'      => $v->estado,
+                'delegada'    => isset($delegadasSet[$v->id]),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data'    => [
+                    'empresa_id'           => (int) $origen->empresa_id,
+                    'id_bi_grupos_origen'  => $origen->id,
+                    'id_bi_grupos_destino' => $destino->id,
+                    'schema_origen'        => $origen->codigo,
+                    'schema_destino'       => $destino->codigo,
+                    'tiene_config'         => count($delegadas) > 0,
+                    'vista_ids'            => array_values($delegadas),
+                    'vistas'               => $items,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            return $this->error('Error al consultar delegación por esquema', $e);
+        }
+    }
+
+    /**
+     * PUT /api/fabric/bi-grupos/{id}/delegaciones-esquemas
+     * Body: { destino_id, vista_ids: number[] }
+     */
+    public function updateEsquema(Request $request, int $id): JsonResponse
+    {
+        $request->validate([
+            'destino_id'  => 'required|exists:bi_grupos,id',
+            'vista_ids'   => 'present|array',
+            'vista_ids.*' => 'integer|exists:bi_vistas,id',
+        ]);
+
+        try {
+            $origen  = BiGrupo::findOrFail($id);
+            $destino = BiGrupo::findOrFail((int) $request->destino_id);
+            $vistaIds = array_values(array_unique(array_map('intval', $request->input('vista_ids', []))));
+
+            if ((int) $destino->id === (int) $origen->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'El esquema destino debe ser distinto al esquema origen.',
+                ], 422);
+            }
+
+            if ($origen->empresa_id === null || $destino->empresa_id === null
+                || (int) $origen->empresa_id !== (int) $destino->empresa_id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Solo se puede delegar entre esquemas de la misma empresa.',
+                ], 422);
+            }
+
+            $validIds = BiVista::query()
+                ->where('id_bi_grupos', $origen->id)
+                ->whereIn('id', $vistaIds)
+                ->pluck('id')
+                ->all();
+
+            $empresaId = (int) $origen->empresa_id;
+
+            DB::transaction(function () use ($empresaId, $origen, $destino, $validIds) {
+                BiVistaDelegacionEsquema::query()
+                    ->where('id_bi_grupos_origen', $origen->id)
+                    ->where('id_bi_grupos_destino', $destino->id)
+                    ->delete();
+
+                Cache::forget('bi_vista_delegacion_esquemas_index');
+
+                foreach ($validIds as $vistaId) {
+                    BiVistaDelegacionEsquema::create([
+                        'empresa_id'           => $empresaId,
+                        'id_bi_grupos_origen'  => $origen->id,
+                        'id_bi_grupos_destino' => $destino->id,
+                        'id_bi_vista'          => $vistaId,
+                    ]);
+                }
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => count($validIds) . ' vista(s) delegada(s) al esquema ' . $destino->codigo,
+                'data'    => [
+                    'empresa_id'           => $empresaId,
+                    'id_bi_grupos_origen'  => $origen->id,
+                    'id_bi_grupos_destino' => $destino->id,
+                    'vista_ids'            => $validIds,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            return $this->error('Error al guardar delegación por esquema', $e);
         }
     }
 
