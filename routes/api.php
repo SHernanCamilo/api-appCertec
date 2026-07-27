@@ -429,51 +429,7 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('inventario')->grou
     require __DIR__ . '/Inventory/InventoryRouter.php';
 });
 
-// ── Tablero de Urgencias — Acceso público O autenticado con rol "Tablero"
-// Si hay token JWT → filtra por la sucursal del usuario
-// Si no hay token → devuelve todos (para pantallas de TV)
-Route::get('/tablero-urgencias', function (\Illuminate\Http\Request $request) {
-    try {
-        // Intentar autenticar si viene token (no obligatorio)
-        $user = null;
-        $sucursalFilter = null;
-        try {
-            if ($request->bearerToken() || $request->query('token')) {
-                if (!$request->bearerToken() && $request->query('token')) {
-                    $request->headers->set('Authorization', 'Bearer ' . $request->query('token'));
-                }
-                $user = auth('api')->user();
-                if ($user && $user->id_sucursal) {
-                    // Obtener nombre de sucursal para filtrar
-                    $sucursal = $user->sucursal;
-                    if ($sucursal) {
-                        $sucursalFilter = $sucursal->nombre;
-                    }
-                }
-            }
-        } catch (\Exception $e) {
-            // Sin auth válido → acceso público sin filtro
-        }
-
-        $cacheKey = 'tablero_urgencias_' . ($sucursalFilter ?? 'all');
-        $data = \Illuminate\Support\Facades\Cache::remember($cacheKey, 30, function () use ($sucursalFilter) {
-            $fabric = app(\App\Services\Fabric\FabricConnectionService::class);
-            $sql = "SELECT * FROM [UG].[VW_HC_TableroUrgencias]";
-            if ($sucursalFilter) {
-                $sql .= " WHERE Sede = ?";
-                return $fabric->query($sql, [$sucursalFilter]);
-            }
-            return $fabric->query($sql . " ORDER BY Sede, Unidad");
-        });
-
-        return response()->json([
-            'success'   => true,
-            'data'      => $data,
-            'sucursal'  => $sucursalFilter,
-            'filtered'  => $sucursalFilter !== null,
-        ]);
-    } catch (\Exception $e) {
-        \Illuminate\Support\Facades\Log::error('TableroUrgencias: ' . $e->getMessage());
-        return response()->json(['success' => false, 'message' => 'Error consultando tablero.'], 503);
-    }
+// ── Tableros (Urgencias, etc.) — Requiere auth + rol "Tablero"
+Route::middleware(['auth:api'])->prefix('tableros')->group(function () {
+    require __DIR__ . '/Tableros/TablerosRouter.php';
 });
