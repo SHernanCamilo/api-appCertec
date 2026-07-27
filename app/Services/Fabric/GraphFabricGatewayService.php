@@ -1554,6 +1554,8 @@ class GraphFabricGatewayService
                 'sort_dir'    => $options['sort_dir'] ?? 'asc',
                 'max_rows'    => min((int)($options['max_rows'] ?? 100000), 1048576),
                 'format'      => $options['format'] ?? 'gzip',
+                // Columnas que deben preservar ceros iniciales (texto, no número)
+                'text_columns' => $options['text_columns'] ?? [],
             ]
         );
 

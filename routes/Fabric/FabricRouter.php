@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Fabric\HcReportViewerController;
 use App\Http\Controllers\Fabric\FabricViewerController;
+use App\Http\Controllers\Fabric\LecturaPdfController;
 
 /**
  * Rutas del módulo Fabric / Microsoft Analytics
@@ -94,6 +95,14 @@ Route::middleware(['auth:api'])->group(function () {
         Route::put('/{id}', [\App\Http\Controllers\AllowedDomainController::class, 'update']);
         Route::delete('/{id}', [\App\Http\Controllers\AllowedDomainController::class, 'destroy']);
         Route::patch('/{id}/toggle', [\App\Http\Controllers\AllowedDomainController::class, 'toggleStatus']);
+    });
+
+    // =========================================================================
+    // Lecturas Imagenología — Servir PDFs desde Azure File Share
+    // =========================================================================
+    Route::prefix('lecturas')->group(function () {
+        Route::get('/pdf', [LecturaPdfController::class, 'show']);
+        Route::get('/pdf/check', [LecturaPdfController::class, 'check']);
     });
 
     // =========================================================================

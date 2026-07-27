@@ -428,3 +428,19 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('config/secuencias'
 Route::middleware(['auth:api', 'check.user.active'])->prefix('inventario')->group(function () {
     require __DIR__ . '/Inventory/InventoryRouter.php';
 });
+
+// ── Tablero de Urgencias — PÚBLICO (sin auth, para pantallas de TV en sedes)
+// Consulta [UG].[VW_HC_TableroUrgencias] en Fabric con cache de 30s.
+Route::get('/tablero-urgencias', function () {
+    try {
+        $data = \Illuminate\Support\Facades\Cache::remember('tablero_urgencias_data', 30, function () {
+            $fabric = app(\App\Services\Fabric\FabricConnectionService::class);
+            return $fabric->query("SELECT * FROM [UG].[VW_HC_TableroUrgencias] ORDER BY Sede, Unidad");
+        });
+
+        return response()->json(['success' => true, 'data' => $data]);
+    } catch (\Exception $e) {
+        \Illuminate\Support\Facades\Log::error('TableroUrgencias: ' . $e->getMessage());
+        return response()->json(['success' => false, 'message' => 'Error consultando tablero.'], 503);
+    }
+});

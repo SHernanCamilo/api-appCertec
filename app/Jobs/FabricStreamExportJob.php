@@ -40,6 +40,19 @@ final class FabricStreamExportJob implements ShouldQueue
     private const STATUS_COMPLETED  = 'completed';
     private const STATUS_FAILED     = 'failed';
 
+    /**
+     * Patrones de nombres de columnas que SIEMPRE deben tratarse como texto.
+     * Esto previene que Excel elimine ceros iniciales en cuentas, placas, NIT, etc.
+     * Se usa como respaldo cuando el valor ya llegó convertido a número desde Python.
+     */
+    private const TEXT_COLUMN_PATTERNS = [
+        'nro_cuenta', 'num_cuenta', 'numero_cuenta', 'cuenta_bancaria',
+        'placa', 'codigo', 'cod_', 'nit', 'documento', 'cedula',
+        'identificacion', 'telefono', 'celular', 'consecutivo',
+        'codigo_proveedor', 'codigo_banco', 'num_', 'nro_',
+        'referencia', 'poliza', 'contrato',
+    ];
+
     public function __construct(
         private readonly string $jobId,
         private readonly int    $userId,
@@ -315,6 +328,8 @@ final class FabricStreamExportJob implements ShouldQueue
             'sort_col'    => $this->options['sort_col'] ?? '',
             'sort_dir'    => $this->options['sort_dir'] ?? 'asc',
             'skip_count'  => true,
+            // Hint para que la API Python devuelva estas columnas como string (preserva ceros)
+            'text_columns' => $this->options['text_columns'] ?? [],
         ];
 
         // Paso 1: Descargar todos los datos a archivo temporal (no en RAM)
@@ -486,9 +501,11 @@ final class FabricStreamExportJob implements ShouldQueue
         fgets($handle); // Skip header line (json de headers)
         $row = 5;
 
-        // Detectar columnas que son fechas (por nombre o contenido del header)
+        // Detectar columnas que son fechas y columnas de texto (ceros iniciales)
         $dateColumns = [];
-        // Leer primera línea de datos para detectar fechas
+        $textColumns = $this->detectTextColumns($headers);
+
+        // Leer primera línea de datos para detectar fechas y más columnas de texto
         $firstDataLine = fgets($handle);
         if ($firstDataLine) {
             $firstValues = json_decode(trim($firstDataLine), true);
@@ -498,22 +515,19 @@ final class FabricStreamExportJob implements ShouldQueue
                         $dateColumns[$i] = true;
                     }
                 }
-                // Escribir la primera fila
-                foreach ($firstValues as $i => $val) {
+                // Detección adicional por contenido de primera fila
+                $textColumns = $textColumns + $this->detectTextColumns($headers, $firstValues);
+
+                // Aplicar formato texto a las columnas enteras detectadas (para que Excel no las convierta)
+                foreach ($textColumns as $i => $true) {
                     $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
-                    if (isset($dateColumns[$i]) && is_string($val) && $val !== '') {
-                        $dateStr = str_replace('T', ' ', substr($val, 0, 19));
-                        try {
-                            $timestamp = \PhpOffice\PhpSpreadsheet\Shared\Date::PHPToExcel(new \DateTime($dateStr));
-                            $sheet->setCellValue("{$col}{$row}", $timestamp);
-                            $sheet->getStyle("{$col}{$row}")->getNumberFormat()->setFormatCode('yyyy-mm-dd hh:mm');
-                        } catch (\Exception $e) {
-                            $sheet->setCellValue("{$col}{$row}", $val);
-                        }
-                    } else {
-                        $sheet->setCellValueExplicit("{$col}{$row}", $val ?? '', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-                    }
+                    $sheet->getStyle("{$col}5:{$col}" . ($totalRows + 4))
+                        ->getNumberFormat()
+                        ->setFormatCode(\PhpOffice\PhpSpreadsheet\Style\NumberFormat::FORMAT_TEXT);
                 }
+
+                // Escribir la primera fila
+                $this->writeSpreadsheetRow($sheet, $row, $firstValues, $dateColumns, $textColumns);
                 $row++;
             }
         }
@@ -522,21 +536,7 @@ final class FabricStreamExportJob implements ShouldQueue
         while (($line = fgets($handle)) !== false) {
             $values = json_decode(trim($line), true);
             if ($values) {
-                foreach ($values as $i => $val) {
-                    $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
-                    if (isset($dateColumns[$i]) && is_string($val) && $val !== '') {
-                        $dateStr = str_replace('T', ' ', substr($val, 0, 19));
-                        try {
-                            $timestamp = \PhpOffice\PhpSpreadsheet\Shared\Date::PHPToExcel(new \DateTime($dateStr));
-                            $sheet->setCellValue("{$col}{$row}", $timestamp);
-                            $sheet->getStyle("{$col}{$row}")->getNumberFormat()->setFormatCode('yyyy-mm-dd hh:mm');
-                        } catch (\Exception $e) {
-                            $sheet->setCellValue("{$col}{$row}", $val);
-                        }
-                    } else {
-                        $sheet->setCellValueExplicit("{$col}{$row}", $val ?? '', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-                    }
-                }
+                $this->writeSpreadsheetRow($sheet, $row, $values, $dateColumns, $textColumns);
                 $row++;
             }
         }
@@ -554,6 +554,9 @@ final class FabricStreamExportJob implements ShouldQueue
      */
     private function writeXlsxLightweight(string $tmpFile, string $xlsxPath, array $headers, int $totalRows): void
     {
+        // Detectar columnas de texto por nombre (respaldo)
+        $textColumns = $this->detectTextColumns($headers);
+
         // Escribir directo al path recibido (se renombrará a .csv después)
         $out = fopen($xlsxPath, 'w');
         // BOM UTF-8
@@ -565,22 +568,42 @@ final class FabricStreamExportJob implements ShouldQueue
         // Leer datos del tmp file línea por línea (0 RAM extra)
         $handle = fopen($tmpFile, 'r');
         fgets($handle); // Skip header line
+        $isFirstRow = true;
+
         while (($line = fgets($handle)) !== false) {
             $values = json_decode(trim($line), true);
             if ($values) {
-                // Limpiar decimales: 79249439.0000 → 79249439 | 1234.5600 → 1234.56
-                $values = array_map(function ($v) {
+                // En la primera fila, detectar columnas adicionales por contenido
+                if ($isFirstRow) {
+                    $textColumns = $textColumns + $this->detectTextColumns($headers, $values);
+                    $isFirstRow = false;
+                }
+
+                $values = array_map(function ($v, $i) use ($textColumns) {
+                    // Columnas detectadas como texto → fórmula Excel para forzar texto
+                    if (isset($textColumns[$i]) && $v !== null && $v !== '') {
+                        $strVal = (string) $v;
+                        if (is_numeric($strVal)) {
+                            return '="' . $strVal . '"';
+                        }
+                        return $v;
+                    }
+
+                    // String que empieza con 0 y es numérico → proteger con fórmula
+                    if (is_string($v) && preg_match('/^0\d+$/', $v)) {
+                        return '="' . $v . '"';
+                    }
+
+                    // Limpiar decimales innecesarios para números normales
                     if (is_numeric($v) && is_string($v) && str_contains($v, '.')) {
-                        // Valor numérico con decimales — limpiar ceros trailing
-                        $cleaned = rtrim(rtrim($v, '0'), '.');
-                        return $cleaned;
+                        return rtrim(rtrim($v, '0'), '.');
                     }
                     if (is_float($v)) {
-                        // Float de PHP — remover .0000 innecesarios
                         return (floor($v) == $v) ? (int) $v : $v;
                     }
                     return $v;
-                }, $values);
+                }, $values, array_keys($values));
+
                 fputcsv($out, $values, ';', '"', '\\');
             }
         }
@@ -653,5 +676,99 @@ final class FabricStreamExportJob implements ShouldQueue
             $i++;
         }
         return round($bytes, 1) . ' ' . $units[$i];
+    }
+
+    /**
+     * Escribe una fila en la hoja de cálculo respetando el tipo original de Fabric.
+     *
+     * Lógica simple:
+     *   - Si el valor vino como string desde Python/Fabric → se escribe como TEXTO (preserva ceros)
+     *   - Si vino como int/float → se escribe como NÚMERO
+     *   - Si es una fecha detectada → formato fecha Excel
+     *   - Columnas en TEXT_COLUMN_PATTERNS → siempre texto (respaldo por si Python lo convirtió a int)
+     */
+    private function writeSpreadsheetRow(
+        \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet,
+        int $row,
+        array $values,
+        array $dateColumns,
+        array $textColumns
+    ): void {
+        foreach ($values as $i => $val) {
+            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
+            $cell = "{$col}{$row}";
+
+            // Columna de fecha → formato fecha Excel
+            if (isset($dateColumns[$i]) && is_string($val) && $val !== '') {
+                $dateStr = str_replace('T', ' ', substr($val, 0, 19));
+                try {
+                    $timestamp = \PhpOffice\PhpSpreadsheet\Shared\Date::PHPToExcel(new \DateTime($dateStr));
+                    $sheet->setCellValue($cell, $timestamp);
+                    $sheet->getStyle($cell)->getNumberFormat()->setFormatCode('yyyy-mm-dd hh:mm');
+                } catch (\Exception $e) {
+                    $sheet->setCellValueExplicit($cell, $val, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+                }
+                continue;
+            }
+
+            // Columna forzada como texto por nombre (Nro_Cuenta, Placa, etc.)
+            if (isset($textColumns[$i])) {
+                $sheet->setCellValueExplicit($cell, (string) ($val ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+                continue;
+            }
+
+            // Valor que Python/Fabric envió como STRING → preservar tal cual (protege ceros iniciales)
+            if (is_string($val)) {
+                $sheet->setCellValueExplicit($cell, $val, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+                continue;
+            }
+
+            // Valor numérico (int o float) → dejarlo como número para que Excel opere con él
+            if (is_int($val) || is_float($val)) {
+                $sheet->setCellValue($cell, $val);
+                continue;
+            }
+
+            // Null o cualquier otro → string vacío
+            $sheet->setCellValueExplicit($cell, '', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+        }
+    }
+
+    /**
+     * Detecta qué columnas deben tratarse como texto para preservar ceros iniciales.
+     *
+     * Combina dos estrategias:
+     *   1. Matching por nombre de columna (TEXT_COLUMN_PATTERNS)
+     *   2. Detección de valores que empiezan con "0" seguido de más dígitos
+     *
+     * @param array $headers Nombres de las columnas
+     * @param array|null $firstRow Primera fila de valores (para detección por contenido)
+     * @return array<int, bool> Mapa de índice → true si es columna de texto
+     */
+    private function detectTextColumns(array $headers, ?array $firstRow = null): array
+    {
+        $textColumns = [];
+
+        foreach ($headers as $i => $header) {
+            $headerLower = strtolower($header);
+
+            // Estrategia 1: nombre de columna coincide con patrones conocidos
+            foreach (self::TEXT_COLUMN_PATTERNS as $pattern) {
+                if (str_contains($headerLower, $pattern)) {
+                    $textColumns[$i] = true;
+                    break;
+                }
+            }
+
+            // Estrategia 2: el valor en la primera fila empieza con 0 y es numérico
+            if (!isset($textColumns[$i]) && $firstRow !== null && isset($firstRow[$i])) {
+                $val = (string) ($firstRow[$i] ?? '');
+                if (preg_match('/^0\d+$/', $val)) {
+                    $textColumns[$i] = true;
+                }
+            }
+        }
+
+        return $textColumns;
     }
 }
