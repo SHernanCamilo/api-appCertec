@@ -7,6 +7,7 @@ use App\Models\UserGrup;
 use App\Models\BiGrupo;
 use App\Models\BiVista;
 use App\Models\BiVistaDelegacion;
+use App\Models\BiVistaDelegacionEsquema;
 use App\Models\BiVistaDelegacionUsuario;
 use App\Models\Sede;
 use App\Models\Sucursal;
@@ -56,9 +57,10 @@ class GraphFabricGatewayService
      */
     public function getGruposBd(User $user, ?int $tipo = null): array
     {
-        $grupos    = $this->getGruposBdDirectos($user, $tipo);
-        $delegados = $this->getGruposDelegadosPorEmpresa($user, $tipo);
-        $grupos    = array_values(array_unique(array_merge($grupos, $delegados)));
+        $grupos     = $this->getGruposBdDirectos($user, $tipo);
+        $delegados  = $this->getGruposDelegadosPorEmpresa($user, $tipo);
+        $porEsquema = $this->getGruposDelegadosPorEsquema($user, $tipo);
+        $grupos     = array_values(array_unique(array_merge($grupos, $delegados, $porEsquema)));
 
         if ($tipo === null) {
             return $grupos;
@@ -149,6 +151,67 @@ class GraphFabricGatewayService
             ->unique()
             ->values()
             ->all();
+    }
+
+    /**
+     * Esquemas origen delegados por esquema: si el usuario tiene AA (destino),
+     * también recibe DF (origen) con las vistas configuradas en bi_vista_delegacion_esquemas.
+     *
+     * @return string[]  Códigos GG-BD-*
+     */
+    private function getGruposDelegadosPorEsquema(User $user, ?int $tipo = null): array
+    {
+        if (!Schema::hasTable('bi_vista_delegacion_esquemas')) {
+            return [];
+        }
+
+        $destinoIds = $this->getDirectGrupoIds($user);
+        if ($destinoIds === []) {
+            return [];
+        }
+
+        $origenIds = BiVistaDelegacionEsquema::query()
+            ->whereIn('id_bi_grupos_destino', $destinoIds)
+            ->distinct()
+            ->pluck('id_bi_grupos_origen')
+            ->all();
+
+        if ($origenIds === []) {
+            return [];
+        }
+
+        $query = BiGrupo::query()->whereIn('id', $origenIds);
+        if ($tipo !== null) {
+            $query->where('tipo', $tipo);
+        }
+
+        return $query->get(['codigo'])
+            ->map(function (BiGrupo $grupo) {
+                $codigo = strtoupper(trim($grupo->codigo));
+
+                return str_starts_with($codigo, 'GG-BD-') ? $codigo : 'GG-BD-' . $codigo;
+            })
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * IDs de bi_grupos con acceso directo (users_grups GG-BD-*).
+     *
+     * @return int[]
+     */
+    private function getDirectGrupoIds(User $user): array
+    {
+        $ids = [];
+        foreach ($this->getGruposBdDirectos($user) as $codigo) {
+            $grupo = $this->resolveBiGrupoByCodigo($codigo);
+            if ($grupo !== null) {
+                $ids[] = (int) $grupo->id;
+            }
+        }
+
+        return array_values(array_unique($ids));
     }
 
     /**
@@ -637,6 +700,10 @@ class GraphFabricGatewayService
             return true;
         }
 
+        if ($this->tieneVistaDelegadaPorEsquema($user, $viewName, $schema)) {
+            return true;
+        }
+
         if ($this->esVistaFormularioSoloEsquema($viewName, $schema)) {
             return true;
         }
@@ -790,23 +857,27 @@ class GraphFabricGatewayService
     }
 
     /**
-     * Aplica delegación de vistas (empresa / usuario).
+     * Aplica delegación de vistas (empresa / usuario / esquema).
      *
      * - Esquema con acceso directo (users_grups GG-BD-*): no se restringe el
      *   listado; se marcan las vistas delegadas al usuario (aditivo).
      * - Esquema solo por delegación: solo se dejan las vistas del pool
-     *   empresa/usuario y se marcan como delegadas.
+     *   empresa/usuario/esquema y se marcan como delegadas.
      *
      * Las vistas marcadas `es_delegada` omiten el filtro de sede posterior.
      */
     private function filterViewsByDelegacion(array $response, User $user): array
     {
-        if (!isset($response['schemas']) || !is_array($response['schemas']) || !Schema::hasTable('bi_vista_delegaciones')) {
+        $hasEmpresaTable = Schema::hasTable('bi_vista_delegaciones');
+        $hasEsquemaTable = Schema::hasTable('bi_vista_delegacion_esquemas');
+
+        if (!isset($response['schemas']) || !is_array($response['schemas'])
+            || (!$hasEmpresaTable && !$hasEsquemaTable)) {
             return $response;
         }
 
         $empresaIds = $user->empresas()->pluck('ent_empresas.id')->map(fn ($id) => (int) $id)->all();
-        if ($empresaIds === []) {
+        if ($empresaIds === [] && !$hasEsquemaTable) {
             return $response;
         }
 
@@ -818,8 +889,10 @@ class GraphFabricGatewayService
                 ->all()
         );
 
-        $delegacionIndex     = $this->getDelegacionIndex();
+        $delegacionIndex     = $hasEmpresaTable ? $this->getDelegacionIndex() : [];
         $userDelegacionIndex = $this->getDelegacionUsuarioIndex();
+        $esquemaIndex        = $hasEsquemaTable ? $this->getDelegacionEsquemaIndex() : [];
+        $directGrupoIds      = $this->getDirectGrupoIds($user);
 
         foreach ($response['schemas'] as &$schemaBlock) {
             $schema  = strtolower($schemaBlock['schema'] ?? '');
@@ -829,28 +902,28 @@ class GraphFabricGatewayService
                 continue;
             }
 
-            $delegadasSchema = $this->collectDelegatedNamesForSchema(
-                $user,
+            $schemaDelegadas = $this->collectSchemaDelegatedNamesForOrigen(
                 $grupoId,
-                $empresaIds,
-                $delegacionIndex,
-                $userDelegacionIndex
+                $directGrupoIds,
+                $esquemaIndex
             );
             $hasDirect = isset($directSchemas[$schema]);
 
             if ($hasDirect) {
                 // Acceso por esquema: conservar todas; marcar solo las delegadas al usuario
-                $userOnlyNames = $this->collectUserDelegatedNamesForSchema(
-                    $user,
-                    $grupoId,
-                    $empresaIds,
-                    $userDelegacionIndex
-                );
-                $userOnlySet = array_flip($userOnlyNames);
+                $userOnlyNames = $empresaIds === []
+                    ? []
+                    : $this->collectUserDelegatedNamesForSchema(
+                        $user,
+                        $grupoId,
+                        $empresaIds,
+                        $userDelegacionIndex
+                    );
+                $markSet = array_flip(array_merge($userOnlyNames, $schemaDelegadas));
 
                 foreach ($schemaBlock['views'] as &$view) {
                     $nombre = strtolower((string) ($view['view_name'] ?? ''));
-                    if ($nombre !== '' && isset($userOnlySet[$nombre])) {
+                    if ($nombre !== '' && isset($markSet[$nombre])) {
                         $view['es_delegada'] = true;
                     }
                 }
@@ -860,16 +933,31 @@ class GraphFabricGatewayService
                 continue;
             }
 
-            // Solo por delegación: whitelist usuario (si existe) o pool empresa
-            $userOnlyNames = $this->collectUserDelegatedNamesForSchema(
-                $user,
-                $grupoId,
-                $empresaIds,
-                $userDelegacionIndex
-            );
-            $permitidos = $userOnlyNames !== []
-                ? $userOnlyNames
-                : $delegadasSchema;
+            // Solo por delegación: whitelist usuario (si existe) o pool empresa/esquema
+            $userOnlyNames = $empresaIds === []
+                ? []
+                : $this->collectUserDelegatedNamesForSchema(
+                    $user,
+                    $grupoId,
+                    $empresaIds,
+                    $userDelegacionIndex
+                );
+
+            if ($userOnlyNames !== []) {
+                $permitidos = $userOnlyNames;
+            } else {
+                $empresaNames = $empresaIds === []
+                    ? []
+                    : $this->collectDelegatedNamesForSchema(
+                        $user,
+                        $grupoId,
+                        $empresaIds,
+                        $delegacionIndex,
+                        $userDelegacionIndex
+                    );
+                $permitidos = array_values(array_unique(array_merge($empresaNames, $schemaDelegadas)));
+            }
+
             $permitidosSet = array_flip($permitidos);
 
             $schemaBlock['views'] = array_values(array_filter(
@@ -1090,6 +1178,115 @@ class GraphFabricGatewayService
 
             return $index;
         });
+    }
+
+    /**
+     * @return array<string, array<int, string>>  "destino_grupo_id.origen_grupo_id" => [nombre_vista, ...]
+     */
+    private function getDelegacionEsquemaIndex(): array
+    {
+        if (!Schema::hasTable('bi_vista_delegacion_esquemas')) {
+            return [];
+        }
+
+        return Cache::remember('bi_vista_delegacion_esquemas_index', 300, function () {
+            $index = [];
+
+            BiVistaDelegacionEsquema::query()
+                ->with(['vista:id,nombre'])
+                ->get(['id_bi_grupos_destino', 'id_bi_grupos_origen', 'id_bi_vista'])
+                ->each(function (BiVistaDelegacionEsquema $row) use (&$index) {
+                    $nombre = $row->vista?->nombre;
+                    if ($nombre === null) {
+                        return;
+                    }
+
+                    $key           = $row->id_bi_grupos_destino . '.' . $row->id_bi_grupos_origen;
+                    $index[$key][] = $nombre;
+                });
+
+            return $index;
+        });
+    }
+
+    /**
+     * Vistas del esquema origen delegadas a alguno de los esquemas destino del usuario.
+     *
+     * @param  int[]  $directGrupoIds
+     * @param  array<string, array<int, string>>  $esquemaIndex
+     * @return string[] lowercase
+     */
+    private function collectSchemaDelegatedNamesForOrigen(
+        int $origenGrupoId,
+        array $directGrupoIds,
+        array $esquemaIndex
+    ): array {
+        $names = [];
+
+        foreach ($directGrupoIds as $destinoId) {
+            $key = $destinoId . '.' . $origenGrupoId;
+            foreach ($esquemaIndex[$key] ?? [] as $nombre) {
+                $names[strtolower($nombre)] = true;
+            }
+        }
+
+        return array_keys($names);
+    }
+
+    /**
+     * ¿La vista está delegada por esquema a algún GG-BD-* directo del usuario?
+     */
+    private function tieneVistaDelegadaPorEsquema(User $user, string $viewName, ?string $schema = null): bool
+    {
+        if (!Schema::hasTable('bi_vista_delegacion_esquemas')) {
+            return false;
+        }
+
+        $nombre = strtolower(trim($viewName));
+        if ($nombre === '') {
+            return false;
+        }
+
+        $directGrupoIds = $this->getDirectGrupoIds($user);
+        if ($directGrupoIds === []) {
+            return false;
+        }
+
+        $index = $this->getDelegacionEsquemaIndex();
+
+        if ($schema !== null && trim($schema) !== '') {
+            $origenGrupoId = $this->resolveGrupoIdBySchema($schema);
+            if ($origenGrupoId === null) {
+                return false;
+            }
+
+            $names = $this->collectSchemaDelegatedNamesForOrigen(
+                $origenGrupoId,
+                $directGrupoIds,
+                $index
+            );
+
+            return in_array($nombre, $names, true);
+        }
+
+        // Sin schema: buscar el nombre en cualquier origen delegado a los destinos del usuario
+        foreach ($index as $key => $nombres) {
+            $parts = explode('.', (string) $key, 2);
+            if (count($parts) < 2) {
+                continue;
+            }
+            $destinoId = (int) $parts[0];
+            if (!in_array($destinoId, $directGrupoIds, true)) {
+                continue;
+            }
+            foreach ($nombres as $n) {
+                if (strtolower($n) === $nombre) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1792,6 +1989,12 @@ class GraphFabricGatewayService
         // Vista específicamente delegada al usuario → no restringir por sede en GRANT
         if ($viewName !== null && trim($viewName) !== ''
             && $this->tieneVistaDelegadaAlUsuario($user, $viewName)) {
+            return 'NAL';
+        }
+
+        // Vista delegada por esquema (ej. AA → vista de DF) → GRANT nacional
+        if ($viewName !== null && trim($viewName) !== ''
+            && $this->tieneVistaDelegadaPorEsquema($user, $viewName)) {
             return 'NAL';
         }
 
