@@ -296,8 +296,12 @@ final class FabricStreamExportJob implements ShouldQueue
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
         $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
-        $limit   = 10000; // Graph-Fabric soporta hasta 10K por request
+        $limit   = (int) env('FABRIC_EXPORT_CHUNK', 10000); // filas por request a Python
         $offset  = 0;
+
+        // Pausa entre chunks (ms) — libera el worker de Python para atender usuarios
+        // interactivos entre lote y lote. Evita que un export monopolice un worker.
+        $chunkPauseMs = (int) env('FABRIC_EXPORT_CHUNK_PAUSE_MS', 300);
         $totalRows = 0;
         $headers = [];
 
@@ -391,6 +395,12 @@ final class FabricStreamExportJob implements ShouldQueue
 
             $pageInfo = $response->json()['page_info'] ?? [];
             if (!($pageInfo['has_next'] ?? false)) break;
+
+            // Ceder el worker de Python entre lotes: los usuarios interactivos
+            // pueden colarse mientras el export descansa unos milisegundos.
+            if ($chunkPauseMs > 0) {
+                usleep($chunkPauseMs * 1000);
+            }
         }
 
         fclose($tmpHandle);
