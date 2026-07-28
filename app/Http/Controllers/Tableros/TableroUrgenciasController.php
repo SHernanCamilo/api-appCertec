@@ -86,9 +86,9 @@ class TableroUrgenciasController extends Controller
         $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token = env('TOKEN_ADMIN', '');
 
-        $filters = [];
+        $filters = new \stdClass();
         if ($sucursalFilter) {
-            $filters['Sede'] = $sucursalFilter;
+            $filters = ['Sede' => $sucursalFilter];
         }
 
         $payload = [
