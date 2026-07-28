@@ -35,7 +35,10 @@ Route::middleware(['auth:api'])->group(function () {
     //   - Cache de queries (30s TTL)
     //   - Validación de acceso por grupos GG-BD-*
     // =========================================================================
-    Route::prefix('viewer')->middleware([\App\Http\Middleware\FabricRateLimiter::class])->group(function () {
+    Route::prefix('viewer')->middleware([
+        \App\Http\Middleware\FabricRateLimiter::class,
+        \App\Http\Middleware\FabricConcurrencyLimiter::class,
+    ])->group(function () {
 
         // Contexto del usuario: grupos, esquemas permitidos y departamento
         Route::get('/context', [FabricViewerController::class, 'context']);
@@ -46,18 +49,14 @@ Route::middleware(['auth:api'])->group(function () {
         // Columnas de una vista específica
         Route::post('/columns', [FabricViewerController::class, 'columns']);
 
-        // Endpoints PESADOS (consultas síncronas a Fabric que pueden tardar minutos).
-        // Se protegen con límite de concurrencia para no agotar los workers de PHP-FPM.
-        Route::middleware([\App\Http\Middleware\FabricConcurrencyLimiter::class])->group(function () {
-            // Datos paginados de una vista
-            Route::post('/data', [FabricViewerController::class, 'data']);
+        // Datos paginados de una vista
+        Route::post('/data', [FabricViewerController::class, 'data']);
 
-            // Agregación (GROUP BY) para tablas dinámicas
-            Route::post('/aggregate', [FabricViewerController::class, 'aggregate']);
+        // Agregación (GROUP BY) para tablas dinámicas
+        Route::post('/aggregate', [FabricViewerController::class, 'aggregate']);
 
-            // Export a Excel — síncrono (descarga directa, para datasets pequeños)
-            Route::post('/export', [FabricViewerController::class, 'export']);
-        });
+        // Export a Excel — síncrono (descarga directa, para datasets pequeños)
+        Route::post('/export', [FabricViewerController::class, 'export']);
 
         // Export a Excel — asíncrono (segundo plano, recomendado para producción)
         Route::match(['get', 'post'], '/export/start', [FabricViewerController::class, 'exportStart']);
