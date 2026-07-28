@@ -112,6 +112,19 @@ final class FabricStreamExportJob implements ShouldQueue
         $token   = env('TOKEN_ADMIN', '');
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
+        // ⚠️ CORRECTITUD DE DATOS: el parquet de R2 es un snapshot de la vista COMPLETA
+        // sin filtros. Si el usuario filtró, R2 no puede garantizar el mismo resultado
+        // que Fabric (el parquet puede estar desactualizado o el filtro no aplicarse).
+        // En ese caso vamos directo a Fabric, que aplica los filtros en el SELECT.
+        $filters = $this->options['filters'] ?? [];
+        if (!empty($filters)) {
+            Log::info('FabricStreamExportJob: export con filtros → Fabric directo (R2 omitido)', [
+                'job_id'  => $this->jobId,
+                'filters' => array_keys($filters),
+            ]);
+            return false;
+        }
+
         $this->updateStatus(self::STATUS_PROCESSING, null, [
             'progress' => 5,
             'rows'     => 0,

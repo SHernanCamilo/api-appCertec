@@ -430,6 +430,13 @@ class FabricViewerController extends Controller
      */
     public function exportDownload(string $jobId): mixed
     {
+        // Soportar JWT en query param: window.open no puede enviar headers.
+        // Sin esto, el fallback del frontend cae en 401 → redirect → 405.
+        $req = request();
+        if (!$req->bearerToken() && $req->query('token')) {
+            $req->headers->set('Authorization', 'Bearer ' . $req->query('token'));
+        }
+
         $status = \Illuminate\Support\Facades\Cache::get("fabric_export:{$jobId}");
 
         if ($status === null || ($status['status'] ?? '') !== 'completed') {
