@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\Fabric;
 
+use App\Jobs\ODataSnapshotRefreshJob;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -15,19 +17,36 @@ use Illuminate\Support\Facades\Log;
  *   por página, cada request era un cache miss → golpe a Fabric. Para 626K filas
  *   son ~32 consultas a Fabric por cada refresco de Excel.
  *
- * SOLUCIÓN — Snapshot en disco:
- *   1ª petición → descarga el dataset COMPLETO una sola vez (preferente desde
- *   el parquet de R2, que no consume Fabric) y lo guarda como NDJSON en disco.
- *   Las siguientes páginas se sirven leyendo ese archivo por líneas.
+ * SOLUCIÓN — Snapshot en disco + stale-while-revalidate:
  *
- *   Frescura por TTL: el snapshot se considera válido durante N segundos.
- *   Al expirar, la siguiente petición lo regenera. NO se valida contra Fabric
- *   en la ruta de lectura (eso es trabajo del cron de R2 en background).
+ *   1) Primera petición (no hay snapshot): se descarga el dataset COMPLETO una
+ *      sola vez —preferente desde el parquet de R2, que no consume Fabric— y se
+ *      guarda como NDJSON. Es la única petición que espera.
  *
- * Ventajas:
- *   - 1 consulta por ventana de TTL en vez de 32 por refresco
- *   - Memoria constante: se lee línea por línea, no se carga todo en RAM
- *   - Si R2 tiene el parquet, cero carga para Fabric
+ *   2) Snapshot fresco (edad < TTL): se sirve del disco. Cero Fabric.
+ *
+ *   3) Snapshot vencido (edad >= TTL): se sirve el snapshot actual AL INSTANTE y
+ *      se despacha ODataSnapshotRefreshJob para regenerarlo en background. Excel
+ *      nunca espera y la siguiente lectura ya trae datos nuevos. Este es el
+ *      patrón stale-while-revalidate que usan los CDN (Cloudflare, Fastly,
+ *      Google Cloud CDN) para servir rápido sin quedarse en datos viejos.
+ *
+ *   4) Snapshot demasiado viejo (edad >= MAX_AGE, p. ej. la cola de Horizon está
+ *      caída): se regenera de forma bloqueante. Es la red de seguridad para que
+ *      nunca se sirva algo indefinidamente desactualizado.
+ *
+ * VALIDACIÓN DE FRESCURA (para no bajar la misma data dos veces):
+ *   El job de refresco primero pregunta a Fabric cuántas filas tiene la vista
+ *   (COUNT, consulta barata). Si coincide con el snapshot Y el último rebuild
+ *   real es más reciente que MAX_AGE, solo se renueva la marca de tiempo:
+ *   `unchanged`, cero descarga. Si el conteo cambió o el rebuild real ya es
+ *   viejo, se descarga completo. Así los INSERT se detectan de inmediato y los
+ *   UPDATE sin cambio de conteo quedan acotados a MAX_AGE.
+ *
+ * Consistencia de paginación:
+ *   El refresco solo se dispara en la página 0. Mientras Excel recorre las
+ *   páginas 1..N el archivo no se reemplaza, así que no se saltan ni se
+ *   duplican filas a mitad del recorrido.
  */
 final class ODataSnapshotService
 {
@@ -39,7 +58,7 @@ final class ODataSnapshotService
     ) {}
 
     /**
-     * Devuelve una página del snapshot. Lo genera si no existe o está vencido.
+     * Devuelve una página del snapshot aplicando stale-while-revalidate.
      *
      * @param  string $linkCode  Código del link OData (identifica el dataset)
      * @param  array  $context   ['schema' => , 'view' => , 'filters' => , 'columns' => ,
@@ -47,7 +66,7 @@ final class ODataSnapshotService
      * @param  int    $skip      Offset solicitado por Excel
      * @param  int    $top       Cantidad de filas solicitadas
      * @param  int    $ttl       Segundos de validez del snapshot
-     * @return array{success: bool, data: array, total: int, has_next: bool, source: string, message?: string}
+     * @return array{success: bool, data: array, total: int, has_next: bool, source: string, age: int, stale: bool, message?: string}
      */
     public function getPage(
         string $linkCode,
@@ -56,23 +75,77 @@ final class ODataSnapshotService
         int $top,
         int $ttl
     ): array {
+        $path   = $this->snapshotPath($linkCode, $context);
+        $exists = is_file($path);
+        $age    = $exists ? (time() - (int) filemtime($path)) : PHP_INT_MAX;
+        $maxAge = $this->maxAge($ttl);
+
+        // Caso 1 y 4: no existe, o está tan viejo que no es aceptable servirlo.
+        if (!$exists || $age >= $maxAge) {
+            $built = $this->build($path, $context);
+
+            if (!$built['success']) {
+                // Si había un snapshot viejo, es mejor servirlo que devolver error.
+                if ($exists) {
+                    Log::warning('ODataSnapshot: rebuild falló, se sirve el snapshot viejo', [
+                        'link' => $linkCode,
+                        'age'  => $age,
+                    ]);
+                    return $this->readPage($path, $skip, $top) + ['age' => $age, 'stale' => true];
+                }
+
+                return [
+                    'success'  => false,
+                    'data'     => [],
+                    'total'    => 0,
+                    'has_next' => false,
+                    'source'   => 'none',
+                    'age'      => 0,
+                    'stale'    => false,
+                    'message'  => $built['message'] ?? 'No se pudo generar el snapshot.',
+                ];
+            }
+
+            return $this->readPage($path, $skip, $top) + ['age' => 0, 'stale' => false];
+        }
+
+        // Caso 3: vencido pero utilizable → servir ya y refrescar en background.
+        $stale = $age >= $ttl;
+        if ($stale && $skip === 0) {
+            $this->queueRefresh($linkCode, $context, $ttl);
+        }
+
+        // Caso 2 y 3: lectura directa de disco.
+        return $this->readPage($path, $skip, $top) + ['age' => $age, 'stale' => $stale];
+    }
+
+    /**
+     * Regenera el snapshot. Lo invoca ODataSnapshotRefreshJob en background.
+     *
+     * Primero valida el conteo contra Fabric: si no cambió (y el último rebuild
+     * real no es demasiado viejo), no vuelve a descargar el dataset — solo
+     * refresca la marca de frescura.
+     *
+     * @return array{rows: int, source: string}
+     */
+    public function refresh(string $linkCode, array $context, bool $force = false): array
+    {
         $path = $this->snapshotPath($linkCode, $context);
 
-        if (!$this->isFresh($path, $ttl)) {
-            $built = $this->build($path, $context);
-            if (!$built['success']) {
-                return [
-                    'success' => false,
-                    'data'    => [],
-                    'total'   => 0,
-                    'has_next'=> false,
-                    'source'  => 'none',
-                    'message' => $built['message'] ?? 'No se pudo generar el snapshot.',
-                ];
+        if (!$force && is_file($path)) {
+            $verdict = $this->tryRevalidateByCount($path, $context);
+            if ($verdict !== null) {
+                return $verdict;
             }
         }
 
-        return $this->readPage($path, $skip, $top);
+        $built = $this->build($path, $context);
+
+        if (!$built['success']) {
+            throw new \RuntimeException($built['message'] ?? 'Rebuild de snapshot falló.');
+        }
+
+        return ['rows' => (int) $built['rows'], 'source' => (string) $built['source']];
     }
 
     /**
@@ -87,6 +160,84 @@ final class ODataSnapshotService
         foreach (glob($dir . '/' . $linkCode . '_*.ndjson') ?: [] as $file) {
             @unlink($file);
             @unlink($file . '.meta');
+        }
+    }
+
+    // =========================================================================
+    // REVALIDACIÓN POR CONTEO
+    // =========================================================================
+
+    /**
+     * Compara el conteo remoto con el del snapshot.
+     *
+     * @return array{rows: int, source: string}|null  null = hay que reconstruir
+     */
+    private function tryRevalidateByCount(string $path, array $context): ?array
+    {
+        if (!filter_var(env('ODATA_SNAPSHOT_COUNT_CHECK', true), FILTER_VALIDATE_BOOLEAN)) {
+            return null;
+        }
+
+        $meta  = $this->readMeta($path);
+        $local = (int) ($meta['rows'] ?? 0);
+        if ($local <= 0) {
+            return null;
+        }
+
+        // Cota de seguridad: los UPDATE no cambian el conteo. Si el último
+        // rebuild REAL ya es viejo, se reconstruye aunque el conteo coincida.
+        $builtAt = isset($meta['built_at']) ? strtotime((string) $meta['built_at']) : 0;
+        $hardAge = (int) env('ODATA_SNAPSHOT_REBUILD_EVERY', 3600);
+        if ($builtAt <= 0 || (time() - $builtAt) >= $hardAge) {
+            return null;
+        }
+
+        $remote = $this->remoteRowCount($context);
+        if ($remote === null || $remote <= 0 || $remote !== $local) {
+            return null;
+        }
+
+        // Sin cambios: solo renovar frescura (no se descarga nada).
+        @touch($path);
+        $meta['verified_at'] = now()->toIso8601String();
+        @file_put_contents($path . '.meta', json_encode($meta));
+
+        Log::info('ODataSnapshot revalidado sin cambios', [
+            'schema' => $context['schema'] ?? null,
+            'view'   => $context['view'] ?? null,
+            'rows'   => $local,
+        ]);
+
+        return ['rows' => $local, 'source' => 'unchanged'];
+    }
+
+    /**
+     * Conteo real de filas en Fabric (consulta barata: limit 1, se lee el total).
+     */
+    private function remoteRowCount(array $context): ?int
+    {
+        try {
+            $result = $this->gateway->queryAsSystem(
+                (string) ($context['schema'] ?? ''),
+                (string) ($context['view'] ?? ''),
+                [
+                    'columns' => $context['columns'] ?? [],
+                    'filters' => $context['filters'] ?? [],
+                    'limit'   => 1,
+                    'offset'  => 0,
+                ]
+            );
+
+            if (!($result['success'] ?? false)) {
+                return null;
+            }
+
+            $total = $result['meta']['total'] ?? null;
+
+            return is_numeric($total) ? (int) $total : null;
+        } catch (\Throwable $e) {
+            Log::info('ODataSnapshot: no se pudo obtener el conteo remoto', ['error' => $e->getMessage()]);
+            return null;
         }
     }
 
@@ -127,6 +278,8 @@ final class ODataSnapshotService
         file_put_contents($path . '.meta', json_encode([
             'rows'         => $rows,
             'source'       => $source,
+            'built_at'     => now()->toIso8601String(),
+            'verified_at'  => now()->toIso8601String(),
             'generated_at' => now()->toIso8601String(),
         ]));
 
@@ -326,12 +479,54 @@ final class ODataSnapshotService
     // =========================================================================
 
     /**
+     * Despacha el refresco en background, con enfriamiento para no encolar
+     * el mismo dataset una y otra vez si Excel reintenta.
+     */
+    private function queueRefresh(string $linkCode, array $context, int $ttl): void
+    {
+        $lockKey = 'odata_snap_refresh:' . $linkCode . ':' . $this->fingerprint($context);
+
+        // add() es atómico: solo el primero en llegar despacha.
+        if (!Cache::add($lockKey, 1, max(60, (int) ($ttl / 2)))) {
+            return;
+        }
+
+        try {
+            ODataSnapshotRefreshJob::dispatch($linkCode, $context);
+        } catch (\Throwable $e) {
+            Cache::forget($lockKey);
+            Log::warning('ODataSnapshot: no se pudo encolar el refresco', [
+                'link'  => $linkCode,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Edad máxima tolerable antes de reconstruir de forma bloqueante.
+     * Red de seguridad para cuando la cola de Horizon está caída.
+     */
+    private function maxAge(int $ttl): int
+    {
+        $configured = (int) env('ODATA_SNAPSHOT_MAX_AGE', 0);
+
+        return $configured > 0
+            ? max($ttl, $configured)
+            : max($ttl * 6, 3600);
+    }
+
+    /**
      * Ruta del snapshot. Incluye un hash del contexto para que distintos
      * filtros/columnas/orden no compartan archivo.
      */
     private function snapshotPath(string $linkCode, array $context): string
     {
-        $fingerprint = md5(json_encode([
+        return storage_path('app/' . self::DIR . '/' . $linkCode . '_' . $this->fingerprint($context) . '.ndjson');
+    }
+
+    private function fingerprint(array $context): string
+    {
+        return md5((string) json_encode([
             $context['schema']   ?? '',
             $context['view']     ?? '',
             $context['filters']  ?? [],
@@ -339,16 +534,6 @@ final class ODataSnapshotService
             $context['sort_col'] ?? '',
             $context['sort_dir'] ?? '',
         ]));
-
-        return storage_path('app/' . self::DIR . '/' . $linkCode . '_' . $fingerprint . '.ndjson');
-    }
-
-    private function isFresh(string $path, int $ttl): bool
-    {
-        if (!is_file($path)) {
-            return false;
-        }
-        return (time() - filemtime($path)) < $ttl;
     }
 
     private function readMeta(string $path): array

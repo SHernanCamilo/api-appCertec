@@ -47,11 +47,15 @@ class ODataSnapshotCleanup extends Command
             }
         }
 
-        // Limpiar archivos .building huérfanos (procesos que murieron a medio construir)
-        foreach (glob($dir . '/*.building.*') ?: [] as $orphan) {
-            if (filemtime($orphan) < time() - 1800) { // 30 min
-                @unlink($orphan);
-                $deleted++;
+        // Limpiar temporales huérfanos: .building.* (procesos que murieron a medio
+        // construir) y .gz (descargas de R2 interrumpidas).
+        foreach (['/*.building.*', '/*.gz'] as $pattern) {
+            foreach (glob($dir . $pattern) ?: [] as $orphan) {
+                if (filemtime($orphan) < time() - 1800) { // 30 min
+                    $freedMb += filesize($orphan) / 1048576;
+                    @unlink($orphan);
+                    $deleted++;
+                }
             }
         }
 

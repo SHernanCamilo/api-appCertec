@@ -5,24 +5,28 @@ namespace App\Console\Commands;
 use App\Models\OdataAccessLog;
 use App\Models\OdataLink;
 use App\Services\Fabric\GraphFabricGatewayService;
+use App\Services\Fabric\ODataSnapshotService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Pre-calienta el cache Redis de las vistas OData más consultadas.
+ * Mantiene calientes las vistas OData más consultadas.
  *
- * Ejecuta las mismas queries que haría Power Query, pero en background.
- * Cuando Excel refresque, la respuesta sale de cache → 0 espera en Fabric.
+ * Con ODATA_USE_SNAPSHOT activo (modo por defecto) refresca los snapshots NDJSON:
+ * valida el conteo contra Fabric y, si cambió, vuelve a bajar el dataset. Así
+ * cuando Excel refresca ya encuentra datos nuevos en disco y no espera nada.
+ *
+ * Con el modo legacy precalienta el cache Redis por página.
  *
  * Uso:
  *   php artisan odata:warm-cache              → Top 10 links más usados
  *   php artisan odata:warm-cache --all        → Todos los links activos
  *   php artisan odata:warm-cache --link=abc   → Solo un link específico
- *   php artisan odata:warm-cache --pages=5    → Precalentar 5 páginas (100K filas)
+ *   php artisan odata:warm-cache --force      → Rebuild sin validar conteo
+ *   php artisan odata:warm-cache --pages=5    → (solo modo legacy) 5 páginas
  *
- * Cron recomendado: cada 30 min (según el TTL de cache más común)
- *   0,30 * * * * php artisan odata:warm-cache
+ * Cron: cada 30 min desde App\Console\Kernel.
  */
 class WarmODataCache extends Command
 {
@@ -30,11 +34,12 @@ class WarmODataCache extends Command
         {--all : Calentar todos los links activos}
         {--link= : Código de un link específico}
         {--top=10 : Cantidad de links top a calentar}
-        {--pages=3 : Cantidad de páginas a precalentar por link}';
+        {--pages=3 : Cantidad de páginas a precalentar por link (modo legacy)}
+        {--force : Reconstruir el snapshot sin validar el conteo primero}';
 
-    protected $description = 'Pre-calienta cache Redis de vistas OData populares para eliminar esperas de Fabric';
+    protected $description = 'Mantiene frescos los snapshots/cache de las vistas OData más consultadas';
 
-    public function handle(GraphFabricGatewayService $gateway): int
+    public function handle(GraphFabricGatewayService $gateway, ODataSnapshotService $snapshots): int
     {
         $links = $this->resolveLinks();
 
@@ -43,6 +48,96 @@ class WarmODataCache extends Command
             return 0;
         }
 
+        $useSnapshot = filter_var(env('ODATA_USE_SNAPSHOT', true), FILTER_VALIDATE_BOOLEAN);
+
+        return $useSnapshot
+            ? $this->warmSnapshots($snapshots, $links)
+            : $this->warmLegacyCache($gateway, $links);
+    }
+
+    // =========================================================================
+    // MODO SNAPSHOT (por defecto)
+    // =========================================================================
+
+    private function warmSnapshots(ODataSnapshotService $snapshots, $links): int
+    {
+        $force = (bool) $this->option('force');
+        $this->info("Refrescando snapshots de {$links->count()} link(s)" . ($force ? ' (forzado)' : '') . '...');
+
+        $rebuilt = 0;
+        $unchanged = 0;
+        $errors = 0;
+        $totalRows = 0;
+
+        foreach ($links as $link) {
+            $t0 = microtime(true);
+
+            try {
+                $result = $snapshots->refresh($link->code, $this->contextFor($link), $force);
+
+                $source = $result['source'] ?? '?';
+                $rows   = (int) ($result['rows'] ?? 0);
+                $totalRows += $rows;
+
+                if ($source === 'unchanged') {
+                    $unchanged++;
+                } else {
+                    $rebuilt++;
+                }
+
+                $elapsed = round(microtime(true) - $t0, 1);
+                $this->line(sprintf(
+                    '  %-12s %-40s %-10s %8s filas  %ss',
+                    $link->code,
+                    $link->view_name,
+                    $source,
+                    number_format($rows),
+                    $elapsed
+                ));
+            } catch (\Throwable $e) {
+                $errors++;
+                $this->line("  {$link->code} {$link->view_name}  ERROR: {$e->getMessage()}");
+                Log::warning('odata:warm-cache - refresh falló', [
+                    'link'  => $link->code,
+                    'view'  => $link->view_name,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $this->newLine();
+        $this->info('═══ Resumen ═══');
+        $this->info("  Reconstruidos:  {$rebuilt}");
+        $this->info("  Sin cambios:    {$unchanged}");
+        $this->info('  Filas totales:  ' . number_format($totalRows));
+        $this->info("  Errores:        {$errors}");
+
+        return 0;
+    }
+
+    /**
+     * Contexto del dataset: debe coincidir exactamente con el que arma
+     * ODataController::fetchData, o el snapshot se guarda con otro fingerprint.
+     */
+    private function contextFor(OdataLink $link): array
+    {
+        return [
+            'schema'   => $link->schema_name,
+            'view'     => $link->view_name,
+            'filters'  => $link->filters ?? [],
+            'columns'  => $link->columns ?? [],
+            'sort_col' => $link->sort_col ?? '',
+            'sort_dir' => $link->sort_dir ?? 'asc',
+            'max_rows' => $link->max_rows ?? 1000000,
+        ];
+    }
+
+    // =========================================================================
+    // MODO LEGACY (cache Redis por página)
+    // =========================================================================
+
+    private function warmLegacyCache(GraphFabricGatewayService $gateway, $links): int
+    {
         $pages = max(1, min(20, (int) $this->option('pages')));
         $this->info("Calentando cache para {$links->count()} link(s), {$pages} página(s) cada uno...");
 
@@ -67,14 +162,14 @@ class WarmODataCache extends Command
         $bar->finish();
         $this->newLine(2);
 
-        $this->info("═══ Resumen ═══");
+        $this->info('═══ Resumen ═══');
         $this->info("  Links procesados:  {$links->count()}");
         $this->info("  Páginas cacheadas: {$totalCached}");
-        $this->info("  Filas totales:     " . number_format($totalRows));
+        $this->info('  Filas totales:     ' . number_format($totalRows));
         $this->info("  Errores:           {$errors}");
 
         if ($errors > 0) {
-            $this->warn("Revisar logs para detalles de errores.");
+            $this->warn('Revisar logs para detalles de errores.');
         }
 
         return 0;

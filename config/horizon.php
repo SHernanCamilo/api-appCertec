@@ -118,6 +118,24 @@ return [
                 'nice' => 10,     // Prioridad baja (no afectar API)
             ],
 
+            // Workers para refrescar snapshots de OData en background.
+            // Patrón stale-while-revalidate: Excel recibe el snapshot actual al
+            // instante y este worker regenera el archivo sin que nadie espere.
+            'snapshot-workers' => [
+                'connection' => 'redis',
+                'queue' => ['snapshots'],
+                'balance' => 'auto',
+                'autoScalingStrategy' => 'size',
+                'minProcesses' => 1,
+                'maxProcesses' => 2,
+                'maxTime' => 3600,
+                'maxJobs' => 50,
+                'memory' => 512,
+                'tries' => 1,
+                'timeout' => 700, // > timeout del job (600s)
+                'nice' => 12,     // Prioridad baja: nunca por encima de la API
+            ],
+
             // Workers para sincronización (Indigo, GLPI, etc.)
             'sync-workers' => [
                 'connection' => 'redis',
@@ -163,6 +181,22 @@ return [
                 'tries' => 1,
                 'timeout' => 900,
                 'nice' => 10,
+            ],
+
+            // Workers para refrescar snapshots de OData en background
+            'snapshot-workers' => [
+                'connection' => 'redis',
+                'queue' => ['snapshots'],
+                'balance' => 'auto',
+                'autoScalingStrategy' => 'size',
+                'minProcesses' => 1,
+                'maxProcesses' => 1,
+                'maxTime' => 3600,
+                'maxJobs' => 50,
+                'memory' => 512,
+                'tries' => 1,
+                'timeout' => 700,
+                'nice' => 12,
             ],
         ],
     ],

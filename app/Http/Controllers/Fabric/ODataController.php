@@ -195,7 +195,8 @@ class ODataController extends Controller
         // cache miss → golpe a Fabric. Ahora se descarga el dataset completo
         // UNA vez (preferente desde el parquet de R2) y las páginas se sirven
         // leyendo ese archivo. 1 consulta por ventana de TTL en vez de ~32.
-        $useSnapshot = env('ODATA_USE_SNAPSHOT', true);
+        $useSnapshot = filter_var(env('ODATA_USE_SNAPSHOT', true), FILTER_VALIDATE_BOOLEAN);
+        $snapshotInfo = [];
 
         if ($useSnapshot) {
             $page = $this->snapshots->getPage(
@@ -219,6 +220,14 @@ class ODataController extends Controller
                 'data'    => $page['data'],
                 'meta'    => ['total' => $page['total'], 'has_next' => $page['has_next']],
                 'message' => $page['message'] ?? null,
+            ];
+
+            // Diagnóstico: permite ver desde el cliente/curl si la respuesta vino
+            // de un snapshot vencido (y por tanto hay un refresco en camino).
+            $snapshotInfo = [
+                'X-Snapshot-Source' => (string) ($page['source'] ?? '?'),
+                'X-Snapshot-Age'    => (string) ($page['age'] ?? 0),
+                'X-Snapshot-Stale'  => ($page['stale'] ?? false) ? '1' : '0',
             ];
         } else {
             // Modo legacy: caché por página (fallback si se desactiva el snapshot)
@@ -307,14 +316,14 @@ class ODataController extends Controller
                 . '?' . http_build_query($nextParams);
         }
 
-        return response()->json($response, 200, [
+        return response()->json($response, 200, array_merge([
             'OData-Version'    => '4.0',
             'Content-Type'     => 'application/json; odata.metadata=minimal',
             'Vary'             => 'Accept-Encoding',
             'X-Cache-TTL'      => (string) $odataCacheTtl,
             'X-Page-Size'      => (string) $top,
             'X-Rows-Returned'  => (string) count($items),
-        ]);
+        ], $snapshotInfo));
     }
 
     // =========================================================================
