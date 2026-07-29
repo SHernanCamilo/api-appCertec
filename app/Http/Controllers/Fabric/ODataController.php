@@ -27,7 +27,8 @@ use Illuminate\Support\Facades\Log;
 class ODataController extends Controller
 {
     public function __construct(
-        private GraphFabricGatewayService $gateway
+        private GraphFabricGatewayService $gateway,
+        private \App\Services\Fabric\ODataSnapshotService $snapshots
     ) {
     }
 
@@ -185,31 +186,67 @@ class ODataController extends Controller
 
         $startTime = microtime(true);
 
-        // Cache TTL configurable por link (default 120s = 2 min)
-        // Vistas estables (catálogos, maestros) pueden usar 1800s (30 min) o 3600s (1h)
+        // TTL configurable por link (default 120s). Vistas estables (catálogos,
+        // maestros) pueden usar 1800s (30 min) o 3600s (1h).
         $odataCacheTtl = max(30, (int) ($link->cache_ttl ?? 120));
-        $odataCacheKey = 'odata_qry:' . md5("{$code}:{$skip}:{$top}:" . json_encode($filters) . ':' . json_encode($columns));
 
-        $result = \Illuminate\Support\Facades\Cache::remember($odataCacheKey, $odataCacheTtl, function () use ($link, $columns, $filters, $top, $skip, $sortCol, $sortDir) {
-            return $this->gateway->queryAsSystem(
-                $link->schema_name,
-                $link->view_name,
+        // ── Snapshot en disco ────────────────────────────────────────────────
+        // Excel pagina (skip=0, 20000, 40000...). Antes cada página era un
+        // cache miss → golpe a Fabric. Ahora se descarga el dataset completo
+        // UNA vez (preferente desde el parquet de R2) y las páginas se sirven
+        // leyendo ese archivo. 1 consulta por ventana de TTL en vez de ~32.
+        $useSnapshot = env('ODATA_USE_SNAPSHOT', true);
+
+        if ($useSnapshot) {
+            $page = $this->snapshots->getPage(
+                $code,
                 [
-                    'columns' => $columns,
-                    'filters' => $filters,
-                    'limit' => $top,
-                    'offset' => $skip,
+                    'schema'   => $link->schema_name,
+                    'view'     => $link->view_name,
+                    'filters'  => $filters,
+                    'columns'  => $columns,
                     'sort_col' => $sortCol,
                     'sort_dir' => $sortDir,
-                ]
+                    'max_rows' => $link->max_rows ?? 1000000,
+                ],
+                $skip,
+                $top,
+                $odataCacheTtl
             );
-        });
+
+            $result = [
+                'success' => $page['success'],
+                'data'    => $page['data'],
+                'meta'    => ['total' => $page['total'], 'has_next' => $page['has_next']],
+                'message' => $page['message'] ?? null,
+            ];
+        } else {
+            // Modo legacy: caché por página (fallback si se desactiva el snapshot)
+            $odataCacheKey = 'odata_qry:' . md5("{$code}:{$skip}:{$top}:" . json_encode($filters) . ':' . json_encode($columns));
+
+            $result = \Illuminate\Support\Facades\Cache::remember($odataCacheKey, $odataCacheTtl, function () use ($link, $columns, $filters, $top, $skip, $sortCol, $sortDir) {
+                return $this->gateway->queryAsSystem(
+                    $link->schema_name,
+                    $link->view_name,
+                    [
+                        'columns' => $columns,
+                        'filters' => $filters,
+                        'limit' => $top,
+                        'offset' => $skip,
+                        'sort_col' => $sortCol,
+                        'sort_dir' => $sortDir,
+                    ]
+                );
+            });
+
+            if (!$result['success']) {
+                \Illuminate\Support\Facades\Cache::forget($odataCacheKey);
+            }
+        }
 
         $elapsedMs = (int) round((microtime(true) - $startTime) * 1000);
 
         if (!$result['success']) {
-            // No cachear errores
-            \Illuminate\Support\Facades\Cache::forget($odataCacheKey);
             return $this->odataError('DataSourceError', $result['message'] ?? 'Error consultando datos.', 502);
         }
 

@@ -52,6 +52,14 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping()
             ->runInBackground()
             ->appendOutputTo(storage_path('logs/odata-warm-cache.log'));
+
+        // ── OData Snapshot Cleanup ───────────────────────────────────────────
+        // Borra los snapshots NDJSON que ya expiraron (libera disco).
+        // Se regeneran solos en la siguiente petición, no rompe nada.
+        $schedule->command('odata:snapshot-cleanup --hours=6')
+            ->hourly()
+            ->withoutOverlapping()
+            ->runInBackground();
     }
 
     /**
