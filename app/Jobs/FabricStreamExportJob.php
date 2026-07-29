@@ -207,7 +207,7 @@ final class FabricStreamExportJob implements ShouldQueue
                 if (!$row) continue;
 
                 if (empty($headers)) {
-                    $headers = array_keys($row);
+                    $headers = array_map('strval', array_keys($row));
                     fwrite($tmpHandle, json_encode($headers) . "\n");
                 }
 
@@ -378,7 +378,7 @@ final class FabricStreamExportJob implements ShouldQueue
 
             // Guardar headers
             if (empty($headers)) {
-                $headers = array_keys($items[0]);
+                $headers = array_map('strval', array_keys($items[0]));
                 fwrite($tmpHandle, json_encode($headers) . "\n");
             }
 
@@ -773,7 +773,7 @@ final class FabricStreamExportJob implements ShouldQueue
         $textColumns = [];
 
         foreach ($headers as $i => $header) {
-            $headerLower = strtolower($header);
+            $headerLower = strtolower((string) $header);
 
             // Estrategia 1: nombre de columna coincide con patrones conocidos
             foreach (self::TEXT_COLUMN_PATTERNS as $pattern) {

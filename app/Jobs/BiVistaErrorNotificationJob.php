@@ -46,7 +46,7 @@ class BiVistaErrorNotificationJob implements ShouldQueue
 
         // Fallback si no encuentra por rol
         if (empty($admins)) {
-            $admins = User::whereHas('perfiles', function ($q) {
+            $admins = User::whereHas('rolesCustom', function ($q) {
                 $q->where('nombre', 'like', '%inteligencia%nego%admin%');
             })->pluck('email')->toArray();
         }
