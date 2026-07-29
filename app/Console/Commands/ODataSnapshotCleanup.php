@@ -59,6 +59,10 @@ class ODataSnapshotCleanup extends Command
             }
         }
 
+        // ── Protección de disco: si el total supera el límite, borrar los más viejos ──
+        $maxDiskMb = (float) env('ODATA_SNAPSHOT_MAX_DISK_MB', 3072); // 3 GB default
+        $this->enforceMaxDisk($dir, $maxDiskMb, $deleted, $freedMb);
+
         $this->info(sprintf(
             'Snapshots eliminados: %d (%.1f MB liberados) · conservados: %d',
             $deleted,
@@ -67,5 +71,42 @@ class ODataSnapshotCleanup extends Command
         ));
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Si el directorio supera el límite de disco, borra los snapshots más viejos
+     * (por mtime) hasta quedar debajo del límite.
+     */
+    private function enforceMaxDisk(string $dir, float $maxMb, int &$deleted, float &$freedMb): void
+    {
+        $files = [];
+        $totalMb = 0.0;
+
+        foreach (glob($dir . '/*.ndjson') ?: [] as $file) {
+            $size = filesize($file);
+            $totalMb += $size / 1048576;
+            $files[] = ['path' => $file, 'mtime' => filemtime($file), 'size' => $size];
+        }
+
+        if ($totalMb <= $maxMb) {
+            return;
+        }
+
+        // Ordenar por mtime ascendente (los más viejos primero)
+        usort($files, fn($a, $b) => $a['mtime'] <=> $b['mtime']);
+
+        foreach ($files as $f) {
+            if ($totalMb <= $maxMb) {
+                break;
+            }
+            $sizeMb = $f['size'] / 1048576;
+            @unlink($f['path']);
+            @unlink($f['path'] . '.meta');
+            $totalMb -= $sizeMb;
+            $freedMb += $sizeMb;
+            $deleted++;
+
+            $this->line("  Disco: eliminado " . basename($f['path']) . " (" . round($sizeMb, 1) . " MB) por límite");
+        }
     }
 }
