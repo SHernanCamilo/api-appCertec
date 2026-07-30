@@ -429,6 +429,13 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('inventario')->grou
     require __DIR__ . '/Inventory/InventoryRouter.php';
 });
 
+// ── Tableros Públicos (SSE para TVs, sin login) ─────────────────────────────
+// Token secreto por sede: la seguridad está en el token, no en la sesión.
+Route::prefix('public/tableros/urgencias')->group(function () {
+    Route::get('/stream', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'stream']);
+    Route::get('/data', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'data']);
+});
+
 // ── Tableros (Urgencias, etc.) — Requiere auth + rol "Tablero"
 Route::middleware(['auth:api'])->prefix('tableros')->group(function () {
     require __DIR__ . '/Tableros/TablerosRouter.php';

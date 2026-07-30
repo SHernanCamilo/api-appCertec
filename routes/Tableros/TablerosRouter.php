@@ -2,15 +2,25 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Tableros\TableroUrgenciasController;
+use App\Http\Controllers\Tableros\TableroTokenController;
 
 /**
- * Rutas de Tableros (pantallas informativas para sedes).
+ * Rutas de Tableros PRIVADAS (requieren auth:api).
  *
- * Prefijo: /api/tableros
- * Middleware: auth:api
+ * Prefijo ya aplicado: /api/tableros (definido en api.php)
  *
- * Cada tablero valida internamente que el usuario tenga el rol adecuado
- * y filtra datos por la sucursal del usuario.
+ * Las rutas públicas de SSE están en api.php directamente
+ * bajo /api/public/tableros/urgencias/ para no pasar por auth.
  */
 
+// Endpoint original (para el frontend Angular con sesión)
 Route::get('/urgencias', [TableroUrgenciasController::class, 'index']);
+
+// CRUD de tokens de tablero (admin)
+Route::prefix('tokens')->group(function () {
+    Route::get('/', [TableroTokenController::class, 'index']);
+    Route::post('/', [TableroTokenController::class, 'store']);
+    Route::patch('/{id}/revoke', [TableroTokenController::class, 'revoke']);
+    Route::patch('/{id}/activate', [TableroTokenController::class, 'activate']);
+    Route::delete('/{id}', [TableroTokenController::class, 'destroy']);
+});
