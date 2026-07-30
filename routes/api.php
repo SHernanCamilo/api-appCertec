@@ -434,6 +434,7 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('inventario')->grou
 Route::prefix('public/tableros/urgencias')->group(function () {
     Route::get('/stream', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'stream']);
     Route::get('/data', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'data']);
+    Route::post('/pair', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'pair']);
 });
 
 // ── Tableros (Urgencias, etc.) — Requiere auth + rol "Tablero"

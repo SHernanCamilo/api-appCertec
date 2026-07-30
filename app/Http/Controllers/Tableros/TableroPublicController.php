@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Tableros;
 
 use App\Http\Controllers\Controller;
+use App\Models\TableroDevice;
 use App\Models\TableroToken;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,75 +17,128 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 /**
  * Endpoint PÚBLICO para tableros informativos (sin login).
  *
- * Seguridad:
- *   - Token secreto por sede (parametrizable, revocable)
- *   - Solo lectura de una vista fija (no acepta queries arbitrarias)
- *   - Máximo N conexiones SSE simultáneas por token
- *   - Registra IP y uso para auditoría
+ * Dos formas de autenticarse:
+ *   1. device_secret (permanente, emparejado con código de 6 dígitos)
+ *   2. token (legacy, por URL — para compatibilidad)
  *
- * No requiere auth:api. No toca el parquet. Siempre va a Fabric directo
- * para garantizar datos en tiempo real.
+ * Seguridad:
+ *   - Código de 6 dígitos válido solo 5 min, un solo uso
+ *   - device_secret permanente vinculado a una sede
+ *   - Solo lectura de una vista fija
+ *   - Registra IP para auditoría (pero NO limita por IP porque comparten red)
+ *   - Máx N conexiones SSE simultáneas por dispositivo
  */
 final class TableroPublicController extends Controller
 {
     /**
-     * GET /api/public/tableros/urgencias/stream?token=xxx
+     * POST /api/public/tableros/pair — Emparejar TV con código de 6 dígitos.
+     *
+     * La TV envía el código → recibe device_secret permanente.
+     * El código se invalida inmediatamente (un solo uso).
+     */
+    public function pair(Request $request): JsonResponse
+    {
+        $request->validate([
+            'code' => 'required|string|size:6',
+        ]);
+
+        $code = $request->input('code');
+
+        // Rate limit: máx 5 intentos por IP en 10 min (anti fuerza bruta)
+        $rateLimitKey = 'tablero_pair_attempts:' . $request->ip();
+        $attempts = (int) Cache::get($rateLimitKey, 0);
+
+        if ($attempts >= 5) {
+            return response()->json([
+                'success' => false,
+                'error'   => 'too_many_attempts',
+                'message' => 'Demasiados intentos. Espere 10 minutos.',
+            ], 429);
+        }
+
+        Cache::put($rateLimitKey, $attempts + 1, 600); // 10 min
+
+        $device = TableroDevice::findByPairingCode($code);
+
+        if ($device === null) {
+            return response()->json([
+                'success' => false,
+                'error'   => 'invalid_code',
+                'message' => 'Código inválido o expirado. Solicite uno nuevo al administrador.',
+            ], 401);
+        }
+
+        // Emparejar: consume el código y genera el device_secret
+        $secret = $device->pair(
+            $request->ip() ?? '0.0.0.0',
+            $request->userAgent() ?? 'unknown'
+        );
+
+        // Resetear rate limit para esta IP
+        Cache::forget($rateLimitKey);
+
+        return response()->json([
+            'success'       => true,
+            'device_secret' => $secret,
+            'name'          => $device->name,
+            'sede'          => $device->sede_filter,
+            'message'       => 'Tablero activado correctamente. La pantalla se actualizará automáticamente.',
+        ]);
+    }
+
+    /**
+     * GET /api/public/tableros/urgencias/stream?d=DEVICE_SECRET
      *
      * SSE: mantiene la conexión abierta y envía datos cada 30 segundos.
      * La TV nunca hace polling — recibe push del servidor.
      */
     public function stream(Request $request): StreamedResponse|JsonResponse
     {
-        $tokenStr = $request->query('token', '');
+        $device = $this->resolveDevice($request);
 
-        $tableroToken = TableroToken::findByToken((string) $tokenStr);
-
-        if ($tableroToken === null) {
+        if ($device === null) {
             return response()->json([
-                'error'   => 'invalid_token',
-                'message' => 'Token inválido, expirado o revocado.',
+                'error'   => 'unauthorized',
+                'message' => 'Dispositivo no autorizado. Vuelva a emparejar.',
             ], 401);
         }
 
-        // Validar máximo de conexiones simultáneas por token
-        $connKey = "tablero_sse:{$tableroToken->id}";
+        // Validar máximo de conexiones simultáneas por dispositivo
+        $connKey = "tablero_sse_dev:{$device->id}";
         $active  = (int) Cache::get($connKey, 0);
 
-        if ($active >= $tableroToken->max_connections) {
+        if ($active >= $device->max_connections) {
             return response()->json([
                 'error'   => 'max_connections',
-                'message' => 'Máximo de pantallas alcanzado para este token.',
+                'message' => 'Máximo de pantallas alcanzado para este dispositivo.',
             ], 429);
         }
 
-        // Registrar uso
-        $tableroToken->recordUse($request->ip() ?? '0.0.0.0');
+        // Registrar actividad
+        $device->recordActivity($request->ip() ?? '0.0.0.0');
 
         // Incrementar conexiones activas
         Cache::increment($connKey);
 
-        $response = new StreamedResponse(function () use ($tableroToken, $connKey) {
-            // Desactivar output buffering de PHP
+        $response = new StreamedResponse(function () use ($device, $connKey) {
             if (ob_get_level() > 0) {
                 ob_end_clean();
             }
 
             $intervalSeconds = (int) env('TABLERO_SSE_INTERVAL', 30);
-            $maxDuration     = (int) env('TABLERO_SSE_MAX_DURATION', 3600); // 1 hora máximo
+            $maxDuration     = (int) env('TABLERO_SSE_MAX_DURATION', 3600);
             $startTime       = time();
 
-            // Evento inicial inmediato (la TV no espera 30s para mostrar algo)
-            $data = $this->fetchData($tableroToken);
+            // Evento inicial inmediato
+            $data = $this->fetchData($device);
             $this->sendSseEvent('data', $data);
 
             while (true) {
-                // Límite de duración: reconecta limpio después de 1h
                 if ((time() - $startTime) >= $maxDuration) {
                     $this->sendSseEvent('reconnect', ['reason' => 'max_duration']);
                     break;
                 }
 
-                // Verificar que la conexión sigue viva
                 if (connection_aborted()) {
                     break;
                 }
@@ -95,50 +149,79 @@ final class TableroPublicController extends Controller
                     break;
                 }
 
-                // Consultar Fabric (siempre datos reales, nunca parquet)
-                $data = $this->fetchData($tableroToken);
+                $data = $this->fetchData($device);
                 $this->sendSseEvent('data', $data);
             }
 
-            // Decrementar conexiones al cerrar
             Cache::decrement($connKey);
         });
 
         $response->headers->set('Content-Type', 'text/event-stream');
         $response->headers->set('Cache-Control', 'no-cache');
         $response->headers->set('Connection', 'keep-alive');
-        $response->headers->set('X-Accel-Buffering', 'no'); // Nginx no bufferee
+        $response->headers->set('X-Accel-Buffering', 'no');
         $response->headers->set('Access-Control-Allow-Origin', '*');
 
         return $response;
     }
 
     /**
-     * GET /api/public/tableros/urgencias/data?token=xxx
+     * GET /api/public/tableros/urgencias/data?d=DEVICE_SECRET
      *
-     * Alternativa sin SSE: devuelve los datos una vez (fallback para TVs
-     * que no soportan EventSource). El frontend puede hacer polling manual.
+     * Alternativa sin SSE (fallback). Devuelve datos una vez.
      */
     public function data(Request $request): JsonResponse
     {
-        $tokenStr = $request->query('token', '');
+        $device = $this->resolveDevice($request);
 
-        $tableroToken = TableroToken::findByToken((string) $tokenStr);
-
-        if ($tableroToken === null) {
+        if ($device === null) {
             return response()->json([
-                'error'   => 'invalid_token',
-                'message' => 'Token inválido, expirado o revocado.',
+                'error'   => 'unauthorized',
+                'message' => 'Dispositivo no autorizado.',
             ], 401);
         }
 
-        $tableroToken->recordUse($request->ip() ?? '0.0.0.0');
+        $device->recordActivity($request->ip() ?? '0.0.0.0');
 
-        $data = $this->fetchData($tableroToken);
-
-        return response()->json($data, 200, [
+        return response()->json($this->fetchData($device), 200, [
             'Access-Control-Allow-Origin' => '*',
         ]);
+    }
+
+    // =========================================================================
+    // RESOLUCIÓN DEL DISPOSITIVO
+    // =========================================================================
+
+    /**
+     * Resuelve el dispositivo desde la request.
+     * Soporta: ?d=DEVICE_SECRET (nuevo) o ?token=TOKEN (legacy)
+     */
+    private function resolveDevice(Request $request): ?TableroDevice
+    {
+        // Nuevo: device_secret
+        $secret = $request->query('d', '');
+        if ($secret && strlen((string) $secret) >= 10) {
+            return TableroDevice::findBySecret((string) $secret);
+        }
+
+        // Legacy: token de TableroToken
+        $token = $request->query('token', '');
+        if ($token && strlen((string) $token) >= 10) {
+            $tableroToken = TableroToken::findByToken((string) $token);
+            if ($tableroToken) {
+                $tableroToken->recordUse($request->ip() ?? '0.0.0.0');
+                // Crear un device virtual para reutilizar el flujo
+                $virtual = new TableroDevice();
+                $virtual->id = 0;
+                $virtual->schema_name = $tableroToken->schema_name;
+                $virtual->view_name = $tableroToken->view_name;
+                $virtual->sede_filter = $tableroToken->sede_filter;
+                $virtual->max_connections = $tableroToken->max_connections;
+                return $virtual;
+            }
+        }
+
+        return null;
     }
 
     // =========================================================================
@@ -146,14 +229,11 @@ final class TableroPublicController extends Controller
     // =========================================================================
 
     /**
-     * Consulta DIRECTA a Fabric (nunca parquet) para datos en tiempo real.
-     * Cachea 15 segundos para no golpear si dos TVs de la misma sede piden a la vez.
-     *
-     * @return array{success: bool, data: array, sede: ?string, timestamp: string}
+     * Consulta DIRECTA a Fabric para datos en tiempo real.
      */
-    private function fetchData(TableroToken $tableroToken): array
+    private function fetchData(TableroDevice $device): array
     {
-        $cacheKey = "tablero_public:{$tableroToken->id}";
+        $cacheKey = "tablero_public_dev:{$device->id}";
         $cacheTtl = (int) env('TABLERO_PUBLIC_CACHE_TTL', 15);
 
         $cached = Cache::get($cacheKey);
@@ -165,8 +245,8 @@ final class TableroPublicController extends Controller
         $token = env('TOKEN_ADMIN', '');
 
         $filters = new \stdClass();
-        if ($tableroToken->sede_filter) {
-            $filters = ['Sede' => $tableroToken->sede_filter];
+        if ($device->sede_filter) {
+            $filters = ['Sede' => $device->sede_filter];
         }
 
         try {
@@ -175,12 +255,12 @@ final class TableroPublicController extends Controller
                 ->acceptJson()
                 ->post($url . '/api/data/dynamic', [
                     'token'       => $token,
-                    'groups'      => ['GG-BD-' . strtoupper($tableroToken->schema_name), 'GG-BD-ADMIN'],
+                    'groups'      => ['GG-BD-' . strtoupper($device->schema_name), 'GG-BD-ADMIN'],
                     'department'  => 'NAL-TIC NAL',
                     'user_email'  => 'tablero@medilaser.com.co',
                     'user_name'   => 'Tablero Público',
-                    'schema_name' => $tableroToken->schema_name,
-                    'view'        => $tableroToken->view_name,
+                    'schema_name' => $device->schema_name,
+                    'view'        => $device->view_name,
                     'columns'     => [],
                     'filters'     => $filters,
                     'limit'       => 50,
@@ -191,26 +271,18 @@ final class TableroPublicController extends Controller
                 ]);
 
             if ($response->failed()) {
-                Log::warning('TableroPublic: Fabric no respondió', [
-                    'token_id' => $tableroToken->id,
-                    'status'   => $response->status(),
-                ]);
-
                 return [
                     'success'   => false,
                     'data'      => [],
-                    'sede'      => $tableroToken->sede_filter,
+                    'sede'      => $device->sede_filter,
                     'timestamp' => now()->toIso8601String(),
-                    'error'     => 'service_unavailable',
                 ];
             }
 
-            $items = $response->json('items') ?? [];
-
             $result = [
                 'success'   => true,
-                'data'      => $items,
-                'sede'      => $tableroToken->sede_filter,
+                'data'      => $response->json('items') ?? [],
+                'sede'      => $device->sede_filter,
                 'timestamp' => now()->toIso8601String(),
             ];
 
@@ -218,24 +290,17 @@ final class TableroPublicController extends Controller
 
             return $result;
         } catch (\Throwable $e) {
-            Log::warning('TableroPublic: excepción', [
-                'token_id' => $tableroToken->id,
-                'error'    => $e->getMessage(),
-            ]);
+            Log::warning('TableroPublic: error', ['device' => $device->id, 'error' => $e->getMessage()]);
 
             return [
                 'success'   => false,
                 'data'      => [],
-                'sede'      => $tableroToken->sede_filter,
+                'sede'      => $device->sede_filter,
                 'timestamp' => now()->toIso8601String(),
-                'error'     => 'connection_error',
             ];
         }
     }
 
-    /**
-     * Envía un evento SSE al cliente.
-     */
     private function sendSseEvent(string $event, array $data): void
     {
         echo "event: {$event}\n";

@@ -5,37 +5,49 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Tableros;
 
 use App\Http\Controllers\Controller;
+use App\Models\TableroDevice;
 use App\Models\TableroToken;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * CRUD de tokens de tablero (requiere autenticación + rol admin).
+ * CRUD de dispositivos de tablero (requiere auth:api).
  *
- * Permite crear, listar, revocar y ver el estado de las TVs conectadas.
+ * Permite crear tableros (genera código de emparejamiento), listar TVs
+ * conectadas, y revocar acceso.
  */
 final class TableroTokenController extends Controller
 {
     /**
-     * GET /api/tableros/tokens — Listar todos los tokens
+     * GET /api/tableros/tokens — Listar todos los dispositivos
      */
     public function index(): JsonResponse
     {
-        $tokens = TableroToken::orderByDesc('created_at')
+        $devices = TableroDevice::orderByDesc('created_at')
             ->get([
                 'id', 'name', 'schema_name', 'view_name', 'sede_filter',
-                'active', 'expires_at', 'last_used_at', 'last_ip',
-                'use_count', 'max_connections', 'created_at',
+                'paired', 'active', 'pairing_code', 'pairing_expires_at',
+                'last_seen_at', 'last_ip', 'user_agent',
+                'connection_count', 'max_connections', 'created_at',
             ]);
+
+        // Mostrar el código solo si aún no fue emparejado y está vigente
+        $data = $devices->map(function ($d) {
+            $arr = $d->toArray();
+            if ($d->paired || ($d->pairing_expires_at && $d->pairing_expires_at->isPast())) {
+                $arr['pairing_code'] = null;
+            }
+            return $arr;
+        });
 
         return response()->json([
             'success' => true,
-            'data'    => $tokens,
+            'data'    => $data,
         ]);
     }
 
     /**
-     * POST /api/tableros/tokens — Crear un nuevo token
+     * POST /api/tableros/tokens — Crear un nuevo tablero (genera código de emparejamiento)
      */
     public function store(Request $request): JsonResponse
     {
@@ -45,66 +57,88 @@ final class TableroTokenController extends Controller
             'view_name'       => 'nullable|string|max:150',
             'sede_filter'     => 'nullable|string|max:100',
             'max_connections' => 'nullable|integer|min:1|max:10',
-            'expires_days'    => 'nullable|integer|min:1|max:365',
         ]);
 
-        $plainToken = TableroToken::generateToken();
+        $code = TableroDevice::generatePairingCode();
 
-        $tableroToken = TableroToken::create([
-            'token'           => $plainToken,
-            'name'            => $request->name,
-            'schema_name'     => $request->input('schema_name', 'ug'),
-            'view_name'       => $request->input('view_name', 'VW_HC_TableroUrgencias'),
-            'sede_filter'     => $request->sede_filter,
-            'max_connections' => $request->input('max_connections', 3),
-            'expires_at'      => $request->expires_days
-                ? now()->addDays((int) $request->expires_days)
-                : null,
-            'created_by'      => auth()->id(),
+        $device = TableroDevice::create([
+            'pairing_code'       => $code,
+            'pairing_expires_at' => now()->addMinutes(5),
+            'name'               => $request->name,
+            'schema_name'        => $request->input('schema_name', 'ug'),
+            'view_name'          => $request->input('view_name', 'VW_HC_TableroUrgencias'),
+            'sede_filter'        => $request->sede_filter,
+            'max_connections'    => $request->input('max_connections', 2),
+            'created_by'         => auth()->id(),
         ]);
 
         return response()->json([
             'success' => true,
             'data'    => [
-                'id'              => $tableroToken->id,
-                'name'            => $tableroToken->name,
-                'token'           => $plainToken, // ⚠️ Solo se muestra UNA VEZ
-                'sede_filter'     => $tableroToken->sede_filter,
-                'stream_url'      => url("/api/public/tableros/urgencias/stream?token={$plainToken}"),
-                'data_url'        => url("/api/public/tableros/urgencias/data?token={$plainToken}"),
-                'frontend_url'    => "https://jade.medilaser.com.co/tableroUrgencias?token={$plainToken}",
-                'expires_at'      => $tableroToken->expires_at?->toIso8601String(),
-                'max_connections' => $tableroToken->max_connections,
+                'id'           => $device->id,
+                'name'         => $device->name,
+                'pairing_code' => $code,
+                'expires_in'   => '5 minutos',
+                'sede_filter'  => $device->sede_filter,
+                'instructions' => "En la TV, navegue a jade.medilaser.com.co/tablero e ingrese el código: {$code}",
             ],
-            'warning' => 'Guarda este token. No se puede recuperar después.',
         ], 201);
     }
 
     /**
-     * PATCH /api/tableros/tokens/{id}/revoke — Revocar un token
+     * POST /api/tableros/tokens/{id}/regenerate-code — Generar nuevo código (si la TV no emparejó)
      */
-    public function revoke(int $id): JsonResponse
+    public function regenerateCode(int $id): JsonResponse
     {
-        $token = TableroToken::findOrFail($id);
-        $token->update(['active' => false]);
+        $device = TableroDevice::findOrFail($id);
+
+        if ($device->paired) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Este dispositivo ya fue emparejado. Revóquelo y cree uno nuevo si necesita re-emparejar.',
+            ], 422);
+        }
+
+        $code = TableroDevice::generatePairingCode();
+        $device->update([
+            'pairing_code'       => $code,
+            'pairing_expires_at' => now()->addMinutes(5),
+        ]);
 
         return response()->json([
             'success' => true,
-            'message' => "Token '{$token->name}' revocado. La TV dejará de recibir datos.",
+            'data'    => [
+                'pairing_code' => $code,
+                'expires_in'   => '5 minutos',
+            ],
         ]);
     }
 
     /**
-     * PATCH /api/tableros/tokens/{id}/activate — Reactivar un token
+     * PATCH /api/tableros/tokens/{id}/revoke — Revocar acceso de una TV
      */
-    public function activate(int $id): JsonResponse
+    public function revoke(int $id): JsonResponse
     {
-        $token = TableroToken::findOrFail($id);
-        $token->update(['active' => true]);
+        $device = TableroDevice::findOrFail($id);
+        $device->update(['active' => false]);
 
         return response()->json([
             'success' => true,
-            'message' => "Token '{$token->name}' reactivado.",
+            'message' => "Tablero '{$device->name}' revocado. La TV dejará de recibir datos.",
+        ]);
+    }
+
+    /**
+     * PATCH /api/tableros/tokens/{id}/activate — Reactivar una TV
+     */
+    public function activate(int $id): JsonResponse
+    {
+        $device = TableroDevice::findOrFail($id);
+        $device->update(['active' => true]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Tablero '{$device->name}' reactivado.",
         ]);
     }
 
@@ -113,12 +147,12 @@ final class TableroTokenController extends Controller
      */
     public function destroy(int $id): JsonResponse
     {
-        $token = TableroToken::findOrFail($id);
-        $token->delete();
+        $device = TableroDevice::findOrFail($id);
+        $device->delete();
 
         return response()->json([
             'success' => true,
-            'message' => "Token '{$token->name}' eliminado permanentemente.",
+            'message' => "Tablero '{$device->name}' eliminado permanentemente.",
         ]);
     }
 }

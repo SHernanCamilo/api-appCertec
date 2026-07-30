@@ -16,10 +16,11 @@ use App\Http\Controllers\Tableros\TableroTokenController;
 // Endpoint original (para el frontend Angular con sesión)
 Route::get('/urgencias', [TableroUrgenciasController::class, 'index']);
 
-// CRUD de tokens de tablero (admin)
+// CRUD de dispositivos de tablero (admin)
 Route::prefix('tokens')->group(function () {
     Route::get('/', [TableroTokenController::class, 'index']);
     Route::post('/', [TableroTokenController::class, 'store']);
+    Route::post('/{id}/regenerate-code', [TableroTokenController::class, 'regenerateCode']);
     Route::patch('/{id}/revoke', [TableroTokenController::class, 'revoke']);
     Route::patch('/{id}/activate', [TableroTokenController::class, 'activate']);
     Route::delete('/{id}', [TableroTokenController::class, 'destroy']);
