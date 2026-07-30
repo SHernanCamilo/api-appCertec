@@ -323,10 +323,23 @@ final class ODataSnapshotService
                     'columns'     => $context['columns'] ?? [],
                     'max_rows'    => (int) ($context['max_rows'] ?? 1000000),
                     'format'      => 'gzip',
+                    // NO se envía ensure_fresh: este job corre en background y la
+                    // frescura ya se valida antes con tryRevalidateByCount(). Pedirle
+                    // a Graph-Fabric que valide de nuevo duplicaría el COUNT y le
+                    // sumaría 30-120s a un refresco que nadie está esperando.
+                    'ensure_fresh' => false,
                 ]);
 
-            // 200 = parquet disponible. Cualquier otro código → fallback a Fabric.
+            // 200 = parquet disponible.
+            // 404 no_cache = la vista no tiene parquet (p. ej. > 1M filas, como
+            // ExtractoCartera con 7.5M) → se cae a Fabric paginado.
             if ($response->status() !== 200) {
+                Log::info('ODataSnapshot: parquet no disponible, se usará Fabric', [
+                    'schema' => $context['schema'] ?? null,
+                    'view'   => $context['view'] ?? null,
+                    'status' => $response->status(),
+                    'error'  => $response->json('error'),
+                ]);
                 return null;
             }
 

@@ -132,27 +132,35 @@ final class FabricStreamExportJob implements ShouldQueue
         ]);
 
         try {
-            $response = Http::timeout(120)
+            // ensure_fresh=true: el usuario pidió esta descarga explícitamente, así que
+            // Graph-Fabric valida el COUNT contra Fabric y regenera el parquet si difiere.
+            // Cuesta 30-120s extra pero garantiza que el Excel trae exactamente las filas
+            // que el usuario ve en la grilla. (OData NO lo usa: allí prima la velocidad.)
+            $response = Http::timeout(600)
                 ->connectTimeout(10)
                 ->post($url . '/api/data/export/r2', [
-                    'token'       => $token,
-                    'user_email'  => $user->email,
-                    'user_name'   => $user->name ?? $user->email,
-                    'department'  => $gateway->resolveDepartmentForGrantView($user, $this->view),
-                    'groups'      => $gateway->getGruposBd($user),
-                    'schema_name' => $this->schema,
-                    'view'        => $this->view,
-                    'filters'     => $gateway->normalizeFiltersPublic($this->options['filters'] ?? []),
-                    'columns'     => $this->options['columns'] ?? [],
-                    'max_rows'    => min((int)($this->options['max_rows'] ?? 500000), 1000000),
-                    'format'      => 'gzip',
+                    'token'        => $token,
+                    'user_email'   => $user->email,
+                    'user_name'    => $user->name ?? $user->email,
+                    'department'   => $gateway->resolveDepartmentForGrantView($user, $this->view),
+                    'groups'       => $gateway->getGruposBd($user),
+                    'schema_name'  => $this->schema,
+                    'view'         => $this->view,
+                    'filters'      => $gateway->normalizeFiltersPublic($this->options['filters'] ?? []),
+                    'columns'      => $this->options['columns'] ?? [],
+                    'max_rows'     => min((int)($this->options['max_rows'] ?? 500000), 1000000),
+                    'format'       => 'gzip',
+                    'ensure_fresh' => true,
                 ]);
 
             if ($response->status() !== 200) {
-                // R2 no disponible (202 = generando, otro = error) → fallback
+                // 404 no_cache  = vista sin parquet (p. ej. > 1M filas) → Fabric directo
+                // 202          = parquet generándose → Fabric directo
                 Log::info('FabricStreamExportJob: R2 no disponible, usando Fabric directo', [
-                    'job_id' => $this->jobId,
-                    'status' => $response->status(),
+                    'job_id'      => $this->jobId,
+                    'status'      => $response->status(),
+                    'error'       => $response->json('error'),
+                    'retry_after' => $response->json('retry_after_seconds'),
                 ]);
                 return false;
             }
@@ -165,6 +173,19 @@ final class FabricStreamExportJob implements ShouldQueue
             ]);
 
             $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
+
+            // Trazabilidad de frescura: permite auditar si el parquet se regeneró y
+            // si el conteo coincidía con Fabric al momento de la descarga.
+            Log::info('FabricStreamExportJob: R2 sirvió el export', [
+                'job_id'       => $this->jobId,
+                'view'         => "{$this->schema}.{$this->view}",
+                'source'       => $response->header('X-Source'),
+                'rows'         => $totalRows,
+                'parquet_rows' => $response->header('X-Parquet-Rows'),
+                'regenerated'  => $response->header('X-Parquet-Regenerated'),
+                'fabric_count' => $response->header('X-Fabric-Count'),
+                'elapsed_ms'   => $response->header('X-Elapsed-Ms'),
+            ]);
 
             // Preparar directorio
             $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
