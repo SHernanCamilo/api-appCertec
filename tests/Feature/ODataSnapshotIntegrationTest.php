@@ -331,15 +331,10 @@ class ODataSnapshotIntegrationTest extends TestCase
         // Simular headers como los de VW_Inventory_AlmacenesPivot_315_Cmi
         $headers = ['315', '051', 'Codigo', 'Producto', 'Nro_Cuenta'];
 
-        // Usar reflection para acceder al método privado
-        $job = new \ReflectionClass(\App\Jobs\FabricStreamExportJob::class);
-        $method = $job->getMethod('detectTextColumns');
-        $method->setAccessible(true);
-
-        // Crear instancia mínima del job
-        $instance = $job->newInstanceWithoutConstructor();
-
-        $result = $method->invoke($instance, $headers, ['1', '054', '19906526', 'FOSFATO', '036004835']);
+        $result = \App\Services\Fabric\Export\ExportValueFormatter::detectTextColumns(
+            $headers,
+            ['1', '054', '19906526', 'FOSFATO', '036004835']
+        );
 
         // 'Nro_Cuenta' debe marcarse como texto (patrón nro_)
         // '036004835' empieza con 0 → debe marcarse como texto

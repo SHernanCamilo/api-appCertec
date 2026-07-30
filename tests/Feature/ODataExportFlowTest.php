@@ -171,14 +171,12 @@ class ODataExportFlowTest extends TestCase
         $this->assertSame('Codigo', $headers[2]);
         $this->assertSame('Producto', $headers[3]);
 
-        // Simular detectTextColumns
-        $job = new \ReflectionClass(\App\Jobs\FabricStreamExportJob::class);
-        $method = $job->getMethod('detectTextColumns');
-        $method->setAccessible(true);
-        $instance = $job->newInstanceWithoutConstructor();
-
+        // Detección de columnas de texto (ahora en ExportValueFormatter)
         $firstRowValues = array_values($mockData[0]);
-        $textCols = $method->invoke($instance, $headers, $firstRowValues);
+        $textCols = \App\Services\Fabric\Export\ExportValueFormatter::detectTextColumns(
+            $headers,
+            $firstRowValues
+        );
 
         // No debe haber crasheado
         $this->assertIsArray($textCols);

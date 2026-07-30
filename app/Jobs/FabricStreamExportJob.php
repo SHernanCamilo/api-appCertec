@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Models\User;
+use App\Services\Fabric\Export\ExportResult;
+use App\Services\Fabric\Export\StreamingExportWriter;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -19,14 +21,14 @@ use Illuminate\Support\Facades\Storage;
  * Export via streaming desde Graph-Fabric.
  *
  * Flujo:
- *   1. Frontend llama POST /api/fabric/viewer/export/start → recibe job_id
+ *   1. Frontend llama POST /api/fabric/viewer/export/start â†’ recibe job_id
  *   2. Este job consume el stream de Python chunk por chunk (50K filas/chunk)
- *   3. Cada chunk se descomprime (gzip→NDJSON) y se acumula
+ *   3. Cada chunk se descomprime (gzipâ†’NDJSON) y se acumula
  *   4. Al terminar, genera un CSV comprimido o Excel
  *   5. Frontend descarga con GET /export/download/{job_id}
  *
  * Ventaja: Graph-Fabric queda libre para atender otros usuarios.
- * El streaming es rápido (solo envía datos crudos), Laravel arma el archivo.
+ * El streaming es rÃ¡pido (solo envÃ­a datos crudos), Laravel arma el archivo.
  */
 final class FabricStreamExportJob implements ShouldQueue
 {
@@ -40,19 +42,6 @@ final class FabricStreamExportJob implements ShouldQueue
     private const STATUS_COMPLETED  = 'completed';
     private const STATUS_FAILED     = 'failed';
 
-    /**
-     * Patrones de nombres de columnas que SIEMPRE deben tratarse como texto.
-     * Esto previene que Excel elimine ceros iniciales en cuentas, placas, NIT, etc.
-     * Se usa como respaldo cuando el valor ya llegó convertido a número desde Python.
-     */
-    private const TEXT_COLUMN_PATTERNS = [
-        'nro_cuenta', 'num_cuenta', 'numero_cuenta', 'cuenta_bancaria',
-        'placa', 'codigo', 'cod_', 'nit', 'documento', 'cedula',
-        'identificacion', 'telefono', 'celular', 'consecutivo',
-        'codigo_proveedor', 'codigo_banco', 'num_', 'nro_',
-        'referencia', 'poliza', 'contrato',
-    ];
-
     public function __construct(
         private readonly string $jobId,
         private readonly int    $userId,
@@ -60,7 +49,7 @@ final class FabricStreamExportJob implements ShouldQueue
         private readonly string $view,
         private readonly array  $options,
     ) {
-        // Cola dedicada para exports — aislada de jobs rápidos.
+        // Cola dedicada para exports â€” aislada de jobs rÃ¡pidos.
         $this->onQueue('exports');
     }
 
@@ -68,7 +57,7 @@ final class FabricStreamExportJob implements ShouldQueue
     {
         // Excel con 150K+ filas necesita RAM para PhpSpreadsheet (genera XML interno)
         ini_set('memory_limit', '1G');
-        set_time_limit(0); // Sin límite de tiempo (el job tiene su propio timeout de 600s)
+        set_time_limit(0); // Sin lÃ­mite de tiempo (el job tiene su propio timeout de 600s)
 
         $this->updateStatus(self::STATUS_PROCESSING, null, ['progress' => 0, 'rows' => 0]);
 
@@ -88,14 +77,14 @@ final class FabricStreamExportJob implements ShouldQueue
 
     /**
      * Genera Excel escribiendo directo a disco con XMLWriter.
-     * NO carga todas las filas en RAM — escribe cada batch y lo libera.
+     * NO carga todas las filas en RAM â€” escribe cada batch y lo libera.
      * Funciona con 500K+ filas sin agotar memoria.
      */
     private function exportToExcel(User $user): void
     {
-        // Intentar R2 cache primero (12x más rápido para vistas grandes)
+        // Intentar R2 cache primero (12x mÃ¡s rÃ¡pido para vistas grandes)
         if ($this->tryExportFromR2($user)) {
-            return; // R2 resolvió el export completo
+            return; // R2 resolviÃ³ el export completo
         }
 
         // Fallback: descargar de Fabric request por request
@@ -104,7 +93,7 @@ final class FabricStreamExportJob implements ShouldQueue
 
     /**
      * Fast-path: Export desde R2 Parquet cache (~47s para 450K filas vs 9 min).
-     * Retorna true si R2 resolvió el export, false para caer al fallback.
+     * Retorna true si R2 resolviÃ³ el export, false para caer al fallback.
      */
     private function tryExportFromR2(User $user): bool
     {
@@ -112,13 +101,13 @@ final class FabricStreamExportJob implements ShouldQueue
         $token   = env('TOKEN_ADMIN', '');
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
-        // ⚠️ CORRECTITUD DE DATOS: el parquet de R2 es un snapshot de la vista COMPLETA
-        // sin filtros. Si el usuario filtró, R2 no puede garantizar el mismo resultado
+        // âš ï¸ CORRECTITUD DE DATOS: el parquet de R2 es un snapshot de la vista COMPLETA
+        // sin filtros. Si el usuario filtrÃ³, R2 no puede garantizar el mismo resultado
         // que Fabric (el parquet puede estar desactualizado o el filtro no aplicarse).
         // En ese caso vamos directo a Fabric, que aplica los filtros en el SELECT.
         $filters = $this->options['filters'] ?? [];
         if (!empty($filters)) {
-            Log::info('FabricStreamExportJob: export con filtros → Fabric directo (R2 omitido)', [
+            Log::info('FabricStreamExportJob: export con filtros â†’ Fabric directo (R2 omitido)', [
                 'job_id'  => $this->jobId,
                 'filters' => array_keys($filters),
             ]);
@@ -132,10 +121,10 @@ final class FabricStreamExportJob implements ShouldQueue
         ]);
 
         try {
-            // ensure_fresh=true: el usuario pidió esta descarga explícitamente, así que
+            // ensure_fresh=true: el usuario pidiÃ³ esta descarga explÃ­citamente, asÃ­ que
             // Graph-Fabric valida el COUNT contra Fabric y regenera el parquet si difiere.
             // Cuesta 30-120s extra pero garantiza que el Excel trae exactamente las filas
-            // que el usuario ve en la grilla. (OData NO lo usa: allí prima la velocidad.)
+            // que el usuario ve en la grilla. (OData NO lo usa: allÃ­ prima la velocidad.)
             $response = Http::timeout(600)
                 ->connectTimeout(10)
                 ->post($url . '/api/data/export/r2', [
@@ -154,8 +143,8 @@ final class FabricStreamExportJob implements ShouldQueue
                 ]);
 
             if ($response->status() !== 200) {
-                // 404 no_cache  = vista sin parquet (p. ej. > 1M filas) → Fabric directo
-                // 202          = parquet generándose → Fabric directo
+                // 404 no_cache  = vista sin parquet (p. ej. > 1M filas) â†’ Fabric directo
+                // 202          = parquet generÃ¡ndose â†’ Fabric directo
                 Log::info('FabricStreamExportJob: R2 no disponible, usando Fabric directo', [
                     'job_id'      => $this->jobId,
                     'status'      => $response->status(),
@@ -165,7 +154,7 @@ final class FabricStreamExportJob implements ShouldQueue
                 return false;
             }
 
-            // R2 respondió con datos — escribir gzip a disco y decodificar por streaming
+            // R2 respondiÃ³ con datos â€” escribir gzip a disco y decodificar por streaming
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => 20,
                 'rows'     => 0,
@@ -174,9 +163,9 @@ final class FabricStreamExportJob implements ShouldQueue
 
             $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
 
-            // Trazabilidad de frescura: permite auditar si el parquet se regeneró y
-            // si el conteo coincidía con Fabric al momento de la descarga.
-            Log::info('FabricStreamExportJob: R2 sirvió el export', [
+            // Trazabilidad de frescura: permite auditar si el parquet se regenerÃ³ y
+            // si el conteo coincidÃ­a con Fabric al momento de la descarga.
+            Log::info('FabricStreamExportJob: R2 sirviÃ³ el export', [
                 'job_id'       => $this->jobId,
                 'view'         => "{$this->schema}.{$this->view}",
                 'source'       => $response->header('X-Source'),
@@ -188,131 +177,78 @@ final class FabricStreamExportJob implements ShouldQueue
             ]);
 
             // Preparar directorio
-            $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
-            $dir      = storage_path("app/fabric_exports/{$this->jobId}");
+            $dir = storage_path("app/fabric_exports/{$this->jobId}");
             if (!is_dir($dir)) {
                 mkdir($dir, 0775, true);
             }
-            $filePath = "{$dir}/{$filename}";
 
             // Escribir gzip a disco (NO decodificar en RAM)
             $gzipFile = "{$dir}/r2_data.gz";
             file_put_contents($gzipFile, $response->body());
             unset($response); // Liberar RAM del response
 
-            // Decodificar gzip por streaming → escribir a tmp file línea por línea
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => 35,
                 'rows'     => $totalRows,
                 'message'  => "Procesando {$totalRows} filas desde R2...",
             ]);
 
-            $tmpFile = "{$dir}/data.tmp";
-            $headers = [];
-            $rowCount = 0;
-
+            // UNA SOLA PASADA: gzip â†’ archivo final. Antes habÃ­a un data.tmp
+            // intermedio que obligaba a recorrer el dataset tres veces.
             $gzStream = gzopen($gzipFile, 'rb');
-            $tmpHandle = fopen($tmpFile, 'w');
-
-            if (!$gzStream || !$tmpHandle) {
+            if ($gzStream === false) {
                 @unlink($gzipFile);
                 Log::warning('FabricStreamExportJob: No se pudo abrir stream gz', ['job_id' => $this->jobId]);
                 return false;
             }
 
-            while (!gzeof($gzStream)) {
-                $line = gzgets($gzStream, 1048576); // 1 MB max por línea
-                if ($line === false || trim($line) === '') continue;
+            $writer = $this->makeWriter($dir);
+            $writer->onProgress(function (int $rows) use ($totalRows): void {
+                $progress = min(90, 35 + (int) ($rows / max($totalRows, 1) * 55));
+                $this->updateStatus(self::STATUS_PROCESSING, null, [
+                    'progress' => $progress,
+                    'rows'     => $rows,
+                    'message'  => "Procesando... ({$rows} filas)",
+                ]);
+            });
 
-                $row = json_decode(trim($line), true);
-                if (!$row) continue;
-
-                if (empty($headers)) {
-                    $headers = array_map('strval', array_keys($row));
-                    fwrite($tmpHandle, json_encode($headers) . "\n");
-                }
-
-                $values = [];
-                foreach ($headers as $h) {
-                    $val = $row[$h] ?? '';
-                    if (is_string($val)) {
-                        $val = str_replace(["\r\n", "\r", "\n", "\t"], ' ', $val);
+            try {
+                while (!gzeof($gzStream)) {
+                    $line = gzgets($gzStream, 1048576); // 1 MB max por lÃ­nea
+                    if ($line === false || trim($line) === '') {
+                        continue;
                     }
-                    $values[] = $val;
-                }
-                fwrite($tmpHandle, json_encode($values, JSON_UNESCAPED_UNICODE) . "\n");
-                $rowCount++;
 
-                // Actualizar progreso cada 50K filas
-                if ($rowCount % 50000 === 0) {
-                    $progress = min(65, 35 + intval($rowCount / max($totalRows, 1) * 30));
-                    $this->updateStatus(self::STATUS_PROCESSING, null, [
-                        'progress' => $progress,
-                        'rows'     => $rowCount,
-                        'message'  => "Procesando... ({$rowCount} filas)",
-                    ]);
+                    $row = json_decode(trim($line), true);
+                    if (!is_array($row) || $row === []) {
+                        continue;
+                    }
+
+                    $writer->writeRow($row);
                 }
+            } catch (\Throwable $e) {
+                $writer->abort();
+                throw $e;
+            } finally {
+                gzclose($gzStream);
+                @unlink($gzipFile);
             }
 
-            gzclose($gzStream);
-            fclose($tmpHandle);
-            @unlink($gzipFile); // Limpiar archivo gzip temporal
+            $result = $writer->finish();
 
-            if ($rowCount === 0) {
-                @unlink($tmpFile);
+            if ($result->isEmpty()) {
                 $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos con los filtros aplicados.', [
                     'rows' => 0, 'progress' => 100,
                 ]);
                 return true;
             }
 
-            $this->updateStatus(self::STATUS_PROCESSING, null, [
-                'progress' => 70,
-                'rows'     => $rowCount,
-                'message'  => 'Generando archivo Excel (desde R2)...',
-            ]);
-
-            // Generar Excel
-            $this->writeXlsxFromTmpFile($tmpFile, $filePath, $headers, $rowCount);
-            @unlink($tmpFile);
-
-            // Si >20K filas, es CSV
-            $format = 'xlsx';
-            if ($rowCount > 20000) {
-                $csvFilePath = str_replace('.xlsx', '.csv', $filePath);
-                if (file_exists($filePath)) {
-                    rename($filePath, $csvFilePath);
-                }
-                $filePath = $csvFilePath;
-                $filename = str_replace('.xlsx', '.csv', $filename);
-                $format = 'csv';
-            }
-
-            $fileSize    = filesize($filePath);
-            $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
-
-            $this->updateStatus(self::STATUS_COMPLETED, null, [
-                'progress'        => 100,
-                'rows'            => $rowCount,
-                'filename'        => $filename,
-                'file_path'       => $storagePath,
-                'file_size'       => $fileSize,
-                'file_size_human' => $this->humanFileSize($fileSize),
-                'format'          => $format,
-                'source'          => 'r2',
-            ]);
-
-            Log::info('FabricStreamExportJob: Excel generado desde R2', [
-                'job_id' => $this->jobId,
-                'rows'   => $rowCount,
-                'size'   => $fileSize,
-                'source' => 'r2',
-            ]);
+            $this->publishResult($result, 'r2');
 
             return true;
 
         } catch (\Throwable $e) {
-            Log::warning('FabricStreamExportJob: R2 falló, usando fallback', [
+            Log::warning('FabricStreamExportJob: R2 fallÃ³, usando fallback', [
                 'job_id' => $this->jobId,
                 'error'  => $e->getMessage(),
             ]);
@@ -333,29 +269,24 @@ final class FabricStreamExportJob implements ShouldQueue
         $limit   = (int) env('FABRIC_EXPORT_CHUNK', 10000); // filas por request a Python
         $offset  = 0;
 
-        // Pausa entre chunks (ms) — libera el worker de Python para atender usuarios
+        // Pausa entre chunks (ms) â€” libera el worker de Python para atender usuarios
         // interactivos entre lote y lote. Evita que un export monopolice un worker.
         $chunkPauseMs = (int) env('FABRIC_EXPORT_CHUNK_PAUSE_MS', 300);
         $totalRows = 0;
-        $headers = [];
 
         // Preparar directorio
-        $filename = "{$this->schema}_{$this->view}_" . date('Ymd_His') . '.xlsx';
-        $dir      = storage_path("app/fabric_exports/{$this->jobId}");
+        $dir = storage_path("app/fabric_exports/{$this->jobId}");
         if (!is_dir($dir)) {
             mkdir($dir, 0775, true);
         }
-        $filePath = "{$dir}/{$filename}";
 
-        // Archivo temporal para datos (escribimos filas como TSV temporal, luego armamos xlsx)
-        $tmpFile = "{$dir}/data.tmp";
-        $tmpHandle = fopen($tmpFile, 'w');
+        // UNA SOLA PASADA: cada lote de Fabric se escribe directo al archivo final.
+        $writer = $this->makeWriter($dir);
 
-        $siteContext = $gateway->resolveSiteContext($user);
         $payload = [
             'token'       => $token,
             'groups'      => $gateway->getGruposBd($user),
-            // Department alineado a la vista (ej: NvaGral → NVA aunque el usuario también tenga EAL)
+            // Department alineado a la vista (ej: NvaGral â†’ NVA aunque el usuario tambiÃ©n tenga EAL)
             'department'  => $gateway->resolveDepartmentForGrantView($user, $this->view),
             'user_email'  => $user->email,
             'user_name'   => $user->name ?? $user->email,
@@ -381,8 +312,7 @@ final class FabricStreamExportJob implements ShouldQueue
                 ->post($url . '/api/data/dynamic', $payload);
 
             if ($response->failed()) {
-                fclose($tmpHandle);
-                @unlink($tmpFile);
+                $writer->abort();
                 $body = $response->json();
                 if ($response->status() === 422 && ($body['error'] ?? '') === 'filters_required') {
                     $this->updateStatus(self::STATUS_FAILED, $body['message'] ?? 'Vista requiere filtros.');
@@ -397,26 +327,15 @@ final class FabricStreamExportJob implements ShouldQueue
             $items = $data['items'] ?? [];
             if (empty($items)) break;
 
-            // Guardar headers
-            if (empty($headers)) {
-                $headers = array_map('strval', array_keys($items[0]));
-                fwrite($tmpHandle, json_encode($headers) . "\n");
-            }
-
-            // Escribir cada fila como JSON line
             foreach ($items as $row) {
-                $values = [];
-                foreach ($headers as $h) {
-                    $val = $row[$h] ?? '';
-                    if (is_string($val)) {
-                        $val = str_replace(["\r\n", "\r", "\n", "\t"], ' ', $val);
-                    }
-                    $values[] = $val;
+                if (!is_array($row) || $row === []) {
+                    continue;
                 }
-                fwrite($tmpHandle, json_encode($values, JSON_UNESCAPED_UNICODE) . "\n");
+                $writer->writeRow($row);
                 $totalRows++;
             }
 
+            $pageInfo = $data['page_info'] ?? [];
             unset($items, $data);
             $offset += $limit;
 
@@ -427,7 +346,6 @@ final class FabricStreamExportJob implements ShouldQueue
                 'message'  => "Descargando datos... ({$totalRows} filas)",
             ]);
 
-            $pageInfo = $response->json()['page_info'] ?? [];
             if (!($pageInfo['has_next'] ?? false)) break;
 
             // Ceder el worker de Python entre lotes: los usuarios interactivos
@@ -437,222 +355,57 @@ final class FabricStreamExportJob implements ShouldQueue
             }
         }
 
-        fclose($tmpHandle);
+        $result = $writer->finish();
 
-        if ($totalRows === 0) {
-            @unlink($tmpFile);
+        if ($result->isEmpty()) {
             $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos con los filtros aplicados.', [
                 'rows' => 0, 'progress' => 100,
             ]);
             return;
         }
 
-        // Paso 2: Generar xlsx leyendo del archivo temporal (no carga todo en RAM)
-        $this->updateStatus(self::STATUS_PROCESSING, null, [
-            'progress' => 75,
-            'rows'     => $totalRows,
-            'message'  => 'Generando archivo Excel...',
-        ]);
+        $this->publishResult($result, 'fabric');
+    }
 
-        $this->writeXlsxFromTmpFile($tmpFile, $filePath, $headers, $totalRows);
+    // =========================================================================
+    // WRITER Y PUBLICACIÃ“N DEL RESULTADO
+    // =========================================================================
 
-        @unlink($tmpFile);
+    /**
+     * Crea el escritor de una sola pasada para este job.
+     */
+    private function makeWriter(string $dir): StreamingExportWriter
+    {
+        $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
 
-        // Si >20K filas, el archivo es CSV (no xlsx) — corregir extensión y formato
-        $format = 'xlsx';
-        if ($totalRows > 20000) {
-            $csvFilePath = str_replace('.xlsx', '.csv', $filePath);
-            if (file_exists($filePath)) {
-                rename($filePath, $csvFilePath);
-            }
-            $filePath = $csvFilePath;
-            $filename = str_replace('.xlsx', '.csv', $filename);
-            $format = 'csv';
-        }
+        return new StreamingExportWriter($dir, $baseName, $this->schema, $this->view);
+    }
 
-        $fileSize    = filesize($filePath);
-        $storagePath = "fabric_exports/{$this->jobId}/{$filename}";
-
+    /**
+     * Marca el job como completado y publica los metadatos del archivo.
+     */
+    private function publishResult(ExportResult $result, string $source): void
+    {
         $this->updateStatus(self::STATUS_COMPLETED, null, [
             'progress'        => 100,
-            'rows'            => $totalRows,
-            'filename'        => $filename,
-            'file_path'       => $storagePath,
-            'file_size'       => $fileSize,
-            'file_size_human' => $this->humanFileSize($fileSize),
-            'format'          => $format,
+            'rows'            => $result->rows,
+            'filename'        => $result->filename,
+            'file_path'       => "fabric_exports/{$this->jobId}/{$result->filename}",
+            'file_size'       => $result->bytes,
+            'file_size_human' => $result->humanSize(),
+            'format'          => $result->format,
+            'source'          => $source,
         ]);
 
-        Log::info('FabricStreamExportJob: Excel generado', [
+        Log::info('FabricStreamExportJob: archivo generado', [
             'job_id'   => $this->jobId,
-            'rows'     => $totalRows,
-            'size'     => $fileSize,
-            'filename' => $filename,
+            'view'     => "{$this->schema}.{$this->view}",
+            'rows'     => $result->rows,
+            'size'     => $result->bytes,
+            'format'   => $result->format,
+            'source'   => $source,
+            'filename' => $result->filename,
         ]);
-    }
-
-    /**
-     * Genera xlsx leyendo del archivo temporal línea por línea.
-     * Para ≤20K filas usa PhpSpreadsheet (bonito).
-     * Para >20K filas usa escritura CSV directo a xlsx (rápido, sin RAM).
-     */
-    private function writeXlsxFromTmpFile(string $tmpFile, string $xlsxPath, array $headers, int $totalRows): void
-    {
-        if ($totalRows <= 20000) {
-            // PhpSpreadsheet para archivos pequeños (con formato bonito)
-            $this->writeXlsxWithSpreadsheet($tmpFile, $xlsxPath, $headers, $totalRows);
-        } else {
-            // Para archivos grandes: CSV dentro de xlsx (rápido, 0 RAM extra)
-            $this->writeXlsxLightweight($tmpFile, $xlsxPath, $headers, $totalRows);
-        }
-    }
-
-    /**
-     * PhpSpreadsheet — para ≤20K filas con formato corporativo JadeOne.
-     */
-    private function writeXlsxWithSpreadsheet(string $tmpFile, string $xlsxPath, array $headers, int $totalRows): void
-    {
-        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
-        $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle(substr($this->view, 0, 31));
-
-        // Header corporativo
-        $colCount = count($headers);
-        $lastCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colCount);
-
-        $sheet->mergeCells("A1:{$lastCol}1");
-        $sheet->setCellValue('A1', "JadeOne — {$this->schema}.{$this->view}");
-        $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(12);
-
-        $sheet->mergeCells("A2:{$lastCol}2");
-        $sheet->setCellValue('A2', "Exportado: " . now()->format('d/m/Y H:i') . " | Registros: " . number_format($totalRows));
-        $sheet->getStyle('A2')->getFont()->setItalic(true)->setSize(9);
-
-        // Headers en fila 4
-        foreach ($headers as $i => $h) {
-            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
-            $sheet->setCellValue("{$col}4", $h);
-        }
-        $sheet->getStyle("A4:{$lastCol}4")->applyFromArray([
-            'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFF']],
-            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['argb' => '1B3A5C']],
-        ]);
-        $sheet->setAutoFilter("A4:{$lastCol}4");
-        $sheet->freezePane('A5');
-
-        // Leer datos del tmp file
-        $handle = fopen($tmpFile, 'r');
-        fgets($handle); // Skip header line (json de headers)
-        $row = 5;
-
-        // Detectar columnas que son fechas y columnas de texto (ceros iniciales)
-        $dateColumns = [];
-        $textColumns = $this->detectTextColumns($headers);
-
-        // Leer primera línea de datos para detectar fechas y más columnas de texto
-        $firstDataLine = fgets($handle);
-        if ($firstDataLine) {
-            $firstValues = json_decode(trim($firstDataLine), true);
-            if ($firstValues) {
-                foreach ($firstValues as $i => $val) {
-                    if (is_string($val) && preg_match('/^\d{4}-\d{2}-\d{2}/', $val)) {
-                        $dateColumns[$i] = true;
-                    }
-                }
-                // Detección adicional por contenido de primera fila
-                $textColumns = $textColumns + $this->detectTextColumns($headers, $firstValues);
-
-                // Aplicar formato texto a las columnas enteras detectadas (para que Excel no las convierta)
-                foreach ($textColumns as $i => $true) {
-                    $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
-                    $sheet->getStyle("{$col}5:{$col}" . ($totalRows + 4))
-                        ->getNumberFormat()
-                        ->setFormatCode(\PhpOffice\PhpSpreadsheet\Style\NumberFormat::FORMAT_TEXT);
-                }
-
-                // Escribir la primera fila
-                $this->writeSpreadsheetRow($sheet, $row, $firstValues, $dateColumns, $textColumns);
-                $row++;
-            }
-        }
-
-        // Resto de filas
-        while (($line = fgets($handle)) !== false) {
-            $values = json_decode(trim($line), true);
-            if ($values) {
-                $this->writeSpreadsheetRow($sheet, $row, $values, $dateColumns, $textColumns);
-                $row++;
-            }
-        }
-        fclose($handle);
-
-        $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
-        $writer->setPreCalculateFormulas(false);
-        $writer->save($xlsxPath);
-        $spreadsheet->disconnectWorksheets();
-    }
-
-    /**
-     * Escritura ligera para >20K filas — genera CSV con extensión .xlsx
-     * que Excel abre perfectamente. Usa 0 RAM extra.
-     */
-    private function writeXlsxLightweight(string $tmpFile, string $xlsxPath, array $headers, int $totalRows): void
-    {
-        // Detectar columnas de texto por nombre (respaldo)
-        $textColumns = $this->detectTextColumns($headers);
-
-        // Escribir directo al path recibido (se renombrará a .csv después)
-        $out = fopen($xlsxPath, 'w');
-        // BOM UTF-8
-        fwrite($out, "\xEF\xBB\xBF");
-        // Indica a Excel que use ; como separador
-        fwrite($out, "sep=;\n");
-        fputcsv($out, $headers, ';', '"', '\\');
-
-        // Leer datos del tmp file línea por línea (0 RAM extra)
-        $handle = fopen($tmpFile, 'r');
-        fgets($handle); // Skip header line
-        $isFirstRow = true;
-
-        while (($line = fgets($handle)) !== false) {
-            $values = json_decode(trim($line), true);
-            if ($values) {
-                // En la primera fila, detectar columnas adicionales por contenido
-                if ($isFirstRow) {
-                    $textColumns = $textColumns + $this->detectTextColumns($headers, $values);
-                    $isFirstRow = false;
-                }
-
-                $values = array_map(function ($v, $i) use ($textColumns) {
-                    // Columnas detectadas como texto → fórmula Excel para forzar texto
-                    if (isset($textColumns[$i]) && $v !== null && $v !== '') {
-                        $strVal = (string) $v;
-                        if (is_numeric($strVal)) {
-                            return '="' . $strVal . '"';
-                        }
-                        return $v;
-                    }
-
-                    // String que empieza con 0 y es numérico → proteger con fórmula
-                    if (is_string($v) && preg_match('/^0\d+$/', $v)) {
-                        return '="' . $v . '"';
-                    }
-
-                    // Limpiar decimales innecesarios para números normales
-                    if (is_numeric($v) && is_string($v) && str_contains($v, '.')) {
-                        return rtrim(rtrim($v, '0'), '.');
-                    }
-                    if (is_float($v)) {
-                        return (floor($v) == $v) ? (int) $v : $v;
-                    }
-                    return $v;
-                }, $values, array_keys($values));
-
-                fputcsv($out, $values, ';', '"', '\\');
-            }
-        }
-        fclose($handle);
-        fclose($out);
     }
 
     // =========================================================================
@@ -709,110 +462,5 @@ final class FabricStreamExportJob implements ShouldQueue
         self::dispatch($jobId, $userId, $schema, $view, $options);
 
         return $jobId;
-    }
-
-    private function humanFileSize(int $bytes): string
-    {
-        $units = ['B', 'KB', 'MB', 'GB'];
-        $i = 0;
-        while ($bytes >= 1024 && $i < count($units) - 1) {
-            $bytes /= 1024;
-            $i++;
-        }
-        return round($bytes, 1) . ' ' . $units[$i];
-    }
-
-    /**
-     * Escribe una fila en la hoja de cálculo respetando el tipo original de Fabric.
-     *
-     * Lógica simple:
-     *   - Si el valor vino como string desde Python/Fabric → se escribe como TEXTO (preserva ceros)
-     *   - Si vino como int/float → se escribe como NÚMERO
-     *   - Si es una fecha detectada → formato fecha Excel
-     *   - Columnas en TEXT_COLUMN_PATTERNS → siempre texto (respaldo por si Python lo convirtió a int)
-     */
-    private function writeSpreadsheetRow(
-        \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet,
-        int $row,
-        array $values,
-        array $dateColumns,
-        array $textColumns
-    ): void {
-        foreach ($values as $i => $val) {
-            $col = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
-            $cell = "{$col}{$row}";
-
-            // Columna de fecha → formato fecha Excel
-            if (isset($dateColumns[$i]) && is_string($val) && $val !== '') {
-                $dateStr = str_replace('T', ' ', substr($val, 0, 19));
-                try {
-                    $timestamp = \PhpOffice\PhpSpreadsheet\Shared\Date::PHPToExcel(new \DateTime($dateStr));
-                    $sheet->setCellValue($cell, $timestamp);
-                    $sheet->getStyle($cell)->getNumberFormat()->setFormatCode('yyyy-mm-dd hh:mm');
-                } catch (\Exception $e) {
-                    $sheet->setCellValueExplicit($cell, $val, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-                }
-                continue;
-            }
-
-            // Columna forzada como texto por nombre (Nro_Cuenta, Placa, etc.)
-            if (isset($textColumns[$i])) {
-                $sheet->setCellValueExplicit($cell, (string) ($val ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-                continue;
-            }
-
-            // Valor que Python/Fabric envió como STRING → preservar tal cual (protege ceros iniciales)
-            if (is_string($val)) {
-                $sheet->setCellValueExplicit($cell, $val, \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-                continue;
-            }
-
-            // Valor numérico (int o float) → dejarlo como número para que Excel opere con él
-            if (is_int($val) || is_float($val)) {
-                $sheet->setCellValue($cell, $val);
-                continue;
-            }
-
-            // Null o cualquier otro → string vacío
-            $sheet->setCellValueExplicit($cell, '', \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-        }
-    }
-
-    /**
-     * Detecta qué columnas deben tratarse como texto para preservar ceros iniciales.
-     *
-     * Combina dos estrategias:
-     *   1. Matching por nombre de columna (TEXT_COLUMN_PATTERNS)
-     *   2. Detección de valores que empiezan con "0" seguido de más dígitos
-     *
-     * @param array $headers Nombres de las columnas
-     * @param array|null $firstRow Primera fila de valores (para detección por contenido)
-     * @return array<int, bool> Mapa de índice → true si es columna de texto
-     */
-    private function detectTextColumns(array $headers, ?array $firstRow = null): array
-    {
-        $textColumns = [];
-
-        foreach ($headers as $i => $header) {
-            $headerLower = strtolower((string) $header);
-
-            // Estrategia 1: nombre de columna coincide con patrones conocidos
-            foreach (self::TEXT_COLUMN_PATTERNS as $pattern) {
-                if (str_contains($headerLower, $pattern)) {
-                    $textColumns[$i] = true;
-                    break;
-                }
-            }
-
-            // Estrategia 2: el valor en la primera fila empieza con 0 y es numérico
-            if (!isset($textColumns[$i]) && $firstRow !== null && isset($firstRow[$i])) {
-                $val = (string) ($firstRow[$i] ?? '');
-                if (preg_match('/^0\d+$/', $val)) {
-                    $textColumns[$i] = true;
-                }
-            }
-        }
-
-        return $textColumns;
     }
 }
