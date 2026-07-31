@@ -230,17 +230,12 @@ final class TableroPublicController extends Controller
 
     /**
      * Consulta DIRECTA a Fabric para datos en tiempo real.
+     * SIN CACHE: esta vista es liviana (6 filas) y los tiempos de espera
+     * cambian minuto a minuto. Cachear causa que el tablero muestre datos
+     * viejos mientras el temporizador real sigue subiendo en Fabric.
      */
     private function fetchData(TableroDevice $device): array
     {
-        $cacheKey = "tablero_public_dev:{$device->id}";
-        $cacheTtl = (int) env('TABLERO_PUBLIC_CACHE_TTL', 15);
-
-        $cached = Cache::get($cacheKey);
-        if ($cached !== null) {
-            return $cached;
-        }
-
         $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token = env('TOKEN_ADMIN', '');
 
@@ -279,16 +274,12 @@ final class TableroPublicController extends Controller
                 ];
             }
 
-            $result = [
+            return [
                 'success'   => true,
                 'data'      => $response->json('items') ?? [],
                 'sede'      => $device->sede_filter,
                 'timestamp' => now()->toIso8601String(),
             ];
-
-            Cache::put($cacheKey, $result, $cacheTtl);
-
-            return $result;
         } catch (\Throwable $e) {
             Log::warning('TableroPublic: error', ['device' => $device->id, 'error' => $e->getMessage()]);
 
