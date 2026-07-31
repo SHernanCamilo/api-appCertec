@@ -9,6 +9,13 @@ use App\Http\Controllers\TalentoHumano\CuadroTurnos\NovedadController;
 use App\Http\Controllers\TalentoHumano\CuadroTurnos\UnidadFuncionalController;
 use App\Http\Controllers\TalentoHumano\CuadroTurnos\FestivoController;
 use App\Http\Controllers\TalentoHumano\CuadroTurnos\CalculoHorasController;
+use App\Http\Controllers\TalentoHumano\CuadroTurnos\TurnosTerceroController;
+use App\Http\Controllers\TalentoHumano\CuadroTurnos\FrecuenciaController;
+use App\Http\Controllers\TalentoHumano\CuadroTurnos\CargaMasivaController;
+use App\Http\Controllers\TalentoHumano\CuadroTurnos\TipoRecargoController;
+use App\Http\Controllers\TalentoHumano\CuadroTurnos\ParametroJornadaController;
+use App\Http\Controllers\TalentoHumano\CuadroTurnos\HoraExtraController;
+use App\Http\Controllers\TalentoHumano\CuadroTurnos\CierreCuadroController;
 use App\Http\Controllers\CuadroTurnoPermisoController;
 
 /**
@@ -123,4 +130,55 @@ Route::middleware(['auth:api'])->group(function () {
     // Aprobación / rechazo
     Route::post('novedades/{id}/aprobar', [NovedadController::class, 'aprobar']);
     Route::post('novedades/{id}/rechazar', [NovedadController::class, 'rechazar']);
+
+    // =========================================================================
+    // TERCEROS: Mapeo + Asignación a Unidades Funcionales
+    // =========================================================================
+    Route::get('unidades/{unidadId}/todos-empleados', [TurnosTerceroController::class, 'getEmpleadosPorUnidad']);
+    Route::post('unidades/{unidadId}/terceros', [TurnosTerceroController::class, 'asignarTercero']);
+    Route::delete('unidades/{unidadId}/terceros/{terceroId}', [TurnosTerceroController::class, 'desasignarTercero']);
+    Route::get('terceros/por-empresa/{empresaId}', [TurnosTerceroController::class, 'getTercerosPorEmpresa']);
+    Route::get('mapeo-unidades/pendientes/{empresaId}', [TurnosTerceroController::class, 'getUnidadesSinMapeo']);
+    Route::post('mapeo-unidades', [TurnosTerceroController::class, 'guardarMapeoUnidad']);
+
+    // =========================================================================
+    // FRECUENCIAS (Programación recurrente de turnos)
+    // =========================================================================
+    Route::get('frecuencias/tipos', [FrecuenciaController::class, 'tipos']);
+    Route::post('frecuencias/previsualizar', [FrecuenciaController::class, 'previsualizar']);
+    Route::post('frecuencias/generar-directo', [FrecuenciaController::class, 'generarDirecto']);
+    Route::post('frecuencias/{id}/generar', [FrecuenciaController::class, 'generar']);
+    Route::apiResource('frecuencias', FrecuenciaController::class);
+
+    // =========================================================================
+    // CARGA MASIVA (Excel: descargar formato + importar)
+    // =========================================================================
+    Route::get('carga-masiva/formato', [CargaMasivaController::class, 'descargarFormato']);
+    Route::post('carga-masiva/importar', [CargaMasivaController::class, 'importar']);
+
+    // =========================================================================
+    // PARAMETRIZACIÓN (Recargos + Jornada)
+    // =========================================================================
+    Route::apiResource('tipos-recargo', TipoRecargoController::class);
+    Route::get('parametros-jornada/vigente', [ParametroJornadaController::class, 'vigente']);
+    Route::apiResource('parametros-jornada', ParametroJornadaController::class)->except(['show']);
+
+    // =========================================================================
+    // HORAS EXTRAS (registro manual)
+    // =========================================================================
+    Route::get('horas-extras', [HoraExtraController::class, 'index']);
+    Route::post('horas-extras', [HoraExtraController::class, 'store']);
+    Route::delete('horas-extras/{id}', [HoraExtraController::class, 'destroy']);
+
+    // =========================================================================
+    // CIERRE DE CUADRO DE TURNOS
+    // =========================================================================
+    Route::get('cierre-cuadro/parametros', [CierreCuadroController::class, 'parametros']);
+    Route::post('cierre-cuadro/parametros', [CierreCuadroController::class, 'guardarParametro']);
+    Route::get('cierre-cuadro/estado', [CierreCuadroController::class, 'estado']);
+    Route::post('cierre-cuadro/bloquear', [CierreCuadroController::class, 'bloquear']);
+    Route::post('cierre-cuadro/desbloquear', [CierreCuadroController::class, 'desbloquear']);
+    Route::post('cierre-cuadro/ejecutar-automatico', [CierreCuadroController::class, 'ejecutarAutomatico']);
+    Route::get('cierre-cuadro/historial', [CierreCuadroController::class, 'historial']);
+    Route::get('cierre-cuadro/verificar', [CierreCuadroController::class, 'verificar']);
 });
