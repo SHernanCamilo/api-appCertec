@@ -145,6 +145,9 @@ class FabricInventoryService
                     env('MSSQL_PURCHASEORDER_VIEW', 'ViewInternal.Inventory_OrdenesDeCompra_DigiPharma')
                 ));
 
+            if (!empty($filters['numero_orden'])) {
+                $query->where('OrdenCompra', $filters['numero_orden']);
+            }
             if (!empty($filters['fecha_desde'])) {
                 $query->where('Fecha', '>=', $filters['fecha_desde']);
             }

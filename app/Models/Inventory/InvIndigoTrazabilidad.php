@@ -2,15 +2,21 @@
 
 namespace App\Models\Inventory;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class InvIndigoTrazabilidad extends Model
 {
+    use HasFactory;
+
     protected $table = 'inv_indigo_trazabilidad';
 
     protected $fillable = [
-        'numero_pedido', 'sucursal_id', 'estado_indigo',
-        'fecha_sincronizacion', 'diferencias_pendientes',
+        'numero_pedido',
+        'sucursal_id',
+        'estado_indigo',
+        'fecha_sincronizacion',
+        'diferencias_pendientes'
     ];
 
     protected $casts = [

@@ -149,18 +149,27 @@ class InvRecepcionService
                     'pedido_detalle_id'          => $item['pedido_detalle_id'] ?? null,
                     'codigo_producto'            => $item['codigo_producto'] ?? null,
                     'producto_nombre'            => $item['producto_nombre'] ?? null,
+                    'marca'                      => $item['marca'] ?? null,
+                    'tipo_producto'              => $item['tipo_producto'] ?? null,
+                    'forma_farmaceutica'         => $item['forma_farmaceutica'] ?? null,
+                    'concentracion'              => $item['concentracion'] ?? null,
+                    'unidad_empaque'             => $item['unidad_empaque'] ?? null,
                     'cantidad_solicitada'        => $item['cantidad_solicitada'] ?? 0,
                     'cantidad_recibida'          => $item['cantidad_recibida'] ?? 0,
+                    'muestra_poblacion'          => $item['muestra_poblacion'] ?? null,
                     'numero_lote'                => $item['numero_lote'] ?? null,
                     'fecha_vencimiento'          => $item['fecha_vencimiento'] ?? null,
                     
-                    // Aspectos Técnicos e INVIMA
+                    // INVIMA y aspectos técnicos
                     'codigo_sanitario'           => $item['codigo_sanitario'] ?? null,
+                    'fabricante'                 => $item['fabricante'] ?? null,
+                    'vida_util'                  => $item['vida_util'] ?? null,
+                    'estado_invima'              => $item['estado_invima'] ?? null,
                     'aspecto_cumple'             => $item['aspecto_cumple'] ?? null,
                     'embalaje_cumple'            => $item['embalaje_cumple'] ?? null,
                     'contenido_cumple'           => $item['contenido_cumple'] ?? null,
                     'cadena_frio_temperatura'    => $item['cadena_frio_temperatura'] ?? null,
-                    'concepto_recepcion'         => $item['concepto_recepcion'] ?? null, // Ej: "aprobado", "rechazado", "cuarentena"
+                    'concepto_recepcion'         => $item['concepto_recepcion'] ?? null,
                     
                     // Medicamentos Vitales No Disponibles (MVD)
                     'es_medicamento_vital'       => !empty($item['es_medicamento_vital']) ? 1 : 0,

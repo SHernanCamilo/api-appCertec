@@ -5,20 +5,20 @@ namespace App\Models\Inventory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class InvIndigoEvento extends Model
+class InvCompraAuditoria extends Model
 {
     use HasFactory;
 
-    protected $table = 'inv_indigo_eventos';
+    protected $table = 'inv_compras_auditoria';
     public $timestamps = false; // only created_at
 
     protected $fillable = [
-        'numero_pedido',
-        'orden_compra',
-        'codigo_producto',
-        'sucursal_id',
-        'nivel',
-        'mensaje',
+        'compra_id',
+        'campo_modificado',
+        'valor_anterior',
+        'valor_nuevo',
+        'motivo_modificacion',
+        'modificado_por',
         'created_at'
     ];
 }

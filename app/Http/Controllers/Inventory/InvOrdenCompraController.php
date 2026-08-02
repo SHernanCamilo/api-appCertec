@@ -144,4 +144,31 @@ class InvOrdenCompraController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Sincronizar orden desde Indigo (o general)
+     * POST /api/inventario/ordenes-compra/sync
+     */
+    public function sync(Request $request, \App\Services\Inventory\MonitoringService $monitoringService): JsonResponse
+    {
+        $numero_orden = $request->input('numero_orden');
+        
+        try {
+            $userId = auth()->user()->id ?? 1;
+            
+            $options = [];
+            if ($numero_orden) {
+                $options['numero_orden'] = $numero_orden;
+            }
+            
+            $result = $monitoringService->syncIndigoOrders($userId, $options);
+            return response()->json($result, $result['success'] ? 200 : 500);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al sincronizar',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
 }
