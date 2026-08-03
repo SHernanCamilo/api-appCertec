@@ -20,6 +20,7 @@ return [
     'vistas_formulario_solo_esquema' => [
         'fr.vw_billing_facturacion_soat',
         'in.vw_perfilmedicamentos',
+        'dc.vw_hc_egresos_conteo',
     ],
 
 ];
