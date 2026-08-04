@@ -96,12 +96,13 @@ class OdataLink extends Model
                 return $userEmail && strtolower($userEmail) === strtolower($this->created_by_email);
 
             case self::VISIBILITY_ORGANIZATIONAL:
-                // Cualquier @medilaser.com.co (o lista específica)
+                // Cualquier usuario de un dominio permitido (o de la lista específica)
                 if (!$userEmail) return false;
                 if ($this->allowed_users) {
                     return in_array(strtolower($userEmail), array_map('strtolower', $this->allowed_users), true);
                 }
-                return str_ends_with(strtolower($userEmail), '@medilaser.com.co');
+                // Validar contra la tabla allowed_domains (incluye @medilaser, @farmaqx, etc.)
+                return AllowedDomain::isEmailAllowed($userEmail);
 
             case self::VISIBILITY_PUBLIC:
                 // Cualquiera con token válido (se valida aparte)
