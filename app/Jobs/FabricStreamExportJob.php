@@ -35,7 +35,7 @@ final class FabricStreamExportJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries   = 1;
-    public int $timeout = 900; // 15 min max (Horizon lo respeta)
+    public int $timeout = 2400; // 40 min max — vistas pesadas de Fabric pueden necesitar >15 min
 
     private const STATUS_PENDING    = 'pending';
     private const STATUS_PROCESSING = 'processing';
@@ -266,13 +266,21 @@ final class FabricStreamExportJob implements ShouldQueue
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
         $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
-        $limit   = (int) env('FABRIC_EXPORT_CHUNK', 10000); // filas por request a Python
+        $limit   = (int) env('FABRIC_EXPORT_CHUNK', 50000); // filas por request a Python (50K reduce de 45 a 9 requests)
         $offset  = 0;
 
         // Pausa entre chunks (ms) â€” libera el worker de Python para atender usuarios
         // interactivos entre lote y lote. Evita que un export monopolice un worker.
-        $chunkPauseMs = (int) env('FABRIC_EXPORT_CHUNK_PAUSE_MS', 300);
+        $chunkPauseMs = (int) env('FABRIC_EXPORT_CHUNK_PAUSE_MS', 100);
         $totalRows = 0;
+        $chunkNum  = 0;
+
+        // Informar inmediatamente al usuario que estamos trabajando (no dejar en 0%)
+        $this->updateStatus(self::STATUS_PROCESSING, null, [
+            'progress' => 5,
+            'rows'     => 0,
+            'message'  => 'Conectando con Microsoft Fabric...',
+        ]);
 
         // Preparar directorio
         $dir = storage_path("app/fabric_exports/{$this->jobId}");

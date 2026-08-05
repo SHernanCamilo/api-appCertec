@@ -109,12 +109,12 @@ return [
                 'balance' => 'auto',
                 'autoScalingStrategy' => 'size',
                 'minProcesses' => 1,
-                'maxProcesses' => 1,  // Solo 1 export a la vez (previene OOM en 16GB)
+                'maxProcesses' => 2,  // 2 exports simultáneos (tenemos RAM de sobra)
                 'maxTime' => 3600,
                 'maxJobs' => 30,  // Reciclar después de 30 exports (liberar memoria)
-                'memory' => 768,  // 768MB límite (PhpSpreadsheet puede usar 2x internamente)
+                'memory' => 1024,  // 1GB límite (subido de 768: vistas pesadas lo necesitan)
                 'tries' => 1,
-                'timeout' => 900, // 15 min max por export
+                'timeout' => 2500, // 40+ min max por export (coherente con el job)
                 'nice' => 10,     // Prioridad baja (no afectar API)
             ],
 
