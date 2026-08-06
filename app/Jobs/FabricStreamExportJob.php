@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 declare(strict_types=1);
 
@@ -34,8 +34,27 @@ final class FabricStreamExportJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $tries   = 1;
-    public int $timeout = 2400; // 40 min max — vistas pesadas de Fabric pueden necesitar >15 min
+    /**
+     * Reintentos: hasta 2 veces si R2/Fabric responde 503 (slots ocupados).
+     * El backoff exponencial evita martillar los slots.
+     */
+    public int $tries   = 2;
+
+    /**
+     * 5 min max por intento. Si se pasa, Horizon mata el job limpiamente.
+     * Con la estrategia CSV directo, el peor caso real es ~30s (CarteraXEdades).
+     */
+    public int $timeout = 300;
+
+    /**
+     * Backoff exponencial entre reintentos (segundos).
+     *
+     * @return list<int>
+     */
+    public function backoff(): array
+    {
+        return [30, 60];
+    }
 
     private const STATUS_PENDING    = 'pending';
     private const STATUS_PROCESSING = 'processing';
@@ -55,9 +74,10 @@ final class FabricStreamExportJob implements ShouldQueue
 
     public function handle(): void
     {
-        // Excel con 150K+ filas necesita RAM para PhpSpreadsheet (genera XML interno)
-        ini_set('memory_limit', '1G');
-        set_time_limit(0); // Sin lÃ­mite de tiempo (el job tiene su propio timeout de 600s)
+        // Los exports con CSV directo usan poca RAM (~100 MB).
+        // Solo los xlsx de ≤50K filas necesitan más para PhpSpreadsheet.
+        ini_set('memory_limit', '512M');
+        set_time_limit(0);
 
         $this->updateStatus(self::STATUS_PROCESSING, null, ['progress' => 0, 'rows' => 0]);
 
@@ -156,8 +176,18 @@ final class FabricStreamExportJob implements ShouldQueue
                 ]);
 
             if ($response->status() !== 200) {
-                // 404 no_cache  = vista sin parquet (p. ej. > 1M filas) â†’ Fabric directo
-                // 202          = parquet generÃ¡ndose â†’ Fabric directo
+                // 503 = slots de export ocupados -> reintentar con backoff
+                if ($response->status() === 503 && $this->attempts() < $this->tries) {
+                    Log::info('FabricStreamExportJob: R2 slots ocupados, reintentando', [
+                        'job_id'  => $this->jobId,
+                        'attempt' => $this->attempts(),
+                    ]);
+                    $this->release(30);
+                    return true;
+                }
+
+                // 404 no_cache = vista sin parquet -> Fabric directo
+                // 202         = parquet generandose -> Fabric directo
                 Log::info('FabricStreamExportJob: R2 no disponible, usando Fabric directo', [
                     'job_id'      => $this->jobId,
                     'status'      => $response->status(),
