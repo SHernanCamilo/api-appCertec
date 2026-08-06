@@ -26,7 +26,6 @@ class TestExportPerformance extends Command
                             {schema : Esquema (ej: gd, ca, rf)}
                             {view : Nombre de la vista}
                             {--max-rows=200000 : Máximo de filas a exportar}
-                            {--format=csv : Formato pedido a R2 (csv o gzip)}
                             {--skip-excel : Solo descargar datos, no generar el Excel}';
 
     protected $description = 'Test de rendimiento: R2 → descarga → generar Excel (sin Horizon)';
@@ -36,14 +35,14 @@ class TestExportPerformance extends Command
         $schema  = $this->argument('schema');
         $view    = $this->argument('view');
         $maxRows = (int) $this->option('max-rows');
-        $format  = $this->option('format');
+        $format  = 'gzip'; // NDJSON comprimido — el writer ya sabe parsearlo con json_decode()
 
         $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token = env('TOKEN_ADMIN', '');
 
         $this->info("═══════════════════════════════════════════════════════");
         $this->info("  TEST EXPORT: {$schema}.{$view}");
-        $this->info("  Max rows: {$maxRows} | Format: {$format}");
+        $this->info("  Max rows: {$maxRows} | Format: gzip (NDJSON)");
         $this->info("  URL: {$url}/api/data/export/r2");
         $this->info("═══════════════════════════════════════════════════════");
         $this->newLine();
