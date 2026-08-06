@@ -113,10 +113,81 @@ final class ExportValueFormatter
 
     /**
      * ¿El valor es una fecha ISO? Se usa para aplicar formato de fecha en xlsx.
+     * Soporta: "2026-08-06T14:15:52", "2026-08-06 14:15:52", "2026-08-06T14:15:52.000Z"
      */
     public static function looksLikeIsoDate(mixed $value): bool
     {
-        return is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}/', $value) === 1;
+        return is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/', $value) === 1;
+    }
+
+    /**
+     * ¿El valor es solo una fecha sin hora? (ej: "2026-08-06")
+     */
+    public static function looksLikeDateOnly(mixed $value): bool
+    {
+        return is_string($value) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1;
+    }
+
+    /**
+     * Convierte una fecha ISO (con T) a formato legible para Excel/CSV.
+     *
+     * "2026-08-06T14:15:52"     → "2026-08-06 14:15:52"
+     * "2026-08-06T14:15:52.000" → "2026-08-06 14:15:52"
+     * "2026-08-06T14:15:52.000Z"→ "2026-08-06 14:15:52"
+     * "2026-08-06"              → "2026-08-06"
+     * null / vacío              → valor original
+     */
+    public static function normalizeDate(mixed $value): mixed
+    {
+        if (!is_string($value) || $value === '') {
+            return $value;
+        }
+
+        // Quita la T y los milisegundos/Z del final
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?Z?$/', $value, $m)) {
+            return "{$m[1]} {$m[2]}";
+        }
+
+        // Solo fecha sin hora: dejar como está
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            return $value;
+        }
+
+        return $value;
+    }
+
+    /**
+     * Convierte una fecha ISO a un número serial de Excel (OLE Automation Date).
+     *
+     * Excel cuenta los días desde 1900-01-00 (sí, es un bug histórico que
+     * incluye el falso 29/feb/1900). Para que Excel reconozca la celda como
+     * fecha, hay que escribir este número + aplicar un NumberFormat de fecha.
+     *
+     * @return float|null Null si no es una fecha válida
+     */
+    public static function toExcelSerial(mixed $value): ?float
+    {
+        if (!is_string($value) || $value === '') {
+            return null;
+        }
+
+        try {
+            $dt = new \DateTime(str_replace('T', ' ', $value));
+        } catch (\Throwable) {
+            return null;
+        }
+
+        // Días desde 1900-01-01 (Excel serial: 1 = 1900-01-01)
+        $epoch   = new \DateTime('1899-12-30'); // Excel epoch (incluye el bug del 29/feb/1900)
+        $diff    = $epoch->diff($dt);
+        $days    = (int) $diff->format('%a');
+        $seconds = $dt->format('H') * 3600 + $dt->format('i') * 60 + $dt->format('s');
+
+        if ($diff->invert) {
+            return null; // Fecha anterior a 1900, Excel no la soporta
+        }
+
+        return $days + ($seconds / 86400);
     }
 
     /**

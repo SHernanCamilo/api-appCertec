@@ -42,7 +42,7 @@ use RuntimeException;
 final class StreamingExportWriter
 {
     /** Hasta este número de filas se genera xlsx con formato; por encima, CSV. */
-    private const XLSX_THRESHOLD = 20000;
+    private const XLSX_THRESHOLD = 100000;
 
     /** Cada cuántas filas se invoca el callback de progreso. */
     private const PROGRESS_EVERY = 50000;
@@ -191,8 +191,23 @@ final class StreamingExportWriter
 
         $this->textColumns = ExportValueFormatter::detectTextColumns($this->headers, $firstValues);
 
-        foreach ($firstValues as $index => $value) {
-            if (ExportValueFormatter::looksLikeIsoDate($value)) {
+        // Detectar columnas de fecha/datetime por nombre Y por contenido de la primera fila
+        foreach ($this->headers as $index => $header) {
+            $headerLower = strtolower($header);
+
+            // Por nombre: columnas que típicamente contienen fechas
+            $isDateByName = str_contains($headerLower, 'fecha')
+                || str_contains($headerLower, 'date')
+                || str_contains($headerLower, 'fec_')
+                || str_ends_with($headerLower, '_at')
+                || str_starts_with($headerLower, 'dt_');
+
+            // Por contenido de la primera fila
+            $value = $firstValues[$index] ?? null;
+            $isDateByValue = ExportValueFormatter::looksLikeIsoDate($value)
+                || ExportValueFormatter::looksLikeDateOnly($value);
+
+            if ($isDateByName || $isDateByValue) {
                 $this->dateColumns[$index] = true;
             }
         }
@@ -253,6 +268,11 @@ final class StreamingExportWriter
         $formatted = [];
 
         foreach ($values as $index => $value) {
+            // Normalizar fechas ISO: quitar la T y milisegundos
+            if (isset($this->dateColumns[$index]) && $value !== null && $value !== '') {
+                $value = ExportValueFormatter::normalizeDate($value);
+            }
+
             $formatted[] = ExportValueFormatter::forCsv($value, isset($this->textColumns[$index]));
         }
 
@@ -398,6 +418,20 @@ final class StreamingExportWriter
                     \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING
                 );
                 continue;
+            }
+
+            // Columnas de fecha: convertir ISO a serial de Excel + formato
+            if (isset($this->dateColumns[$index]) && $value !== null && $value !== '') {
+                $serial = ExportValueFormatter::toExcelSerial($value);
+                if ($serial !== null) {
+                    $sheet->setCellValue($cell, $serial);
+
+                    // Formato según si tiene hora o solo fecha
+                    $hasTime = is_string($value) && preg_match('/\d{2}:\d{2}/', $value);
+                    $fmt = $hasTime ? 'dd/mm/yyyy hh:mm:ss' : 'dd/mm/yyyy';
+                    $sheet->getStyle($cell)->getNumberFormat()->setFormatCode($fmt);
+                    continue;
+                }
             }
 
             $sheet->setCellValue($cell, $value);
