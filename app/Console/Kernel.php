@@ -69,6 +69,14 @@ class Kernel extends ConsoleKernel
             ->dailyAt('00:15')
             ->withoutOverlapping()
             ->appendOutputTo(storage_path('logs/fichas-vigencias.log'));
+
+        // ── Limpieza de exports (xlsx/csv) ───────────────────────────────
+        // Elimina archivos de export que tienen más de 2 horas. Los exports
+        // pesan entre 4 MB y 450 MB; sin limpieza el disco se llena rápido.
+        $schedule->command('exports:cleanup --hours=2')
+            ->hourly()
+            ->withoutOverlapping()
+            ->runInBackground();
     }
 
     /**

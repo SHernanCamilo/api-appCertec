@@ -92,8 +92,18 @@ final class FabricStreamExportJob implements ShouldQueue
     }
 
     /**
-     * Fast-path: Export desde R2 Parquet cache (~47s para 450K filas vs 9 min).
-     * Retorna true si R2 resolviÃ³ el export, false para caer al fallback.
+     * Fast-path: Export desde R2 Parquet cache.
+     *
+     * Estrategia dual según tamaño esperado:
+     *   ≤ 50K filas → format: "gzip" (NDJSON) → PhpSpreadsheet genera xlsx con formato
+     *   > 50K filas → format: "csv" → DuckDB genera CSV directo, Laravel lo guarda a disco
+     *
+     * El CSV de DuckDB ya tiene:
+     *   - Fechas como "2026-05-12 22:00:00" (sin T, Excel las reconoce)
+     *   - Decimales como 1234.56 (sin problemas de flotante)
+     *   - BOM UTF-8 + sep=; (Excel lo abre bien)
+     *
+     * Retorna true si R2 resolvió el export, false para caer al fallback.
      */
     private function tryExportFromR2(User $user): bool
     {
@@ -121,12 +131,15 @@ final class FabricStreamExportJob implements ShouldQueue
         ]);
 
         try {
-            // ensure_fresh=true: el usuario pidiÃ³ esta descarga explÃ­citamente, asÃ­ que
-            // Graph-Fabric valida el COUNT contra Fabric y regenera el parquet si difiere.
-            // Cuesta 30-120s extra pero garantiza que el Excel trae exactamente las filas
-            // que el usuario ve en la grilla. (OData NO lo usa: allÃ­ prima la velocidad.)
+            // Estrategia dual: pedir CSV para datasets grandes (Python/DuckDB lo
+            // formatea completo y Laravel solo guarda a disco), NDJSON para chicos
+            // (Laravel parsea y genera xlsx con PhpSpreadsheet).
+            $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
+            $useCsv  = $maxRows > 50000;
+
             $response = Http::timeout(600)
                 ->connectTimeout(10)
+                ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
                 ->post($url . '/api/data/export/r2', [
                     'token'        => $token,
                     'user_email'   => $user->email,
@@ -137,8 +150,8 @@ final class FabricStreamExportJob implements ShouldQueue
                     'view'         => $this->view,
                     'filters'      => $gateway->normalizeFiltersPublic($this->options['filters'] ?? []),
                     'columns'      => $this->options['columns'] ?? [],
-                    'max_rows'     => min((int)($this->options['max_rows'] ?? 500000), 1000000),
-                    'format'       => 'gzip',
+                    'max_rows'     => $maxRows,
+                    'format'       => $useCsv ? 'csv' : 'gzip',
                     'ensure_fresh' => true,
                 ]);
 
@@ -181,6 +194,34 @@ final class FabricStreamExportJob implements ShouldQueue
             if (!is_dir($dir)) {
                 mkdir($dir, 0775, true);
             }
+
+            // ── Ruta CSV: guardar directo y convertir con fromCsvFile() ──
+            if ($useCsv) {
+                $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
+                $csvFile  = "{$dir}/{$baseName}_raw.csv";
+                file_put_contents($csvFile, $response->body());
+                unset($response);
+
+                $this->updateStatus(self::STATUS_PROCESSING, null, [
+                    'progress' => 60,
+                    'rows'     => $totalRows,
+                    'message'  => "Generando archivo ({$totalRows} filas)...",
+                ]);
+
+                $result = StreamingExportWriter::fromCsvFile($csvFile, $dir, $baseName, $this->schema, $this->view);
+
+                if ($result->isEmpty()) {
+                    $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos.', [
+                        'rows' => 0, 'progress' => 100,
+                    ]);
+                    return true;
+                }
+
+                $this->publishResult($result, 'r2');
+                return true;
+            }
+
+            // ── Ruta NDJSON (gzip): parsear línea por línea y generar xlsx ──
 
             // Escribir gzip a disco (NO decodificar en RAM)
             $gzipFile = "{$dir}/r2_data.gz";
