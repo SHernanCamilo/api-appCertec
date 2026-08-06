@@ -58,7 +58,7 @@ class ConfigUnidadFuncional extends Model
     public function responsables()
     {
         return $this->belongsToMany(
-            \App\Models\User::class,
+            Empleado::class,
             'config_unidades_fun_responsable',
             'id_unidad_funcional',
             'id_user'
