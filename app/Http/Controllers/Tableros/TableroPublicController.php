@@ -301,6 +301,7 @@ final class TableroPublicController extends Controller
             $response = Http::timeout(20)
                 ->connectTimeout(5)
                 ->acceptJson()
+                ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
                 ->post($url . '/api/urgencias/tablero', [
                     'token' => $token,
                 ]);
