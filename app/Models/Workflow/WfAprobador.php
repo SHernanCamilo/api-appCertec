@@ -9,16 +9,25 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * Aprobadores parametrizables por paso.
- * Soporta 5 estrategias:
+ * Soporta 6 estrategias:
  *   1. Aprobador fijo (id_user)
  *   2. Aprobador por unidad funcional (dinámico)
  *   3. Aprobador por prefijo de sucursal (dinámico)
  *   4. Aprobador por grupo (dinámico)
  *   5. Aprobador por permiso (permiso_codigo -> seg_permisos.codigo)
+ *   6. Aprobador por rol Spatie (rol_spatie -> roles.name)
  */
 class WfAprobador extends Model
 {
     protected $table = 'wf_aprobadores';
+
+    /** Estrategias de resolución de aprobadores. */
+    public const TIPO_USER              = 'USER';
+    public const TIPO_RESPONSABLE_UF    = 'RESPONSABLE_UF';
+    public const TIPO_RESPONSABLE_GRUPO = 'RESPONSABLE_GRUPO';
+    public const TIPO_GRUPO             = 'GRUPO';
+    public const TIPO_PERMISO           = 'PERMISO';
+    public const TIPO_ROL_SPATIE        = 'ROL_SPATIE';
 
     protected $fillable = [
         'id_paso',
@@ -29,6 +38,7 @@ class WfAprobador extends Model
         'id_sede',
         'id_grupo',
         'permiso_codigo',
+        'rol_spatie',
         'alcance',
         'es_suplente',
         'condiciones',

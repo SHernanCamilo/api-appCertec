@@ -7,15 +7,28 @@ use Illuminate\Support\Facades\Schema;
 /**
  * Tablas faltantes para completar el módulo de Inventario.
  * Migradas desde JadeInventory (digipharma) con prefijo inv_.
+ *
+ * Las creaciones se guardan con `Schema::hasTable` porque `inv_compras_pedidos`
+ * ya la crea `2026_07_09_070425_create_inv_compras_pedidos_table`. Sin la
+ * guarda, la migración no es reejecutable y rompe cualquier `migrate:fresh`.
  */
 return new class extends Migration
 {
+    /** Crea la tabla solo si no existe, para que la migración sea reejecutable. */
+    private function crearSiFalta(string $tabla, callable $definicion): void
+    {
+        if (! Schema::hasTable($tabla)) {
+            Schema::create($tabla, $definicion);
+        }
+    }
+
     public function up(): void
     {
         // ═══════════════════════════════════════════════════════════════════
         // 1. Relación N:N entre Órdenes de Compra y Pedidos
+        //    Ya existe si corrió 2026_07_09_070425_create_inv_compras_pedidos_table.
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_compras_pedidos', function (Blueprint $table) {
+        $this->crearSiFalta('inv_compras_pedidos', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('compra_id')->comment('FK inv_ordenes_compra');
             $table->unsignedBigInteger('pedido_id')->comment('FK inv_pedidos');
@@ -32,7 +45,7 @@ return new class extends Migration
         // ═══════════════════════════════════════════════════════════════════
         // 2. Auditoría de modificaciones a Órdenes de Compra
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_compras_auditoria', function (Blueprint $table) {
+        $this->crearSiFalta('inv_compras_auditoria', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('compra_id');
             $table->string('campo_modificado', 50);
@@ -52,7 +65,7 @@ return new class extends Migration
         // ═══════════════════════════════════════════════════════════════════
         // 3. Log de validaciones de cantidades en compras
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_compras_validacion_log', function (Blueprint $table) {
+        $this->crearSiFalta('inv_compras_validacion_log', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('pedido_detalle_id');
             $table->unsignedBigInteger('compra_id')->nullable();
@@ -69,7 +82,7 @@ return new class extends Migration
         // ═══════════════════════════════════════════════════════════════════
         // 4. Items sincronizados desde Indigo ERP
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_indigo_items', function (Blueprint $table) {
+        $this->crearSiFalta('inv_indigo_items', function (Blueprint $table) {
             $table->id();
             $table->string('numero_pedido', 50);
             $table->unsignedBigInteger('pedido_id')->nullable();
@@ -93,7 +106,7 @@ return new class extends Migration
         // ═══════════════════════════════════════════════════════════════════
         // 5. Trazabilidad de sincronización Indigo
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_indigo_trazabilidad', function (Blueprint $table) {
+        $this->crearSiFalta('inv_indigo_trazabilidad', function (Blueprint $table) {
             $table->id();
             $table->string('numero_pedido', 50);
             $table->unsignedBigInteger('sucursal_id')->nullable();
@@ -110,7 +123,7 @@ return new class extends Migration
         // ═══════════════════════════════════════════════════════════════════
         // 6. Eventos de sincronización Indigo (log detallado)
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_indigo_eventos', function (Blueprint $table) {
+        $this->crearSiFalta('inv_indigo_eventos', function (Blueprint $table) {
             $table->id();
             $table->string('numero_pedido', 50)->nullable();
             $table->string('orden_compra', 50)->nullable();
@@ -128,7 +141,7 @@ return new class extends Migration
         // ═══════════════════════════════════════════════════════════════════
         // 7. Almacenes (catálogo por sucursal)
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_almacenes', function (Blueprint $table) {
+        $this->crearSiFalta('inv_almacenes', function (Blueprint $table) {
             $table->id();
             $table->string('codigo_almacen', 50)->unique();
             $table->string('nombre', 150);
@@ -143,7 +156,7 @@ return new class extends Migration
         // ═══════════════════════════════════════════════════════════════════
         // 8. Niveles de inspección para muestreo GMP (ISO 2859-1)
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_muestreo_niveles', function (Blueprint $table) {
+        $this->crearSiFalta('inv_muestreo_niveles', function (Blueprint $table) {
             $table->id();
             $table->string('nivel_inspeccion', 10)->comment('I, II, III');
             $table->integer('lote_min');
@@ -157,7 +170,7 @@ return new class extends Migration
         // ═══════════════════════════════════════════════════════════════════
         // 9. Productos excluidos de muestreo (no requieren inspección)
         // ═══════════════════════════════════════════════════════════════════
-        Schema::create('inv_muestreo_exclusiones', function (Blueprint $table) {
+        $this->crearSiFalta('inv_muestreo_exclusiones', function (Blueprint $table) {
             $table->id();
             $table->string('codigo_producto', 50);
             $table->string('nombre_producto', 255)->nullable();

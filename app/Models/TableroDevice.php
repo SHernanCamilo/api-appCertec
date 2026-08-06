@@ -25,6 +25,8 @@ final class TableroDevice extends Model
         'pairing_expires_at',
         'paired',
         'device_secret',
+        'device_id',
+        'fingerprint',
         'name',
         'schema_name',
         'view_name',
@@ -114,15 +116,36 @@ final class TableroDevice extends Model
     }
 
     /**
+     * Busca un dispositivo emparejado por fingerprint + IP (reconexión automática).
+     *
+     * Si la TV perdió el localStorage pero el backend la reconoce por su
+     * fingerprint y la IP coincide con la última registrada, devuelve el device.
+     */
+    public static function findByFingerprint(string $fingerprint, string $ip): ?self
+    {
+        if (strlen($fingerprint) < 3) {
+            return null;
+        }
+
+        return static::where('fingerprint', $fingerprint)
+            ->where('last_ip', $ip)
+            ->where('paired', true)
+            ->where('active', true)
+            ->latest('last_seen_at')
+            ->first();
+    }
+
+    /**
      * Empareja el dispositivo: consume el código y genera el secret.
      */
-    public function pair(string $ip, string $userAgent): string
+    public function pair(string $ip, string $userAgent, string $deviceId = ''): string
     {
         $secret = self::generateDeviceSecret();
 
         $this->update([
             'paired'        => true,
             'device_secret' => $secret,
+            'device_id'     => $deviceId !== '' ? $deviceId : $this->device_id,
             'pairing_code'  => null, // Invalidar código (un solo uso)
             'last_seen_at'  => now(),
             'last_ip'       => $ip,

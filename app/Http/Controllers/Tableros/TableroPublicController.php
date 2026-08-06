@@ -69,9 +69,12 @@ final class TableroPublicController extends Controller
         }
 
         // Emparejar: consume el código y genera el device_secret
+        $deviceId = (string) $request->input('device_id', '');
+
         $secret = $device->pair(
             $request->ip() ?? '0.0.0.0',
-            $request->userAgent() ?? 'unknown'
+            $request->userAgent() ?? 'unknown',
+            $deviceId
         );
 
         // Resetear rate limit para esta IP
@@ -83,6 +86,60 @@ final class TableroPublicController extends Controller
             'name'          => $device->name,
             'sede'          => $device->sede_filter,
             'message'       => 'Tablero activado correctamente. La pantalla se actualizará automáticamente.',
+        ]);
+    }
+
+    /**
+     * POST /api/public/tableros/urgencias/reconnect — Reconectar TV por deviceId.
+     *
+     * Si la TV perdió el localStorage (limpió cache, se reinició) pero tiene su
+     * deviceId guardado en IndexedDB o en una cookie, puede reconectarse sin código.
+     *
+     * El deviceId es un UUID generado la primera vez que la TV carga la app y
+     * guardado en 3 capas (localStorage + IndexedDB + cookie). Es único por TV
+     * incluso si comparten IP y modelo — porque es un UUID aleatorio, no un
+     * hash de hardware.
+     */
+    public function reconnect(Request $request): JsonResponse
+    {
+        $deviceId = (string) $request->input('device_id', '');
+        $ip       = $request->ip() ?? '0.0.0.0';
+
+        if (strlen($deviceId) < 10) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Device ID no proporcionado.',
+            ], 400);
+        }
+
+        $device = TableroDevice::where('device_id', $deviceId)
+            ->where('paired', true)
+            ->where('active', true)
+            ->first();
+
+        if ($device === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Dispositivo no reconocido. Ingrese el código de activación.',
+            ], 404);
+        }
+
+        // Registrar actividad de reconexión
+        $device->recordActivity($ip);
+
+        Log::info('TableroPublic: reconexión automática por deviceId', [
+            'device_id'   => $device->id,
+            'name'        => $device->name,
+            'ip'          => $ip,
+            'device_uuid' => $deviceId,
+        ]);
+
+        return response()->json([
+            'success'       => true,
+            'device_secret' => $device->device_secret,
+            'name'          => $device->name,
+            'sede'          => $device->sede_filter,
+            'message'       => 'Reconectado automáticamente.',
         ]);
     }
 
@@ -229,43 +286,31 @@ final class TableroPublicController extends Controller
     // =========================================================================
 
     /**
-     * Consulta DIRECTA a Fabric para datos en tiempo real.
-     * SIN CACHE: esta vista es liviana (6 filas) y los tiempos de espera
-     * cambian minuto a minuto. Cachear causa que el tablero muestre datos
-     * viejos mientras el temporizador real sigue subiendo en Fabric.
+     * Consulta al endpoint dedicado de urgencias en LH_INTEGRATIONS.
+     *
+     * Cambio 2026-08: antes se usaba `/api/data/dynamic` contra
+     * `ug.VW_HC_TableroUrgencias` (LH_MEDILASER_ANALYTICS, compartido con 3.311 vistas).
+     * Ahora usa `/api/urgencias/tablero` (LH_INTEGRATIONS, aislado, sin contención).
      */
     private function fetchData(TableroDevice $device): array
     {
         $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token = env('TOKEN_ADMIN', '');
 
-        $filters = new \stdClass();
-        if ($device->sede_filter) {
-            $filters = ['Sede' => $device->sede_filter];
-        }
-
         try {
             $response = Http::timeout(20)
                 ->connectTimeout(5)
                 ->acceptJson()
-                ->post($url . '/api/data/dynamic', [
-                    'token'       => $token,
-                    'groups'      => ['GG-BD-' . strtoupper($device->schema_name), 'GG-BD-ADMIN'],
-                    'department'  => 'NAL-TIC NAL',
-                    'user_email'  => 'tablero@medilaser.com.co',
-                    'user_name'   => 'Tablero Público',
-                    'schema_name' => $device->schema_name,
-                    'view'        => $device->view_name,
-                    'columns'     => [],
-                    'filters'     => $filters,
-                    'limit'       => 50,
-                    'offset'      => 0,
-                    'sort_col'    => 'Sede',
-                    'sort_dir'    => 'asc',
-                    'skip_count'  => true,
+                ->post($url . '/api/urgencias/tablero', [
+                    'token' => $token,
                 ]);
 
             if ($response->failed()) {
+                Log::warning('TableroPublic: endpoint urgencias falló', [
+                    'device' => $device->id,
+                    'status' => $response->status(),
+                ]);
+
                 return [
                     'success'   => false,
                     'data'      => [],
@@ -274,11 +319,24 @@ final class TableroPublicController extends Controller
                 ];
             }
 
+            $allData = $response->json('data') ?? $response->json('items') ?? [];
+
+            // Filtrar por sede si el dispositivo tiene filtro configurado
+            if ($device->sede_filter && $device->sede_filter !== '' && !empty($allData)) {
+                $filtered = array_values(array_filter(
+                    $allData,
+                    fn ($row) => strcasecmp((string) ($row['Sede'] ?? ''), $device->sede_filter) === 0
+                ));
+                $allData = $filtered;
+            }
+
             return [
                 'success'   => true,
-                'data'      => $response->json('items') ?? [],
+                'data'      => $allData,
                 'sede'      => $device->sede_filter,
                 'timestamp' => now()->toIso8601String(),
+                'source'    => $response->header('X-Source') ?? 'LH_INTEGRATIONS',
+                'elapsed'   => $response->header('X-Elapsed-Ms'),
             ];
         } catch (\Throwable $e) {
             Log::warning('TableroPublic: error', ['device' => $device->id, 'error' => $e->getMessage()]);

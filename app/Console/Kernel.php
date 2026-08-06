@@ -60,6 +60,15 @@ class Kernel extends ConsoleKernel
             ->hourly()
             ->withoutOverlapping()
             ->runInBackground();
+
+        // ── Fichas Técnicas: vigencias ───────────────────────────────────────
+        // Promueve a `vigente` las fichas aprobadas cuya fecha_ini ya llegó.
+        // La transición queda auditada en fich_historial_estados, a diferencia
+        // del legacy, que solo comparaba fechas en cada consulta.
+        $schedule->command('fichas:actualizar-vigencias')
+            ->dailyAt('00:15')
+            ->withoutOverlapping()
+            ->appendOutputTo(storage_path('logs/fichas-vigencias.log'));
     }
 
     /**

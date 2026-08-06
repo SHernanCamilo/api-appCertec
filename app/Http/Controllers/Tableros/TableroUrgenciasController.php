@@ -78,41 +78,24 @@ class TableroUrgenciasController extends Controller
     }
 
     /**
-     * Consulta directamente a la API Python (misma forma que los formularios).
-     * El usuario tiene la vista delegada → no requiere grupo GG-BD-UG.
+     * Consulta al endpoint dedicado de urgencias (LH_INTEGRATIONS).
+     *
+     * Cambio 2026-08: antes usaba /api/data/dynamic contra ug.VW_HC_TableroUrgencias
+     * (LH_MEDILASER_ANALYTICS, 3.311 vistas compitiendo). Ahora usa el endpoint
+     * aislado /api/urgencias/tablero (LH_INTEGRATIONS, sin contención).
      */
     private function queryFromPython($user, ?string $sucursalFilter): ?array
     {
         $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token = env('TOKEN_ADMIN', '');
 
-        $filters = new \stdClass();
-        if ($sucursalFilter) {
-            $filters = ['Sede' => $sucursalFilter];
-        }
-
-        $payload = [
-            'token'       => $token,
-            'groups'      => $this->gateway->getGruposBd($user) ?: ['GG-BD-UG'],
-            'department'  => $this->gateway->resolveDepartmentForGrantView($user) ?? 'NAL',
-            'user_email'  => $user->email,
-            'user_name'   => $user->name ?? $user->email,
-            'schema_name' => self::SCHEMA,
-            'view'        => self::VIEW,
-            'columns'     => [],
-            'filters'     => $filters,
-            'limit'       => 100,
-            'offset'      => 0,
-            'sort_col'    => 'Sede',
-            'sort_dir'    => 'asc',
-            'skip_count'  => true,
-        ];
-
         $response = Http::timeout(30)
             ->connectTimeout(10)
             ->acceptJson()
             ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
-            ->post($url . '/api/data/dynamic', $payload);
+            ->post($url . '/api/urgencias/tablero', [
+                'token' => $token,
+            ]);
 
         if ($response->failed()) {
             Log::error('TableroUrgencias: API Python error', [
@@ -122,7 +105,17 @@ class TableroUrgenciasController extends Controller
             return null;
         }
 
-        $json = $response->json();
-        return $json['items'] ?? [];
+        $allData = $response->json('data') ?? $response->json('items') ?? [];
+
+        // Filtrar por sede del usuario si aplica
+        if ($sucursalFilter && !empty($allData)) {
+            $filtered = array_values(array_filter(
+                $allData,
+                fn ($row) => strcasecmp((string) ($row['Sede'] ?? ''), $sucursalFilter) === 0
+            ));
+            return $filtered;
+        }
+
+        return $allData;
     }
 }

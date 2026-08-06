@@ -130,6 +130,19 @@ class WorkflowNotifier
                 continue;
             }
 
+            // Estrategia 6: Aprobador por rol Spatie (roles.name).
+            // Usada por Fichas Técnicas, que gestiona su autorización con
+            // roles Spatie en lugar de la cadena Rol → Perfil → seg_permisos.
+            if ($aprobador->tipo_aprobador === WfAprobador::TIPO_ROL_SPATIE && $aprobador->rol_spatie) {
+                $usuariosRol = $this->obtenerAprobadoresPorRolSpatie(
+                    $aprobador->rol_spatie,
+                    $contexto,
+                    $aprobador->alcance ?? 'empresa'
+                );
+                $usuarios = $usuarios->merge($usuariosRol);
+                continue;
+            }
+
             // Nueva estrategia: Responsable de la Unidad Funcional (dinámico según el contexto del evento)
             if ($aprobador->tipo_aprobador === 'RESPONSABLE_UF') {
                 $idUnidadFuncional = $contexto['id_unidad_funcional'] ?? null;
@@ -303,6 +316,44 @@ class WorkflowNotifier
         }
 
         return $this->filtrarUsuariosPorAlcance($usuarios, $alcance, $contexto, $codigoPermiso);
+    }
+
+    /**
+     * Estrategia 6: usuarios con un rol Spatie determinado, acotados por alcance.
+     *
+     * A diferencia de `obtenerAprobadoresPorPermiso`, resuelve sobre
+     * `model_has_roles` / `roles` (trait HasRoles) en lugar de la cadena
+     * Rol → Perfil → `seg_permisos`.
+     */
+    private function obtenerAprobadoresPorRolSpatie(
+        string $rol,
+        array $contexto,
+        ?string $alcance = null
+    ): \Illuminate\Support\Collection {
+        try {
+            $usuarios = User::query()
+                ->where('users.estado', 1)
+                ->whereHas('roles', fn ($q) => $q->where('name', $rol))
+                ->get();
+        } catch (\Throwable $e) {
+            Log::warning('No se pudieron resolver aprobadores por rol Spatie', [
+                'rol'   => $rol,
+                'error' => $e->getMessage(),
+            ]);
+
+            return collect();
+        }
+
+        if ($usuarios->isEmpty()) {
+            Log::warning('Sin usuarios con el rol para aprobar', [
+                'rol'     => $rol,
+                'alcance' => $alcance,
+            ]);
+
+            return collect();
+        }
+
+        return $this->filtrarUsuariosPorAlcance($usuarios, $alcance, $contexto);
     }
 
     /**

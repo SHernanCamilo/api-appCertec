@@ -148,6 +148,11 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
 // Rutas de Accounting (Empleados) → routes/Accounting/EmpleadosRouter.php
 require __DIR__ . '/Accounting/EmpleadosRouter.php';
 
+// Rutas de Fichas Técnicas Médicas (Contabilidad) → routes/Accounting/FichasTecnicasRouter.php
+Route::middleware(['auth:api', 'check.user.active'])->prefix('fichas-tecnicas')->group(function () {
+    require __DIR__ . '/Accounting/FichasTecnicasRouter.php';
+});
+
 // Rutas de Matriz de Obsolescencia - Parámetros
 Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obsolescencia')->group(function () {
     // Grupos de parámetros
@@ -435,6 +440,7 @@ Route::prefix('public/tableros/urgencias')->group(function () {
     Route::get('/stream', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'stream']);
     Route::get('/data', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'data']);
     Route::post('/pair', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'pair']);
+    Route::post('/reconnect', [\App\Http\Controllers\Tableros\TableroPublicController::class, 'reconnect']);
 });
 
 // ── Tableros (Urgencias, etc.) — Requiere auth + rol "Tablero"

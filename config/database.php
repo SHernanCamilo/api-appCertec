@@ -66,6 +66,46 @@ return [
         ],
 
         // ─────────────────────────────────────────────────────────────────
+        // JADE legacy (BD `fichas`) — solo lectura, usada por
+        // `php artisan fichas:migrar-datos`. Puede quedar sin configurar en
+        // producción una vez completada la migración de Fichas Técnicas.
+        // ─────────────────────────────────────────────────────────────────
+
+        'jade_legacy' => [
+            'driver'   => 'mysql',
+            'host'     => env('JADE_LEGACY_HOST', env('DB_HOST', '127.0.0.1')),
+            'port'     => env('JADE_LEGACY_PORT', env('DB_PORT', '3306')),
+            'database' => env('JADE_LEGACY_DATABASE', 'fichas'),
+            // Si no se definen credenciales propias se reutilizan las de la app,
+            // útil cuando la BD legacy vive en el mismo servidor MySQL.
+            'username'       => env('JADE_LEGACY_USERNAME', env('DB_USERNAME', 'root')),
+            'password'       => env('JADE_LEGACY_PASSWORD', env('DB_PASSWORD', '')),
+            'charset'        => 'utf8mb4',
+            'collation'      => 'utf8mb4_unicode_ci',
+            'prefix'         => '',
+            'prefix_indexes' => true,
+            'strict'         => false,
+            'engine'         => null,
+        ],
+
+        // Copia de `jade_legacy` apuntando a un esquema de pruebas, para
+        // validar el comando de migración sin tocar la BD legacy real.
+        'jade_legacy_test' => [
+            'driver'         => 'mysql',
+            'host'           => env('DB_HOST', '127.0.0.1'),
+            'port'           => env('DB_PORT', '3306'),
+            'database'       => env('JADE_LEGACY_TEST_DATABASE', 'fichas_legacy_test'),
+            'username'       => env('DB_USERNAME', 'root'),
+            'password'       => env('DB_PASSWORD', ''),
+            'charset'        => 'utf8mb4',
+            'collation'      => 'utf8mb4_unicode_ci',
+            'prefix'         => '',
+            'prefix_indexes' => true,
+            'strict'         => false,
+            'engine'         => null,
+        ],
+
+        // ─────────────────────────────────────────────────────────────────
         // ERP INDIGO777 (Órdenes de Compra)
         // ─────────────────────────────────────────────────────────────────
         'sqlsrv_indigo' => [
