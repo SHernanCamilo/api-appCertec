@@ -35,14 +35,14 @@ class TestExportPerformance extends Command
         $schema  = $this->argument('schema');
         $view    = $this->argument('view');
         $maxRows = (int) $this->option('max-rows');
-        $format  = 'gzip'; // NDJSON comprimido — el writer ya sabe parsearlo con json_decode()
+        $format  = 'csv'; // DuckDB genera CSV con fechas ya formateadas (sin T)
 
         $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token = env('TOKEN_ADMIN', '');
 
         $this->info("═══════════════════════════════════════════════════════");
         $this->info("  TEST EXPORT: {$schema}.{$view}");
-        $this->info("  Max rows: {$maxRows} | Format: gzip (NDJSON)");
+        $this->info("  Max rows: {$maxRows} | Format: csv (DuckDB directo)");
         $this->info("  URL: {$url}/api/data/export/r2");
         $this->info("═══════════════════════════════════════════════════════");
         $this->newLine();
@@ -106,9 +106,9 @@ class TestExportPerformance extends Command
             return self::SUCCESS;
         }
 
-        // ── Fase 2: Decodificar y escribir Excel ────────────────────────
+        // ── Fase 2: Guardar CSV y convertir a xlsx ──────────────────────
         $this->newLine();
-        $this->info('▶ Fase 2: Generando Excel desde los datos descargados...');
+        $this->info('▶ Fase 2: Guardando CSV y convirtiendo a xlsx...');
         $t2 = microtime(true);
 
         $dir      = storage_path('app/fabric_exports/_test_perf_' . time());
@@ -118,58 +118,28 @@ class TestExportPerformance extends Command
             mkdir($dir, 0775, true);
         }
 
-        // Guardar gzip a disco para no mantener todo en RAM
-        $gzipFile = "{$dir}/data.gz";
-        file_put_contents($gzipFile, $response->body());
+        // Guardar el CSV de R2 directamente a disco (NO parsear como NDJSON)
+        $csvFile = "{$dir}/{$baseName}_raw.csv";
+        file_put_contents($csvFile, $response->body());
+        $savedSize = strlen($response->body());
         unset($response); // Liberar RAM
 
-        $gzStream = gzopen($gzipFile, 'rb');
-        if ($gzStream === false) {
-            $this->error('  ✗ No se pudo abrir el stream gzip');
-            return self::FAILURE;
-        }
+        $this->info("  CSV guardado: {$this->humanSize($savedSize)}");
 
-        $writer   = new StreamingExportWriter($dir, $baseName, $schema, $view);
-        $rowCount = 0;
-        $errors   = 0;
+        // Convertir a xlsx usando el nuevo método fromCsvFile()
+        $result = StreamingExportWriter::fromCsvFile($csvFile, $dir, $baseName, $schema, $view);
 
-        while (!gzeof($gzStream)) {
-            $line = gzgets($gzStream, 1048576);
-            if ($line === false || trim($line) === '') {
-                continue;
-            }
-
-            $row = json_decode(trim($line), true);
-            if (!is_array($row) || $row === []) {
-                $errors++;
-                continue;
-            }
-
-            $writer->writeRow($row);
-            $rowCount++;
-
-            if ($rowCount % 10000 === 0) {
-                $mem = round(memory_get_usage(true) / 1024 / 1024, 1);
-                $this->line("    → {$rowCount} filas procesadas... (RAM: {$mem} MB)");
-            }
-        }
-
-        gzclose($gzStream);
-        @unlink($gzipFile);
-
-        $result = $writer->finish();
-        $t2End  = microtime(true);
+        $t2End     = microtime(true);
         $excelTime = round($t2End - $t2, 2);
         $totalTime = round($t2End - $t1, 2);
 
         $this->newLine();
-        $this->info("  ✓ Excel generado");
+        $this->info("  ✓ Archivo generado");
         $this->table(
             ['Métrica', 'Valor'],
             [
-                ['Tiempo generación Excel', "{$excelTime}s"],
-                ['Filas escritas', number_format($rowCount)],
-                ['Filas con error', $errors],
+                ['Tiempo generación', "{$excelTime}s"],
+                ['Filas', number_format($result->rows)],
                 ['Formato resultado', $result->format],
                 ['Archivo', $result->filename],
                 ['Tamaño archivo', $this->humanSize($result->bytes)],
@@ -180,13 +150,12 @@ class TestExportPerformance extends Command
         $this->newLine();
         $this->info("═══════════════════════════════════════════════════════");
         $this->info("  TIEMPO TOTAL: {$totalTime}s");
-        $this->info("    Descarga R2:    {$downloadTime}s");
-        $this->info("    Generar Excel:  {$excelTime}s");
+        $this->info("    Descarga R2:      {$downloadTime}s");
+        $this->info("    Generar archivo:  {$excelTime}s");
         $this->info("  ARCHIVO: {$result->filename} ({$this->humanSize($result->bytes)})");
         $this->info("═══════════════════════════════════════════════════════");
 
-        // Limpiar
-        if (is_file("{$dir}/{$result->filename}")) {
+        if ($result->filename !== '') {
             $this->line("  Archivo en: {$dir}/{$result->filename}");
             $this->line("  Para eliminarlo: rm -rf {$dir}");
         }

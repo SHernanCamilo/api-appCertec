@@ -41,8 +41,8 @@ use RuntimeException;
  */
 final class StreamingExportWriter
 {
-    /** Hasta este número de filas se genera xlsx con formato; por encima, CSV. */
-    private const XLSX_THRESHOLD = 100000;
+    /** Hasta este número de filas se genera xlsx con formato; por encima, CSV directo. */
+    private const XLSX_THRESHOLD = 50000;
 
     /** Cada cuántas filas se invoca el callback de progreso. */
     private const PROGRESS_EVERY = 50000;
@@ -462,6 +462,201 @@ final class StreamingExportWriter
             format: $format,
             rows: $this->rowCount,
             bytes: $bytes,
+        );
+    }
+
+    // =========================================================================
+    // EXPORT DESDE CSV DE R2 (sin parsear NDJSON)
+    // =========================================================================
+
+    /**
+     * Genera un xlsx a partir de un CSV ya existente en disco.
+     *
+     * Cuando R2/DuckDB entrega el archivo en `format: "csv"`, las fechas ya
+     * vienen formateadas como `2026-05-12 22:00:00` (sin la T) y los decimales
+     * como `1234.56`. Laravel solo necesita leer el CSV línea por línea y
+     * escribirlo como xlsx con PhpSpreadsheet.
+     *
+     * Para datasets > 50K filas, se deja como CSV (PhpSpreadsheet no puede
+     * con 450K filas sin agotar RAM). El CSV de DuckDB es de alta calidad:
+     * separador `;`, BOM UTF-8, fechas legibles.
+     *
+     * @param  string  $csvPath     Ruta al CSV en disco
+     * @param  string  $targetDir   Directorio donde dejar el resultado
+     * @param  string  $baseName    Nombre base del archivo sin extensión
+     * @param  string  $schema      Para el encabezado del xlsx
+     * @param  string  $view        Para el encabezado del xlsx
+     * @return ExportResult
+     */
+    public static function fromCsvFile(
+        string $csvPath,
+        string $targetDir,
+        string $baseName,
+        string $schema,
+        string $view,
+    ): ExportResult {
+        if (!is_file($csvPath)) {
+            return new ExportResult('', '', 'csv', 0, 0);
+        }
+
+        // Contar filas para decidir si hacer xlsx o dejar como CSV
+        $handle = fopen($csvPath, 'r');
+        if ($handle === false) {
+            return new ExportResult('', '', 'csv', 0, 0);
+        }
+
+        $lineCount = 0;
+        while (fgets($handle) !== false) {
+            $lineCount++;
+        }
+        fclose($handle);
+
+        // Descontar header y línea sep=;
+        $dataRows = max(0, $lineCount - 2);
+
+        // Si es grande (>50K filas), dejarlo como CSV — ya es de buena calidad
+        if ($dataRows > 50000) {
+            $finalPath = "{$targetDir}/{$baseName}.csv";
+            if (realpath($csvPath) !== realpath($finalPath)) {
+                rename($csvPath, $finalPath);
+            }
+
+            return new ExportResult(
+                path: $finalPath,
+                filename: basename($finalPath),
+                format: 'csv',
+                rows: $dataRows,
+                bytes: (int) filesize($finalPath),
+            );
+        }
+
+        // Dataset pequeño: convertir a xlsx con formato corporativo
+        $xlsxPath = "{$targetDir}/{$baseName}.xlsx";
+
+        $spreadsheet = new Spreadsheet();
+        $sheet       = $spreadsheet->getActiveSheet();
+        $sheet->setTitle(substr($view, 0, 31));
+
+        $handle = fopen($csvPath, 'r');
+        if ($handle === false) {
+            return new ExportResult('', '', 'csv', 0, 0);
+        }
+
+        // Detectar separador: DuckDB puede usar ; o ,
+        $firstLine = (string) fgets($handle);
+        rewind($handle);
+
+        $separator = str_contains($firstLine, 'sep=;') || str_contains($firstLine, ';') ? ';' : ',';
+
+        // Saltar línea sep= si existe
+        if (str_starts_with(trim($firstLine), 'sep=')) {
+            fgets($handle); // consume la línea sep=
+        }
+        // Saltar BOM si existe
+        $pos = ftell($handle);
+        $bom = fread($handle, 3);
+        if ($bom !== "\xEF\xBB\xBF") {
+            fseek($handle, $pos);
+        }
+
+        // Leer headers
+        $headerLine = fgetcsv($handle, 0, $separator);
+        if (!$headerLine) {
+            fclose($handle);
+            return new ExportResult('', '', 'csv', 0, 0);
+        }
+
+        $headers  = array_map('trim', $headerLine);
+        $colCount = count($headers);
+        $lastCol  = Coordinate::stringFromColumnIndex($colCount);
+
+        // Encabezado corporativo
+        $sheet->mergeCells("A1:{$lastCol}1");
+        $sheet->setCellValue('A1', "JadeOne — {$schema}.{$view}");
+        $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(12);
+
+        $sheet->mergeCells("A2:{$lastCol}2");
+        $sheet->setCellValue('A2', 'Exportado: ' . now()->format('d/m/Y H:i') . " | Registros: " . number_format($dataRows));
+        $sheet->getStyle('A2')->getFont()->setItalic(true)->setSize(9);
+
+        foreach ($headers as $index => $header) {
+            $col = Coordinate::stringFromColumnIndex($index + 1);
+            $sheet->setCellValue("{$col}4", $header);
+        }
+
+        $sheet->getStyle("A4:{$lastCol}4")->applyFromArray([
+            'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFF']],
+            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => '1B3A5C']],
+        ]);
+        $sheet->setAutoFilter("A4:{$lastCol}4");
+        $sheet->freezePane('A5');
+
+        // Detectar columnas de texto y fecha desde los headers
+        $textColumns = ExportValueFormatter::detectTextColumns($headers);
+        $dateColumns = [];
+        foreach ($headers as $index => $header) {
+            $h = strtolower($header);
+            if (str_contains($h, 'fecha') || str_contains($h, 'date') || str_contains($h, 'fec_') || str_ends_with($h, '_at')) {
+                $dateColumns[$index] = true;
+            }
+        }
+
+        // Escribir datos fila por fila
+        $rowNumber = 5;
+        while (($fields = fgetcsv($handle, 0, $separator)) !== false) {
+            foreach ($fields as $index => $value) {
+                if ($index >= $colCount) break;
+
+                $col  = Coordinate::stringFromColumnIndex($index + 1);
+                $cell = "{$col}{$rowNumber}";
+
+                $value = trim((string) $value);
+
+                if (isset($textColumns[$index]) && $value !== '') {
+                    $sheet->setCellValueExplicit(
+                        $cell,
+                        $value,
+                        \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING
+                    );
+                    continue;
+                }
+
+                if (isset($dateColumns[$index]) && $value !== '') {
+                    $serial = ExportValueFormatter::toExcelSerial($value);
+                    if ($serial !== null) {
+                        $sheet->setCellValue($cell, $serial);
+                        $hasTime = preg_match('/\d{2}:\d{2}/', $value);
+                        $fmt = $hasTime ? 'dd/mm/yyyy hh:mm:ss' : 'dd/mm/yyyy';
+                        $sheet->getStyle($cell)->getNumberFormat()->setFormatCode($fmt);
+                        continue;
+                    }
+                }
+
+                // Valores numéricos: dejar que Excel los interprete
+                if (is_numeric($value)) {
+                    $sheet->setCellValue($cell, (float) $value);
+                } else {
+                    $sheet->setCellValue($cell, $value);
+                }
+            }
+            $rowNumber++;
+        }
+
+        fclose($handle);
+        @unlink($csvPath); // Ya no necesitamos el CSV
+
+        $writer = new Xlsx($spreadsheet);
+        $writer->setPreCalculateFormulas(false);
+        $writer->save($xlsxPath);
+
+        $spreadsheet->disconnectWorksheets();
+
+        return new ExportResult(
+            path: $xlsxPath,
+            filename: basename($xlsxPath),
+            format: 'xlsx',
+            rows: $dataRows,
+            bytes: (int) filesize($xlsxPath),
         );
     }
 }
