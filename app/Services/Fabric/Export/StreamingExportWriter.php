@@ -470,20 +470,13 @@ final class StreamingExportWriter
     // =========================================================================
 
     /**
-     * Genera un xlsx a partir de un CSV ya existente en disco.
+     * Genera un archivo desde un CSV en disco.
      *
-     * Usa OpenSpout para escribir en streaming: ~50MB RAM para 500K filas
-     * (vs PhpSpreadsheet que necesita ~500MB+ y se cuelga con >50K).
+     * - ≤ 100K filas: xlsx con formato profesional (filtros, colores, autofit)
+     * - > 100K filas: CSV con BOM UTF-8 + separador coma (Excel lo abre bien)
      *
-     * Las fechas vienen de DuckDB como "2024-03-12 18:02:33" (sin T) y los
-     * decimales como 1234.56 — ambos formatos que Excel reconoce nativamente.
-     *
-     * @param  string  $csvPath     Ruta al CSV en disco
-     * @param  string  $targetDir   Directorio donde dejar el resultado
-     * @param  string  $baseName    Nombre base del archivo sin extensión
-     * @param  string  $schema      Para metadatos
-     * @param  string  $view        Para metadatos
-     * @return ExportResult
+     * El threshold de 100K evita que OpenSpout genere archivos de 380s/139MB
+     * que bloquean workers y causan timeouts en otros servicios.
      */
     public static function fromCsvFile(
         string $csvPath,
@@ -496,6 +489,62 @@ final class StreamingExportWriter
             return new ExportResult('', '', 'xlsx', 0, 0);
         }
 
+        // Contar filas rápido para decidir formato
+        $handle = fopen($csvPath, 'r');
+        if ($handle === false) {
+            return new ExportResult('', '', 'xlsx', 0, 0);
+        }
+
+        $lineCount = 0;
+        while (fgets($handle) !== false) {
+            $lineCount++;
+        }
+        fclose($handle);
+
+        // Descontar header (y línea sep= si existe)
+        $dataRows = max(0, $lineCount - 1);
+        if ($dataRows > 0) {
+            $f = fopen($csvPath, 'r');
+            $first = fgets($f);
+            fclose($f);
+            if (str_starts_with(trim((string) $first), 'sep=')) {
+                $dataRows--;
+            }
+        }
+
+        // > 100K filas: dejar como CSV (instantáneo, funcional en Excel)
+        if ($dataRows > 100000) {
+            $finalPath = "{$targetDir}/{$baseName}.csv";
+            if (realpath($csvPath) !== realpath($finalPath)) {
+                rename($csvPath, $finalPath);
+            } else {
+                $finalPath = $csvPath;
+            }
+
+            return new ExportResult(
+                path: $finalPath,
+                filename: basename($finalPath),
+                format: 'csv',
+                rows: $dataRows,
+                bytes: (int) filesize($finalPath),
+            );
+        }
+
+        // ≤ 100K filas: generar xlsx con formato profesional
+        return self::generateXlsxFromCsv($csvPath, $targetDir, $baseName, $schema, $view, $dataRows);
+    }
+
+    /**
+     * Genera xlsx con OpenSpout + post-procesamiento PhpSpreadsheet.
+     */
+    private static function generateXlsxFromCsv(
+        string $csvPath,
+        string $targetDir,
+        string $baseName,
+        string $schema,
+        string $view,
+        int $dataRows,
+    ): ExportResult {
         $xlsxPath = "{$targetDir}/{$baseName}.xlsx";
 
         // Detectar separador del CSV
@@ -572,8 +621,8 @@ final class StreamingExportWriter
         fseek($handle, $dataPos); // Volver al inicio de datos
 
         // Crear writer OpenSpout (streaming: escribe directo a disco, RAM fija)
-        // Usar storage/temp en vez de /tmp (que en cPanel puede estar lleno/limitado)
-        $tempDir = storage_path('app/temp/openspout');
+        // Usar un directorio temp dentro del targetDir en vez de /tmp
+        $tempDir = "{$targetDir}/openspout_temp";
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0775, true);
         }
