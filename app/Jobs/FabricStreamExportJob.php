@@ -183,22 +183,31 @@ final class FabricStreamExportJob implements ShouldQueue
             $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
             $csvFile  = "{$dir}/{$baseName}_raw.csv";
 
-            // R2 SIEMPRE responde con gzip (Content-Type: application/gzip)
-            // independientemente del format pedido. Hay que decodificar.
-            $body = $response->body();
-            $contentType = $response->header('Content-Type') ?? '';
-            unset($response);
+            // R2 responde con gzip. Decodificar por STREAMING a disco
+            // para no cargar 459 MB en RAM de golpe.
+            $gzFile = "{$dir}/{$baseName}_raw.gz";
+            file_put_contents($gzFile, $response->body());
+            unset($response); // Liberar RAM del response (~68 MB)
 
-            if (str_contains($contentType, 'gzip') || (strlen($body) >= 2 && ord($body[0]) === 0x1f && ord($body[1]) === 0x8b)) {
-                $body = gzdecode($body);
-                if ($body === false) {
-                    Log::error('FabricStreamExportJob: gzdecode fallo', ['job_id' => $this->jobId]);
-                    return false;
+            $gz = gzopen($gzFile, 'rb');
+            $csv = fopen($csvFile, 'w');
+
+            if ($gz === false || $csv === false) {
+                Log::error('FabricStreamExportJob: no se pudo abrir gz/csv', ['job_id' => $this->jobId]);
+                @unlink($gzFile);
+                return false;
+            }
+
+            while (!gzeof($gz)) {
+                $chunk = gzread($gz, 65536); // 64 KB chunks
+                if ($chunk !== false && $chunk !== '') {
+                    fwrite($csv, $chunk);
                 }
             }
 
-            file_put_contents($csvFile, $body);
-            unset($body);
+            gzclose($gz);
+            fclose($csv);
+            @unlink($gzFile); // Ya no necesitamos el .gz
 
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => 60, 'rows' => $totalRows,

@@ -118,23 +118,35 @@ class TestExportPerformance extends Command
             mkdir($dir, 0775, true);
         }
 
-        // Guardar el CSV — R2 responde siempre con gzip, hay que decodificar
+        // Guardar el gzip a disco y decodificar por STREAMING (no cargar 459 MB en RAM)
         $body = $response->body();
         $contentType = $response->header('Content-Type') ?? '';
+        $isGzip = str_contains($contentType, 'gzip') || (strlen($body) >= 2 && ord($body[0]) === 0x1f && ord($body[1]) === 0x8b);
 
-        if (str_contains($contentType, 'gzip') || (strlen($body) >= 2 && ord($body[0]) === 0x1f && ord($body[1]) === 0x8b)) {
-            $this->info("  → Response es gzip, decodificando...");
-            $body = gzdecode($body);
-            if ($body === false) {
-                $this->error('  ✗ gzdecode() falló');
-                return self::FAILURE;
+        if ($isGzip) {
+            $this->info("  → Response es gzip, decodificando por streaming a disco...");
+            $gzFile = "{$dir}/{$baseName}_raw.gz";
+            file_put_contents($gzFile, $body);
+            unset($response, $body); // Liberar RAM (~68 MB)
+
+            $gz  = gzopen($gzFile, 'rb');
+            $csv = fopen("{$dir}/{$baseName}_raw.csv", 'w');
+            while (!gzeof($gz)) {
+                $chunk = gzread($gz, 65536);
+                if ($chunk !== false && $chunk !== '') fwrite($csv, $chunk);
             }
-        }
+            gzclose($gz);
+            fclose($csv);
+            @unlink($gzFile);
 
-        $csvFile = "{$dir}/{$baseName}_raw.csv";
-        file_put_contents($csvFile, $body);
-        $savedSize = strlen($body);
-        unset($response, $body);
+            $csvFile   = "{$dir}/{$baseName}_raw.csv";
+            $savedSize = filesize($csvFile);
+        } else {
+            $csvFile = "{$dir}/{$baseName}_raw.csv";
+            file_put_contents($csvFile, $body);
+            $savedSize = strlen($body);
+            unset($response, $body);
+        }
 
         $this->info("  CSV guardado: {$this->humanSize($savedSize)}");
 

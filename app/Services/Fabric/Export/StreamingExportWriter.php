@@ -650,9 +650,13 @@ final class StreamingExportWriter
             @unlink($csvPath);
         }
 
-        // Post-procesamiento con PhpSpreadsheet: agregar filtros y autofit
-        // Solo manipula metadatos de la hoja, NO recorre las celdas de datos.
-        self::applyExcelFormatting($xlsxPath, $headers, $dataRows);
+        // Post-procesamiento: filtros, autofit, estilos (solo para datasets chicos)
+        // Para datasets grandes (>100K filas), PhpSpreadsheet intentaría cargar
+        // todo en RAM y el OOM Killer mata el proceso. En ese caso el xlsx de
+        // OpenSpout se entrega sin formato adicional — funcional pero sin lujos.
+        if ($dataRows <= 100000) {
+            self::applyExcelFormatting($xlsxPath, $headers, $dataRows);
+        }
 
         return new ExportResult(
             path: $xlsxPath,
