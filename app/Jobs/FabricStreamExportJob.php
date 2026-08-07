@@ -182,8 +182,23 @@ final class FabricStreamExportJob implements ShouldQueue
 
             $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
             $csvFile  = "{$dir}/{$baseName}_raw.csv";
-            file_put_contents($csvFile, $response->body());
+
+            // R2 SIEMPRE responde con gzip (Content-Type: application/gzip)
+            // independientemente del format pedido. Hay que decodificar.
+            $body = $response->body();
+            $contentType = $response->header('Content-Type') ?? '';
             unset($response);
+
+            if (str_contains($contentType, 'gzip') || (strlen($body) >= 2 && ord($body[0]) === 0x1f && ord($body[1]) === 0x8b)) {
+                $body = gzdecode($body);
+                if ($body === false) {
+                    Log::error('FabricStreamExportJob: gzdecode fallo', ['job_id' => $this->jobId]);
+                    return false;
+                }
+            }
+
+            file_put_contents($csvFile, $body);
+            unset($body);
 
             $this->updateStatus(self::STATUS_PROCESSING, null, [
                 'progress' => 60, 'rows' => $totalRows,

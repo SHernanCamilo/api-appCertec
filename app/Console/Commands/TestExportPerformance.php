@@ -118,11 +118,23 @@ class TestExportPerformance extends Command
             mkdir($dir, 0775, true);
         }
 
-        // Guardar el CSV de R2 directamente a disco (NO parsear como NDJSON)
+        // Guardar el CSV — R2 responde siempre con gzip, hay que decodificar
+        $body = $response->body();
+        $contentType = $response->header('Content-Type') ?? '';
+
+        if (str_contains($contentType, 'gzip') || (strlen($body) >= 2 && ord($body[0]) === 0x1f && ord($body[1]) === 0x8b)) {
+            $this->info("  → Response es gzip, decodificando...");
+            $body = gzdecode($body);
+            if ($body === false) {
+                $this->error('  ✗ gzdecode() falló');
+                return self::FAILURE;
+            }
+        }
+
         $csvFile = "{$dir}/{$baseName}_raw.csv";
-        file_put_contents($csvFile, $response->body());
-        $savedSize = strlen($response->body());
-        unset($response); // Liberar RAM
+        file_put_contents($csvFile, $body);
+        $savedSize = strlen($body);
+        unset($response, $body);
 
         $this->info("  CSV guardado: {$this->humanSize($savedSize)}");
 
