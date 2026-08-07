@@ -507,10 +507,17 @@ final class StreamingExportWriter
         $firstLine = (string) fgets($handle);
         rewind($handle);
 
-        $separator = ';'; // Default de DuckDB
+        // Detectar separador: probar sep=X, luego heurística por frecuencia
+        $separator = ','; // Default universal
         if (str_starts_with(trim($firstLine), 'sep=')) {
             $separator = trim(str_replace('sep=', '', trim($firstLine)));
+            if ($separator === '') $separator = ',';
             fgets($handle); // consume la línea sep=
+        } else {
+            // Heurística: contar ; y , en la primera línea
+            $semicolons = substr_count($firstLine, ';');
+            $commas = substr_count($firstLine, ',');
+            $separator = $semicolons > $commas ? ';' : ',';
         }
 
         // Saltar BOM si existe
