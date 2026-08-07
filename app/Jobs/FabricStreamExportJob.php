@@ -112,18 +112,10 @@ final class FabricStreamExportJob implements ShouldQueue
     }
 
     /**
-     * Fast-path: Export desde R2 Parquet cache.
+     * Fast-path: Export desde R2 Parquet cache (format=csv).
      *
-     * Estrategia dual según tamaño esperado:
-     *   ≤ 50K filas → format: "gzip" (NDJSON) → PhpSpreadsheet genera xlsx con formato
-     *   > 50K filas → format: "csv" → DuckDB genera CSV directo, Laravel lo guarda a disco
-     *
-     * El CSV de DuckDB ya tiene:
-     *   - Fechas como "2026-05-12 22:00:00" (sin T, Excel las reconoce)
-     *   - Decimales como 1234.56 (sin problemas de flotante)
-     *   - BOM UTF-8 + sep=; (Excel lo abre bien)
-     *
-     * Retorna true si R2 resolvió el export, false para caer al fallback.
+     * DuckDB genera un CSV de alta calidad: fechas sin T, decimales OK, BOM UTF-8.
+     * Laravel guarda directo a disco. fromCsvFile() convierte a xlsx si <=50K filas.
      */
     private function tryExportFromR2(User $user): bool
     {
@@ -131,13 +123,9 @@ final class FabricStreamExportJob implements ShouldQueue
         $token   = env('TOKEN_ADMIN', '');
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
-        // âš ï¸ CORRECTITUD DE DATOS: el parquet de R2 es un snapshot de la vista COMPLETA
-        // sin filtros. Si el usuario filtrÃ³, R2 no puede garantizar el mismo resultado
-        // que Fabric (el parquet puede estar desactualizado o el filtro no aplicarse).
-        // En ese caso vamos directo a Fabric, que aplica los filtros en el SELECT.
         $filters = $this->options['filters'] ?? [];
         if (!empty($filters)) {
-            Log::info('FabricStreamExportJob: export con filtros â†’ Fabric directo (R2 omitido)', [
+            Log::info('FabricStreamExportJob: export con filtros, Fabric directo', [
                 'job_id'  => $this->jobId,
                 'filters' => array_keys($filters),
             ]);
@@ -145,19 +133,13 @@ final class FabricStreamExportJob implements ShouldQueue
         }
 
         $this->updateStatus(self::STATUS_PROCESSING, null, [
-            'progress' => 5,
-            'rows'     => 0,
-            'message'  => 'Descargando de R2 (puede tardar 30-60s)...',
+            'progress' => 5, 'rows' => 0, 'message' => 'Descargando datos...',
         ]);
 
         try {
-            // Estrategia dual: pedir CSV para datasets grandes (Python/DuckDB lo
-            // formatea completo y Laravel solo guarda a disco), NDJSON para chicos
-            // (Laravel parsea y genera xlsx con PhpSpreadsheet).
             $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
-            $useCsv  = $maxRows > 50000;
 
-            $response = Http::timeout(600)
+            $response = Http::timeout(300)
                 ->connectTimeout(10)
                 ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
                 ->post($url . '/api/data/export/r2', [
@@ -168,160 +150,59 @@ final class FabricStreamExportJob implements ShouldQueue
                     'groups'       => $gateway->getGruposBd($user),
                     'schema_name'  => $this->schema,
                     'view'         => $this->view,
-                    'filters'      => $gateway->normalizeFiltersPublic($this->options['filters'] ?? []),
+                    'filters'      => new \stdClass(),
                     'columns'      => $this->options['columns'] ?? [],
                     'max_rows'     => $maxRows,
-                    'format'       => $useCsv ? 'csv' : 'gzip',
-                    'ensure_fresh' => true,
+                    'format'       => 'csv',
+                    'ensure_fresh' => false,
                 ]);
 
             if ($response->status() !== 200) {
-                // 503 = slots de export ocupados -> reintentar con backoff
                 if ($response->status() === 503 && $this->attempts() < $this->tries) {
-                    Log::info('FabricStreamExportJob: R2 slots ocupados, reintentando', [
-                        'job_id'  => $this->jobId,
-                        'attempt' => $this->attempts(),
-                    ]);
                     $this->release(30);
                     return true;
                 }
-
-                // 404 no_cache = vista sin parquet -> Fabric directo
-                // 202         = parquet generandose -> Fabric directo
-                Log::info('FabricStreamExportJob: R2 no disponible, usando Fabric directo', [
-                    'job_id'      => $this->jobId,
-                    'status'      => $response->status(),
-                    'error'       => $response->json('error'),
-                    'retry_after' => $response->json('retry_after_seconds'),
+                Log::info('FabricStreamExportJob: R2 no disponible', [
+                    'job_id' => $this->jobId, 'status' => $response->status(),
                 ]);
                 return false;
             }
-
-            // R2 respondiÃ³ con datos â€” escribir gzip a disco y decodificar por streaming
-            $this->updateStatus(self::STATUS_PROCESSING, null, [
-                'progress' => 20,
-                'rows'     => 0,
-                'message'  => 'Descargando desde cache R2...',
-            ]);
 
             $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
 
-            // Trazabilidad de frescura: permite auditar si el parquet se regenerÃ³ y
-            // si el conteo coincidÃ­a con Fabric al momento de la descarga.
-            Log::info('FabricStreamExportJob: R2 sirviÃ³ el export', [
-                'job_id'       => $this->jobId,
-                'view'         => "{$this->schema}.{$this->view}",
-                'source'       => $response->header('X-Source'),
-                'rows'         => $totalRows,
-                'parquet_rows' => $response->header('X-Parquet-Rows'),
-                'regenerated'  => $response->header('X-Parquet-Regenerated'),
-                'fabric_count' => $response->header('X-Fabric-Count'),
-                'elapsed_ms'   => $response->header('X-Elapsed-Ms'),
+            Log::info('FabricStreamExportJob: R2 OK', [
+                'job_id' => $this->jobId,
+                'view'   => "{$this->schema}.{$this->view}",
+                'rows'   => $totalRows,
+                'source' => $response->header('X-Source'),
             ]);
 
-            // Preparar directorio
             $dir = storage_path("app/fabric_exports/{$this->jobId}");
-            if (!is_dir($dir)) {
-                mkdir($dir, 0775, true);
-            }
+            if (!is_dir($dir)) { mkdir($dir, 0775, true); }
 
-            // ── Ruta CSV: guardar directo y convertir con fromCsvFile() ──
-            if ($useCsv) {
-                $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
-                $csvFile  = "{$dir}/{$baseName}_raw.csv";
-                file_put_contents($csvFile, $response->body());
-                unset($response);
-
-                $this->updateStatus(self::STATUS_PROCESSING, null, [
-                    'progress' => 60,
-                    'rows'     => $totalRows,
-                    'message'  => "Generando archivo ({$totalRows} filas)...",
-                ]);
-
-                $result = StreamingExportWriter::fromCsvFile($csvFile, $dir, $baseName, $this->schema, $this->view);
-
-                if ($result->isEmpty()) {
-                    $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos.', [
-                        'rows' => 0, 'progress' => 100,
-                    ]);
-                    return true;
-                }
-
-                $this->publishResult($result, 'r2');
-                return true;
-            }
-
-            // ── Ruta NDJSON (gzip): parsear línea por línea y generar xlsx ──
-
-            // Escribir gzip a disco (NO decodificar en RAM)
-            $gzipFile = "{$dir}/r2_data.gz";
-            file_put_contents($gzipFile, $response->body());
-            unset($response); // Liberar RAM del response
+            $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
+            $csvFile  = "{$dir}/{$baseName}_raw.csv";
+            file_put_contents($csvFile, $response->body());
+            unset($response);
 
             $this->updateStatus(self::STATUS_PROCESSING, null, [
-                'progress' => 35,
-                'rows'     => $totalRows,
-                'message'  => "Procesando {$totalRows} filas desde R2...",
+                'progress' => 60, 'rows' => $totalRows,
+                'message' => "Generando archivo ({$totalRows} filas)...",
             ]);
 
-            // UNA SOLA PASADA: gzip â†’ archivo final. Antes habÃ­a un data.tmp
-            // intermedio que obligaba a recorrer el dataset tres veces.
-            $gzStream = gzopen($gzipFile, 'rb');
-            if ($gzStream === false) {
-                @unlink($gzipFile);
-                Log::warning('FabricStreamExportJob: No se pudo abrir stream gz', ['job_id' => $this->jobId]);
-                return false;
-            }
-
-            $writer = $this->makeWriter($dir);
-            $writer->onProgress(function (int $rows) use ($totalRows): void {
-                $progress = min(90, 35 + (int) ($rows / max($totalRows, 1) * 55));
-                $this->updateStatus(self::STATUS_PROCESSING, null, [
-                    'progress' => $progress,
-                    'rows'     => $rows,
-                    'message'  => "Procesando... ({$rows} filas)",
-                ]);
-            });
-
-            try {
-                while (!gzeof($gzStream)) {
-                    $line = gzgets($gzStream, 1048576); // 1 MB max por lÃ­nea
-                    if ($line === false || trim($line) === '') {
-                        continue;
-                    }
-
-                    $row = json_decode(trim($line), true);
-                    if (!is_array($row) || $row === []) {
-                        continue;
-                    }
-
-                    $writer->writeRow($row);
-                }
-            } catch (\Throwable $e) {
-                $writer->abort();
-                throw $e;
-            } finally {
-                gzclose($gzStream);
-                @unlink($gzipFile);
-            }
-
-            $result = $writer->finish();
+            $result = StreamingExportWriter::fromCsvFile($csvFile, $dir, $baseName, $this->schema, $this->view);
 
             if ($result->isEmpty()) {
-                $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos con los filtros aplicados.', [
-                    'rows' => 0, 'progress' => 100,
-                ]);
+                $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos.', ['rows' => 0, 'progress' => 100]);
                 return true;
             }
 
             $this->publishResult($result, 'r2');
-
             return true;
 
         } catch (\Throwable $e) {
-            Log::warning('FabricStreamExportJob: R2 fallÃ³, usando fallback', [
-                'job_id' => $this->jobId,
-                'error'  => $e->getMessage(),
+            Log::warning('FabricStreamExportJob: R2 fallo', [
+                'job_id' => $this->jobId, 'error' => $e->getMessage(),
             ]);
             return false;
         }
