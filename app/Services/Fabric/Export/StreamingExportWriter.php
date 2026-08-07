@@ -580,14 +580,8 @@ final class StreamingExportWriter
         $writer = new \OpenSpout\Writer\XLSX\Writer($options);
         $writer->openToFile($xlsxPath);
 
-        // Header con estilo (bold, fondo azul oscuro, texto blanco)
-        $headerStyle = (new \OpenSpout\Common\Entity\Style\Style())
-            ->setFontBold()
-            ->setFontColor(\OpenSpout\Common\Entity\Style\Color::WHITE)
-            ->setBackgroundColor('1B3A5C')
-            ->setShouldWrapText(false);
-
-        $headerRow = \OpenSpout\Common\Entity\Row::fromValues($headers, $headerStyle);
+        // Header sin estilo especial de OpenSpout — PhpSpreadsheet lo formatea después
+        $headerRow = \OpenSpout\Common\Entity\Row::fromValues($headers);
         $writer->addRow($headerRow);
 
         // Escribir datos fila por fila (streaming: cada fila va directo a disco)
@@ -604,16 +598,27 @@ final class StreamingExportWriter
                     continue;
                 }
 
-                // Columnas de fecha: escribir como DateTimeImmutable para que
-                // Excel las reconozca como fecha nativa (no texto)
+                // Columnas de fecha: escribir como serial de Excel + formato de fecha
+                // Así Excel la reconoce como fecha nativa (filtros de fecha, ordenar, rango)
                 if (isset($dateColumns[$index]) && $value !== '') {
-                    try {
-                        $dt = new \DateTimeImmutable($value);
-                        $cells[] = \OpenSpout\Common\Entity\Cell\DateTimeCell::fromValue($dt);
+                    // Quitar T y milisegundos si vienen
+                    $cleanDate = preg_replace('/T/', ' ', $value);
+                    $cleanDate = preg_replace('/\.\d+Z?$/', '', $cleanDate);
+
+                    $serial = ExportValueFormatter::toExcelSerial(trim($cleanDate));
+                    if ($serial !== null) {
+                        $hasTime = (bool) preg_match('/\d{2}:\d{2}/', $cleanDate);
+                        $fmt = $hasTime ? 'yyyy-mm-dd hh:mm:ss' : 'yyyy-mm-dd';
+
+                        $dateStyle = (new \OpenSpout\Common\Entity\Style\Style())
+                            ->setFormat($fmt);
+
+                        $cells[] = \OpenSpout\Common\Entity\Cell\NumericCell::fromValue($serial, $dateStyle);
                         continue;
-                    } catch (\Throwable) {
-                        // Si falla el parse, dejarlo como string
                     }
+                    // Si no se pudo parsear como fecha, escribir como string
+                    $cells[] = \OpenSpout\Common\Entity\Cell\StringCell::fromValue($value);
+                    continue;
                 }
 
                 // Valores numéricos: escribir como número para que Excel
@@ -633,7 +638,15 @@ final class StreamingExportWriter
 
         fclose($handle);
         $writer->close();
-        @unlink($csvPath); // Ya no necesitamos el CSV
+
+        // Eliminar el CSV temporal (ya está en el xlsx)
+        if (is_file($csvPath)) {
+            @unlink($csvPath);
+        }
+
+        // Post-procesamiento con PhpSpreadsheet: agregar filtros y autofit
+        // Solo manipula metadatos de la hoja, NO recorre las celdas de datos.
+        self::applyExcelFormatting($xlsxPath, $headers, $dataRows);
 
         return new ExportResult(
             path: $xlsxPath,
@@ -642,5 +655,125 @@ final class StreamingExportWriter
             rows: $dataRows,
             bytes: (int) filesize($xlsxPath),
         );
+    }
+
+    /**
+     * Agrega filtros automáticos, freeze pane y autofit a un xlsx ya generado.
+     *
+     * Usa PhpSpreadsheet para post-procesamiento de metadatos.
+     * Para archivos grandes (>5K filas), solo lee las primeras filas para
+     * estimar el ancho de columnas (no recorre todo el dataset).
+     */
+    private static function applyExcelFormatting(string $xlsxPath, array $headers, int $dataRows): void
+    {
+        try {
+            $reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReaderForFile($xlsxPath);
+            $reader->setReadDataOnly(false);
+            $reader->setReadEmptyCells(false);
+
+            // Leer solo las primeras 50 filas para estimar anchos de columna
+            $sampleRows = min($dataRows, 50);
+            $reader->setReadFilter(new class($sampleRows) implements \PhpOffice\PhpSpreadsheet\Reader\IReadFilter {
+                public function __construct(private int $maxRow) {}
+                public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
+                {
+                    return $row <= ($this->maxRow + 1); // +1 por el header
+                }
+            });
+
+            $spreadsheet = $reader->load($xlsxPath);
+            $sheet = $spreadsheet->getActiveSheet();
+
+            $colCount = count($headers);
+            $lastCol = Coordinate::stringFromColumnIndex($colCount);
+
+            // ═══ AutoFilter (flechitas de filtro en el header) ═══
+            $sheet->setAutoFilter("A1:{$lastCol}1");
+
+            // ═══ Freeze Pane (header fijo al hacer scroll) ═══
+            $sheet->freezePane('A2');
+
+            // ═══ AutoFit de columnas basado en contenido real ═══
+            for ($colIdx = 1; $colIdx <= $colCount; $colIdx++) {
+                $col = Coordinate::stringFromColumnIndex($colIdx);
+
+                // Empezar con el ancho del header
+                $maxLen = mb_strlen($headers[$colIdx - 1] ?? '');
+
+                // Muestrear las primeras filas de datos para encontrar el más ancho
+                for ($row = 2; $row <= min($sampleRows + 1, $dataRows + 1); $row++) {
+                    $cellValue = $sheet->getCell("{$col}{$row}")->getValue();
+                    if ($cellValue !== null) {
+                        $len = mb_strlen((string) $cellValue);
+                        if ($len > $maxLen) {
+                            $maxLen = $len;
+                        }
+                    }
+                }
+
+                // Calcular ancho: caracteres + margen, con min 8 y max 50
+                $width = max(8, min(50, $maxLen + 3));
+                $sheet->getColumnDimension($col)->setWidth($width);
+            }
+
+            // ═══ Estilo del header — Verde profesional tipo tabla de Excel ═══
+            $headerStyle = [
+                'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF'], 'size' => 10, 'name' => 'Calibri'],
+                'fill' => [
+                    'fillType' => Fill::FILL_SOLID,
+                    'startColor' => ['argb' => 'FF4472C4'], // Azul corporativo Excel
+                ],
+                'alignment' => [
+                    'horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER,
+                    'vertical' => \PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER,
+                    'wrapText' => false,
+                ],
+                'borders' => [
+                    'allBorders' => [
+                        'borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN,
+                        'color' => ['argb' => 'FF2F5496'],
+                    ],
+                ],
+            ];
+            $sheet->getStyle("A1:{$lastCol}1")->applyFromArray($headerStyle);
+            $sheet->getRowDimension(1)->setRowHeight(22);
+
+            // ═══ Estilo de datos: bordes + zebra striping azul suave ═══
+            $lastDataRow = min($dataRows + 1, $sampleRows + 1);
+
+            $dataStyle = [
+                'font' => ['size' => 10, 'name' => 'Calibri'],
+                'alignment' => [
+                    'vertical' => \PhpOffice\PhpSpreadsheet\Style\Alignment::VERTICAL_CENTER,
+                ],
+                'borders' => [
+                    'allBorders' => [
+                        'borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN,
+                        'color' => ['argb' => 'FFD6DCE4'],
+                    ],
+                ],
+            ];
+            $sheet->getStyle("A2:{$lastCol}{$lastDataRow}")->applyFromArray($dataStyle);
+
+            // Zebra striping: filas alternas con azul muy suave
+            for ($row = 3; $row <= $lastDataRow; $row += 2) {
+                $sheet->getStyle("A{$row}:{$lastCol}{$row}")->getFill()
+                    ->setFillType(Fill::FILL_SOLID)
+                    ->getStartColor()->setARGB('FFD9E2F3');
+            }
+
+            // Guardar
+            $writer = new Xlsx($spreadsheet);
+            $writer->setPreCalculateFormulas(false);
+            $writer->save($xlsxPath);
+
+            $spreadsheet->disconnectWorksheets();
+            unset($spreadsheet);
+        } catch (\Throwable $e) {
+            // Si falla, el xlsx de OpenSpout sigue válido — solo sin formato extra
+            \Illuminate\Support\Facades\Log::warning('Export: post-procesamiento xlsx falló', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
