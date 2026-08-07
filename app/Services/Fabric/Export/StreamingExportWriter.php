@@ -572,10 +572,16 @@ final class StreamingExportWriter
         fseek($handle, $dataPos); // Volver al inicio de datos
 
         // Crear writer OpenSpout (streaming: escribe directo a disco, RAM fija)
+        // Usar storage/temp en vez de /tmp (que en cPanel puede estar lleno/limitado)
+        $tempDir = storage_path('app/temp/openspout');
+        if (!is_dir($tempDir)) {
+            mkdir($tempDir, 0775, true);
+        }
+
         $options = new \OpenSpout\Writer\XLSX\Options();
         $options->DEFAULT_ROW_STYLE = (new \OpenSpout\Common\Entity\Style\Style());
-        $options->setColumnWidthForRange(15, 1, count($headers)); // Ancho mínimo legible
-        $options->SHOULD_USE_INLINE_STRINGS = true; // Reduce tamaño del archivo
+        $options->SHOULD_USE_INLINE_STRINGS = true;
+        $options->setTempFolder($tempDir);
 
         $writer = new \OpenSpout\Writer\XLSX\Writer($options);
         $writer->openToFile($xlsxPath);
