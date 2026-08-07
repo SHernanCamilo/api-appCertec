@@ -543,14 +543,39 @@ final class StreamingExportWriter
             $h = strtolower($header);
             if (str_contains($h, 'fecha') || str_contains($h, 'date')
                 || str_contains($h, 'fec_') || str_ends_with($h, '_at')
-                || str_starts_with($h, 'dt_')) {
+                || str_starts_with($h, 'dt_')
+                || str_contains($h, 'nacimiento')
+                || str_contains($h, 'ingreso') && str_contains($h, 'fecha')
+                || str_contains($h, 'egreso')
+                || str_contains($h, 'vencimiento')
+                || str_contains($h, 'creacion')
+                || str_contains($h, 'modificacion')
+                || str_contains($h, 'radicacion') && str_contains($h, 'fecha')
+            ) {
                 $dateColumns[$index] = true;
             }
         }
 
+        // Detectar columnas de fecha por contenido de la primera fila de datos
+        $dataPos = ftell($handle);
+        $firstDataLine = fgetcsv($handle, 0, $separator);
+        if ($firstDataLine) {
+            foreach ($firstDataLine as $index => $val) {
+                if (isset($dateColumns[$index]) || isset($textColumns[$index])) continue;
+                $v = trim((string) $val);
+                // Detectar patrones: "2024-03-12 18:02:33" o "2024-03-12"
+                if ($v !== '' && preg_match('/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/', $v)) {
+                    $dateColumns[$index] = true;
+                }
+            }
+        }
+        fseek($handle, $dataPos); // Volver al inicio de datos
+
         // Crear writer OpenSpout (streaming: escribe directo a disco, RAM fija)
         $options = new \OpenSpout\Writer\XLSX\Options();
         $options->DEFAULT_ROW_STYLE = (new \OpenSpout\Common\Entity\Style\Style());
+        $options->setColumnWidthForRange(15, 1, count($headers)); // Ancho mínimo legible
+        $options->SHOULD_USE_INLINE_STRINGS = true; // Reduce tamaño del archivo
 
         $writer = new \OpenSpout\Writer\XLSX\Writer($options);
         $writer->openToFile($xlsxPath);
@@ -559,7 +584,8 @@ final class StreamingExportWriter
         $headerStyle = (new \OpenSpout\Common\Entity\Style\Style())
             ->setFontBold()
             ->setFontColor(\OpenSpout\Common\Entity\Style\Color::WHITE)
-            ->setBackgroundColor('1B3A5C');
+            ->setBackgroundColor('1B3A5C')
+            ->setShouldWrapText(false);
 
         $headerRow = \OpenSpout\Common\Entity\Row::fromValues($headers, $headerStyle);
         $writer->addRow($headerRow);
