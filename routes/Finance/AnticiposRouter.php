@@ -30,6 +30,10 @@ Route::middleware(['auth:api'])->group(function () {
         Route::post('/{id}/rechazar', [AnticipoController::class, 'rechazar']);
         Route::get('/{id}/historial', [AnticipoController::class, 'historial']);
         
+        // Documentos / Soportes
+        Route::post('/{id}/documentos', [AnticipoController::class, 'subirDocumento']);
+        Route::get('/{id}/documentos', [AnticipoController::class, 'listarDocumentos']);
+
         // Fase post-viaje
         Route::post('/{id}/desembolsar', [AnticipoController::class, 'desembolsar']);
         Route::post('/{id}/legalizar', [AnticipoController::class, 'legalizar']);
@@ -38,6 +42,14 @@ Route::middleware(['auth:api'])->group(function () {
         Route::post('/{id}/aprobar-excedente', [AnticipoController::class, 'aprobarExcedente']);
         Route::post('/{id}/rechazar-excedente', [AnticipoController::class, 'rechazarExcedente']);
         Route::post('/{id}/cerrar', [AnticipoController::class, 'cerrarSolicitud']);
+    });
+
+    // ========================================================================
+    // DOCUMENTOS (por ID de documento)
+    // ========================================================================
+    Route::prefix('documentos')->group(function () {
+        Route::get('/{idDocumento}/descargar', [AnticipoController::class, 'descargarDocumento']);
+        Route::delete('/{idDocumento}', [AnticipoController::class, 'eliminarDocumento']);
     });
 
     // ========================================================================

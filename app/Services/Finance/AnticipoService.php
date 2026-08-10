@@ -280,22 +280,29 @@ class AnticipoService
                     $empleado->id_empresa
                 );
 
-                $flujo = $this->workflowResolver->resolverFlujo('anticipos', [
+                $contextoFlujo = [
+                    'record_id' => $solicitud->id,
                     'nivel' => $topes['nivel_jerarquico'],
                     'prefijo' => $empleado->empresa->sucursales->first()->prefijo ?? 'MA',
                     'monto' => $solicitud->monto_solicitado,
                     'cobertura' => $data['cobertura'],
                     'id_empresa' => $empleado->id_empresa,
                     'id_grupo' => $grupo?->id,
-                ]);
+                    'id_unidad_funcional' => $empleado->unidad ?? null,
+                ];
 
-                $instancia = $this->workflowExecutor->iniciarFlujo($flujo, 'anticipos', $solicitud->id);
+                $flujo = $this->workflowResolver->resolverFlujo('anticipos', $contextoFlujo);
+
+                $instancia = $this->workflowExecutor->iniciarFlujo(
+                    $flujo,
+                    $data['radicado_por'],
+                    $contextoFlujo,
+                    $solicitud->numero_solicitud
+                );
 
                 $solicitud->update([
                     'estado' => 'pendiente_' . $instancia->pasoActual->rol_aprobador,
                 ]);
-
-                $this->workflowNotifier->notificarAprobador($instancia);
             } catch (\Exception $e) {
                 // Sin flujo configurado, queda en borrador
                 Log::warning("Sin flujo de aprobación configurado para esta solicitud", [
@@ -355,12 +362,10 @@ class AnticipoService
                     'estado' => 'autorizado',
                     'monto_autorizado' => $montoAutorizado ?? $solicitud->monto_solicitado,
                 ]);
-                $this->workflowNotifier->notificarAprobacion($instancia, $solicitud->radicado_por);
             } else {
                 $solicitud->update([
                     'estado' => 'pendiente_' . $instancia->pasoActual->rol_aprobador,
                 ]);
-                $this->workflowNotifier->notificarAprobador($instancia);
             }
 
             return $solicitud->fresh();
@@ -380,19 +385,20 @@ class AnticipoService
                 ->enProgreso()
                 ->firstOrFail();
 
+            // Guardar el rol del paso actual antes del rechazo
+            $rolPasoActual = $instancia->pasoActual->rol_aprobador ?? 'desconocido';
+
             // Rechazar en el motor de flujos
-            $instancia = $this->workflowExecutor->rechazar(
+            $this->workflowExecutor->rechazar(
                 $instancia->id,
                 $userId,
                 $comentario
             );
 
-            // Actualizar estado
+            // Actualizar estado con el rol del paso que rechazó
             $solicitud->update([
-                'estado' => 'rechazado_' . $instancia->pasoActual->rol_aprobador,
+                'estado' => 'rechazado_' . $rolPasoActual,
             ]);
-
-            $this->workflowNotifier->notificarRechazo($instancia, $solicitud->radicado_por, $comentario);
 
             return $solicitud->fresh();
         });
@@ -429,6 +435,143 @@ class AnticipoService
         }
 
         return $query->orderBy('created_at', 'desc')->paginate(20);
+    }
+
+    // ========================================================================
+    // DOCUMENTOS / SOPORTES
+    // ========================================================================
+
+    /**
+     * Sube un documento/soporte (PDF) a la solicitud.
+     * Almacena en el disco configurado:
+     *   - 'onedrive' → carpeta local sincronizada por OneDrive Desktop
+     *   - 'graph'    → Microsoft Graph API directo (application permissions)
+     *   - 'local'    → storage/app local
+     *
+     * @param int $idSolicitud
+     * @param \Illuminate\Http\UploadedFile $archivo
+     * @param string $tipoDocumento (soporte_viaje|factura|recibo|comprobante_devolucion|otro)
+     * @param int $userId
+     *
+     * @return AntiSolicitudDocumento
+     */
+    public function subirDocumento(int $idSolicitud, $archivo, string $tipoDocumento, int $userId): AntiSolicitudDocumento
+    {
+        $solicitud = AntiSolicitud::findOrFail($idSolicitud);
+
+        $disco = config('filesystems.anticipos_disk', 'onedrive');
+        $carpeta = "anticipos/{$solicitud->numero_solicitud}";
+        $nombreArchivo = sprintf(
+            '%s_%s_%s.%s',
+            $tipoDocumento,
+            now()->format('Ymd_His'),
+            uniqid(),
+            $archivo->getClientOriginalExtension()
+        );
+
+        $ruta = "{$carpeta}/{$nombreArchivo}";
+        $metadata = [];
+
+        if ($disco === 'graph') {
+            // Usar Microsoft Graph API directamente (application permissions)
+            $graphService = app(\App\Services\Storage\MicrosoftGraphStorageService::class);
+            $metadata = $graphService->uploadFromFile($ruta, $archivo);
+            // ruta almacena la ruta relativa, metadata['id'] el driveItemId
+        } else {
+            // Usar disco de Laravel (local, onedrive sincronizado, s3, r2)
+            $ruta = $archivo->storeAs($carpeta, $nombreArchivo, $disco);
+        }
+
+        $documento = AntiSolicitudDocumento::create([
+            'id_solicitud' => $solicitud->id,
+            'tipo_documento' => $tipoDocumento,
+            'nombre_archivo' => $archivo->getClientOriginalName(),
+            'ruta_archivo' => $ruta,
+            'disco' => $disco,
+            'mime_type' => $archivo->getMimeType(),
+            'tamano' => $archivo->getSize(),
+            'subido_por' => $userId,
+        ]);
+
+        Log::info("Documento subido para anticipo", [
+            'solicitud_id' => $solicitud->id,
+            'documento_id' => $documento->id,
+            'tipo' => $tipoDocumento,
+            'disco' => $disco,
+            'graph_item_id' => $metadata['id'] ?? null,
+        ]);
+
+        return $documento;
+    }
+
+    /**
+     * Lista documentos de una solicitud.
+     */
+    public function listarDocumentos(int $idSolicitud): \Illuminate\Support\Collection
+    {
+        return AntiSolicitudDocumento::where('id_solicitud', $idSolicitud)
+            ->with('subidoPor:id,name')
+            ->orderBy('created_at', 'desc')
+            ->get();
+    }
+
+    /**
+     * Descarga un documento (retorna stream, URL temporal o Graph sharing link).
+     */
+    public function descargarDocumento(int $idDocumento): array
+    {
+        $documento = AntiSolicitudDocumento::findOrFail($idDocumento);
+        $disco = $documento->disco ?? config('filesystems.anticipos_disk', 'onedrive');
+
+        // Si usa Graph API directamente
+        if ($disco === 'graph') {
+            $graphService = app(\App\Services\Storage\MicrosoftGraphStorageService::class);
+            $url = $graphService->createSharingLink($documento->ruta_archivo, 'view', 1);
+            return ['tipo' => 'url', 'url' => $url, 'nombre' => $documento->nombre_archivo];
+        }
+
+        $storage = \Illuminate\Support\Facades\Storage::disk($disco);
+
+        if (!$storage->exists($documento->ruta_archivo)) {
+            throw new \Exception("El archivo no existe en el almacenamiento");
+        }
+
+        // Intentar generar URL temporal (soportada por OneDrive/S3/R2)
+        try {
+            $url = $storage->temporaryUrl($documento->ruta_archivo, now()->addMinutes(30));
+            return ['tipo' => 'url', 'url' => $url, 'nombre' => $documento->nombre_archivo];
+        } catch (\RuntimeException $e) {
+            // Disco local no soporta temporaryUrl, retornar path
+            return [
+                'tipo' => 'stream',
+                'path' => $storage->path($documento->ruta_archivo),
+                'nombre' => $documento->nombre_archivo,
+                'mime' => $documento->mime_type,
+            ];
+        }
+    }
+
+    /**
+     * Elimina un documento de una solicitud.
+     */
+    public function eliminarDocumento(int $idDocumento, int $userId): void
+    {
+        $documento = AntiSolicitudDocumento::findOrFail($idDocumento);
+        $disco = $documento->disco ?? config('filesystems.anticipos_disk', 'onedrive');
+
+        if ($disco === 'graph') {
+            $graphService = app(\App\Services\Storage\MicrosoftGraphStorageService::class);
+            $graphService->delete($documento->ruta_archivo);
+        } else {
+            \Illuminate\Support\Facades\Storage::disk($disco)->delete($documento->ruta_archivo);
+        }
+
+        $documento->delete();
+
+        Log::info("Documento eliminado", [
+            'documento_id' => $idDocumento,
+            'eliminado_por' => $userId,
+        ]);
     }
 
     // ========================================================================

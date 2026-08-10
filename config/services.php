@@ -50,4 +50,30 @@ return [
         'provider' => env('FESTIVOS_PROVIDER', 'festivos_com_co'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Microsoft Graph API — Permisos de Aplicación (Client Credentials)
+    |--------------------------------------------------------------------------
+    |
+    | Usado para acceder a OneDrive/SharePoint sin delegación de usuario.
+    | Requiere App Registration en Azure con:
+    |   - API Permissions: Sites.ReadWrite.All (Application) + Admin Consent
+    |   - O alternativamente: Files.ReadWrite.All (Application) + Admin Consent
+    |
+    | drive_id: ID del drive de SharePoint o OneDrive donde guardar archivos.
+    |   Para obtenerlo: GET /sites/{siteId}/drive → response.id
+    |
+    | site_id: ID del SharePoint site (alternativa a drive_id).
+    |   Para obtenerlo: GET /sites/{hostname}:/{path} → response.id
+    |
+    */
+    'microsoft_graph' => [
+        'tenant_id' => env('GRAPH_TENANT_ID', env('MICROSOFT_MEDILASER_TENANT_ID')),
+        'client_id' => env('GRAPH_CLIENT_ID', env('MICROSOFT_CLIENT_ID')),
+        'client_secret' => env('GRAPH_CLIENT_SECRET', env('MICROSOFT_CLIENT_SECRET')),
+        'drive_id' => env('GRAPH_DRIVE_ID', ''),
+        'site_id' => env('GRAPH_SITE_ID', ''),
+        'base_path' => env('GRAPH_BASE_PATH', 'Anticipos'),
+    ],
+
 ];

@@ -3,6 +3,7 @@
 namespace App\Models\Workflow;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 /**
  * Reglas de asignación de flujo.
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
  */
 class WfRegla extends Model
 {
+    use HasFactory;
     protected $table = 'wf_reglas';
 
     protected $fillable = [

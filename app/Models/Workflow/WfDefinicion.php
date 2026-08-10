@@ -4,6 +4,7 @@ namespace App\Models\Workflow;
 
 use App\Models\Empresa;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
@@ -12,6 +13,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
  */
 class WfDefinicion extends Model
 {
+    use HasFactory;
     protected $table = 'wf_definiciones';
 
     protected $fillable = [

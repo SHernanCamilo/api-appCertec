@@ -3,6 +3,7 @@
 namespace App\Models\Workflow;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 /**
  * Módulos del sistema que usan flujos de aprobación.
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
  */
 class WfModulo extends Model
 {
+    use HasFactory;
     protected $table = 'wf_modulos';
 
     protected $fillable = [

@@ -4,13 +4,14 @@ namespace App\Models\Finance;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use App\Models\Empleado;
 use App\Models\User;
 use App\Models\Sede;
 
 class AntiSolicitud extends Model
 {
-    use SoftDeletes;
+    use SoftDeletes, HasFactory;
 
     protected $table = 'anti_solicitudes';
 

@@ -3,9 +3,11 @@
 namespace App\Models\Finance;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class AntiCiudad extends Model
 {
+    use HasFactory;
     protected $table = 'anti_ciudades';
 
     const TIPO_A = 'A'; // Bogotá, Medellín, Cali - capitales principales

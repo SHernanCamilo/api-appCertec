@@ -4,6 +4,7 @@ namespace App\Models\Workflow;
 
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 /**
  * Instancia de flujo (cada solicitud tiene una instancia).
@@ -11,6 +12,7 @@ use Illuminate\Database\Eloquent\Model;
  */
 class WfInstancia extends Model
 {
+    use HasFactory;
     protected $table = 'wf_instancias';
 
     protected $fillable = [

@@ -3,6 +3,7 @@
 namespace App\Models\Workflow;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 /**
  * Paso dentro de un flujo de aprobación.
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
  */
 class WfPaso extends Model
 {
+    use HasFactory;
     protected $table = 'wf_pasos';
 
     protected $fillable = [

@@ -102,20 +102,20 @@ return [
             ],
 
             // Workers DEDICADOS para exports Excel/CSV (aislados, no bloquean la API)
-            // ⚠️ Limitado a 1 proceso para prevenir OOM (cada export puede usar ~1.5GB real)
+            // ⚠️ MAX 1 proceso para no saturar a Python ni agotar RAM.
+            // Con los fixes de Python (streaming a disco) el pico es ~100 MB por export.
             'export-workers' => [
                 'connection' => 'redis',
                 'queue' => ['exports'],
-                'balance' => 'auto',
-                'autoScalingStrategy' => 'size',
+                'balance' => 'simple',
                 'minProcesses' => 1,
-                'maxProcesses' => 2,  // 2 exports simultáneos (tenemos RAM de sobra)
+                'maxProcesses' => 1,  // 1 export a la vez — evita represamiento
                 'maxTime' => 3600,
-                'maxJobs' => 30,  // Reciclar después de 30 exports (liberar memoria)
-                'memory' => 1024,  // 1GB límite (subido de 768: vistas pesadas lo necesitan)
-                'tries' => 1,
-                'timeout' => 2500, // 40+ min max por export (coherente con el job)
-                'nice' => 10,     // Prioridad baja (no afectar API)
+                'maxJobs' => 30,
+                'memory' => 768,
+                'tries' => 1,         // No reintentar automáticamente (el job tiene su propio retry)
+                'timeout' => 600,     // 10 min max — coherente con job timeout de 300s + margen
+                'nice' => 10,         // Prioridad baja (no afectar API)
             ],
 
             // Workers para refrescar snapshots de OData en background.
@@ -171,15 +171,14 @@ return [
             'export-workers' => [
                 'connection' => 'redis',
                 'queue' => ['exports'],
-                'balance' => 'auto',
-                'autoScalingStrategy' => 'size',
+                'balance' => 'simple',
                 'minProcesses' => 1,
                 'maxProcesses' => 1,
                 'maxTime' => 3600,
                 'maxJobs' => 30,
                 'memory' => 768,
                 'tries' => 1,
-                'timeout' => 900,
+                'timeout' => 600,
                 'nice' => 10,
             ],
 

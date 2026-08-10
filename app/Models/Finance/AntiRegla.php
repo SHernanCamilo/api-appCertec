@@ -3,9 +3,11 @@
 namespace App\Models\Finance;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class AntiRegla extends Model
 {
+    use HasFactory;
     protected $table = 'anti_reglas';
 
     /** nivel_jerarquico = 0 → aplica a todos los niveles */

@@ -208,18 +208,146 @@ class AnticipoController extends Controller
     public function historial(int $id): JsonResponse
     {
         try {
-            // Asumiendo que id_solicitud = id_instancia (ajustar según diseño final)
-            $historial = app(\App\Services\Workflow\WorkflowExecutor::class)
-                ->obtenerHistorial($id);
+            // Buscar instancia de workflow por el record_id de la solicitud
+            $instancia = \App\Models\Workflow\WfInstancia::where('modulo_record_id', $id)
+                ->with(['aprobaciones.user', 'aprobaciones.paso', 'definicion', 'pasoActual', 'solicitante'])
+                ->latest()
+                ->first();
+
+            if (!$instancia) {
+                return response()->json([
+                    'success' => true,
+                    'data' => ['instancia' => null, 'aprobaciones' => []],
+                    'message' => 'Sin flujo de aprobación asignado',
+                ]);
+            }
 
             return response()->json([
                 'success' => true,
-                'data' => $historial,
+                'data' => [
+                    'instancia' => $instancia,
+                    'aprobaciones' => $instancia->aprobaciones,
+                ],
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener historial: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    // ========================================================================
+    // DOCUMENTOS / SOPORTES
+    // ========================================================================
+
+    /**
+     * Subir documento soporte a una solicitud.
+     *
+     * POST /api/anticipos/solicitudes/{id}/documentos
+     */
+    public function subirDocumento(Request $request, int $id): JsonResponse
+    {
+        $request->validate([
+            'archivo' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240', // max 10MB
+            'tipo_documento' => 'required|in:soporte_viaje,factura,recibo,comprobante_devolucion,otro',
+        ]);
+
+        try {
+            $documento = $this->anticipoService->subirDocumento(
+                $id,
+                $request->file('archivo'),
+                $request->tipo_documento,
+                auth()->id()
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Documento subido exitosamente',
+                'data' => $documento,
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al subir documento: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Listar documentos de una solicitud.
+     *
+     * GET /api/anticipos/solicitudes/{id}/documentos
+     */
+    public function listarDocumentos(int $id): JsonResponse
+    {
+        try {
+            $documentos = $this->anticipoService->listarDocumentos($id);
+
+            return response()->json([
+                'success' => true,
+                'data' => $documentos,
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al listar documentos: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Descargar/obtener URL de un documento.
+     *
+     * GET /api/anticipos/documentos/{idDocumento}/descargar
+     */
+    public function descargarDocumento(int $idDocumento): JsonResponse|\Symfony\Component\HttpFoundation\BinaryFileResponse
+    {
+        try {
+            $resultado = $this->anticipoService->descargarDocumento($idDocumento);
+
+            if ($resultado['tipo'] === 'url') {
+                return response()->json([
+                    'success' => true,
+                    'data' => [
+                        'url' => $resultado['url'],
+                        'nombre' => $resultado['nombre'],
+                    ],
+                ]);
+            }
+
+            // Stream directo para disco local
+            return response()->download(
+                $resultado['path'],
+                $resultado['nombre'],
+                ['Content-Type' => $resultado['mime']]
+            );
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al descargar documento: ' . $e->getMessage(),
+            ], 404);
+        }
+    }
+
+    /**
+     * Eliminar un documento.
+     *
+     * DELETE /api/anticipos/documentos/{idDocumento}
+     */
+    public function eliminarDocumento(int $idDocumento): JsonResponse
+    {
+        try {
+            $this->anticipoService->eliminarDocumento($idDocumento, auth()->id());
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Documento eliminado',
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al eliminar documento: ' . $e->getMessage(),
             ], 500);
         }
     }

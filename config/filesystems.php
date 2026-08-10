@@ -68,7 +68,36 @@ return [
             'throw' => false,
         ],
 
+        /*
+        |----------------------------------------------------------------------
+        | OneDrive – almacenamiento de soportes de anticipos (y otros módulos)
+        |----------------------------------------------------------------------
+        |
+        | Usa Microsoft Graph API como driver de Flysystem.
+        | Requiere: composer require hevelop/flysystem-onedrive
+        | O alternativamente almacena en una carpeta local mapeada con la app
+        | de escritorio de OneDrive.
+        |
+        | Estrategia actual: carpeta local sincronizada por OneDrive Desktop.
+        | Si se desea usar Graph API nativo, configurar ONEDRIVE_ACCESS_TOKEN.
+        |
+        */
+        'onedrive' => [
+            'driver' => 'local',
+            'root' => env('ONEDRIVE_ROOT', storage_path('app/onedrive')),
+            'url' => env('ONEDRIVE_URL'),
+            'visibility' => 'private',
+            'throw' => false,
+        ],
+
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Disco por defecto para módulo de anticipos
+    |--------------------------------------------------------------------------
+    */
+    'anticipos_disk' => env('ANTICIPOS_DISK', 'onedrive'),
 
     /*
     |--------------------------------------------------------------------------

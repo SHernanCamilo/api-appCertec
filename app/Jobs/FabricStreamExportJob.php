@@ -35,26 +35,16 @@ final class FabricStreamExportJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
-     * Reintentos: hasta 2 veces si R2/Fabric responde 503 (slots ocupados).
-     * El backoff exponencial evita martillar los slots.
+     * Sin reintentos automáticos. Si falla, falla limpiamente con mensaje al usuario.
+     * Los reintentos agresivos causaron acumulación de 27 jobs que saturaron Python.
      */
-    public int $tries   = 2;
+    public int $tries   = 1;
 
     /**
-     * 5 min max por intento. Si se pasa, Horizon mata el job limpiamente.
-     * Con la estrategia CSV directo, el peor caso real es ~30s (CarteraXEdades).
+     * 5 min max. Con Python streaming (100 MB RAM) el peor caso real es ~40s.
+     * Si se pasa de 5 min, algo salió muy mal y Horizon lo mata.
      */
     public int $timeout = 300;
-
-    /**
-     * Backoff exponencial entre reintentos (segundos).
-     *
-     * @return list<int>
-     */
-    public function backoff(): array
-    {
-        return [30, 60];
-    }
 
     private const STATUS_PENDING    = 'pending';
     private const STATUS_PROCESSING = 'processing';
@@ -158,10 +148,6 @@ final class FabricStreamExportJob implements ShouldQueue
                 ]);
 
             if ($response->status() !== 200) {
-                if ($response->status() === 503 && $this->attempts() < $this->tries) {
-                    $this->release(30);
-                    return true;
-                }
                 Log::info('FabricStreamExportJob: R2 no disponible', [
                     'job_id' => $this->jobId, 'status' => $response->status(),
                 ]);
