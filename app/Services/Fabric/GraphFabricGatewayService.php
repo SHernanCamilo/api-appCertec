@@ -39,12 +39,10 @@ class GraphFabricGatewayService
 
     public function __construct()
     {
-        $this->baseUrl            = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-        $this->tokenAdmin         = env('TOKEN_ADMIN', '');
-        $this->timeout            = (int) env('GRAPHQL_TIMEOUT', 500);
-        // El catálogo debe responder rápido (es metadata, no data).
-        // Si no responde en 30s, Python está saturado — no bloquear al worker 3 min.
-        $this->catalogTimeout     = (int) env('GRAPHQL_CATALOG_TIMEOUT', 30);
+        $this->baseUrl            = rtrim(config('fabric.url', 'http://127.0.0.1:8001'), '/');
+        $this->tokenAdmin         = config('fabric.token_admin', '');
+        $this->timeout            = (int) config('fabric.timeout', 185);
+        $this->catalogTimeout     = (int) config('fabric.catalog_timeout', 30);
         $this->circuitBreaker     = new FabricCircuitBreaker();
         $this->vistasSyncService  = new BiVistasSyncService();
     }
@@ -1656,7 +1654,7 @@ class GraphFabricGatewayService
 
         // Cache de queries: misma consulta exacta → respuesta cacheada 30s
         $cacheKey = 'fabric_qry:' . md5(json_encode($payload));
-        $cacheTtl = (int) env('FABRIC_QUERY_CACHE_TTL', 30);
+        $cacheTtl = (int) config('fabric.query_cache_ttl', 30);
 
         $cached = Cache::get($cacheKey);
         if ($cached !== null) {
@@ -1763,7 +1761,7 @@ class GraphFabricGatewayService
         try {
             $exportTimeout = max($this->timeout, 300);
             $this->ensurePhpTimeLimit($exportTimeout);
-            $apiKey = env('GRAPHQL_API_KEY', '');
+            $apiKey = config('fabric.api_key', '');
             $req    = Http::timeout($exportTimeout)
                          ->connectTimeout(10)
                          ->acceptJson();
@@ -1848,7 +1846,7 @@ class GraphFabricGatewayService
             'token'       => $this->tokenAdmin,
             'groups'      => ['GG-BD-' . strtoupper($schema), 'GG-BD-ADMIN'],
             'department'  => 'NAL-TIC NAL',  // NAL = Nacional, sin filtro de sede
-            'user_email'  => env('NOTIF_ADMIN_EMAIL', 'sistema@medilaser.com.co'),
+            'user_email'  => config('fabric.admin_email', 'sistema@medilaser.com.co'),
             'user_name'   => 'Sistema Notificaciones',
             'schema_name' => $schema,
             'view'        => $view,
@@ -2170,7 +2168,7 @@ class GraphFabricGatewayService
         }
 
         try {
-            $apiKey = env('GRAPHQL_API_KEY', '');
+            $apiKey = config('fabric.api_key', '');
             $req    = Http::timeout($timeout)
                          ->connectTimeout(10)  // Fabric puede tardar en responder
                          ->acceptJson();

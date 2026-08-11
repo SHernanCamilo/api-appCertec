@@ -148,8 +148,8 @@ final class FabricStreamExportJob implements ShouldQueue
      */
     private function tryExportFromR2(User $user): bool
     {
-        $url     = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-        $token   = env('TOKEN_ADMIN', '');
+        $url     = rtrim(config('fabric.url', 'http://127.0.0.1:8001'), '/');
+        $token   = config('fabric.token_admin', '');
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
         $filters = $this->options['filters'] ?? [];
@@ -170,7 +170,7 @@ final class FabricStreamExportJob implements ShouldQueue
 
             $response = Http::timeout(300)
                 ->connectTimeout(10)
-                ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
+                ->withHeaders(['X-API-Key' => config('fabric.api_key', '')])
                 ->post($url . '/api/data/export/r2', [
                     'token'        => $token,
                     'user_email'   => $user->email,
@@ -262,17 +262,17 @@ final class FabricStreamExportJob implements ShouldQueue
      */
     private function exportFromFabricDirect(User $user): void
     {
-        $url     = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-        $token   = env('TOKEN_ADMIN', '');
+        $url     = rtrim(config('fabric.url', 'http://127.0.0.1:8001'), '/');
+        $token   = config('fabric.token_admin', '');
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
         $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
-        $limit   = (int) env('FABRIC_EXPORT_CHUNK', 50000); // filas por request a Python (50K reduce de 45 a 9 requests)
+        $limit   = (int) config('fabric.export_chunk', 50000); // filas por request a Python (50K reduce de 45 a 9 requests)
         $offset  = 0;
 
         // Pausa entre chunks (ms) â€” libera el worker de Python para atender usuarios
         // interactivos entre lote y lote. Evita que un export monopolice un worker.
-        $chunkPauseMs = (int) env('FABRIC_EXPORT_CHUNK_PAUSE_MS', 100);
+        $chunkPauseMs = (int) config('fabric.export_chunk_pause_ms', 100);
         $totalRows = 0;
         $chunkNum  = 0;
 
