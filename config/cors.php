@@ -22,7 +22,8 @@ return [
        'http://localhost:4200', 
        'http://127.0.0.1:4200', 
        'http://192.168.1.9:8000',
-       'https://jade.medilaser.com.co'
+       'https://jade.medilaser.com.co',
+       'https://review-dose-reasonable-pointed.trycloudflare.com',
    ],
    'allowed_headers' => ['*'],
    'exposed_headers' => [],
