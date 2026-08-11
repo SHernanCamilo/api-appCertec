@@ -33,6 +33,7 @@ class GraphFabricGatewayService
     private string $baseUrl;
     private string $tokenAdmin;
     private int    $timeout;
+    private int    $catalogTimeout;
     private FabricCircuitBreaker $circuitBreaker;
     private BiVistasSyncService  $vistasSyncService;
 
@@ -41,6 +42,9 @@ class GraphFabricGatewayService
         $this->baseUrl            = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $this->tokenAdmin         = env('TOKEN_ADMIN', '');
         $this->timeout            = (int) env('GRAPHQL_TIMEOUT', 500);
+        // El catálogo debe responder rápido (es metadata, no data).
+        // Si no responde en 30s, Python está saturado — no bloquear al worker 3 min.
+        $this->catalogTimeout     = (int) env('GRAPHQL_CATALOG_TIMEOUT', 30);
         $this->circuitBreaker     = new FabricCircuitBreaker();
         $this->vistasSyncService  = new BiVistasSyncService();
     }
@@ -1405,7 +1409,7 @@ class GraphFabricGatewayService
                 $payload['schema_name'] = strtolower($schema);
             }
 
-            $response = $this->post('/api/catalog/views', $payload);
+            $response = $this->post('/api/catalog/views', $payload, $this->catalogTimeout);
 
             if ($response !== null) {
                 Cache::put($cacheKey, $response, 300);
@@ -1492,7 +1496,7 @@ class GraphFabricGatewayService
                     'token'       => $this->tokenAdmin,
                     'schema_name' => $schema,
                 ]
-            ));
+            ), $this->catalogTimeout);
 
             if ($response !== null) {
                 Cache::put($cacheKey, $response, 300);
@@ -2154,9 +2158,10 @@ class GraphFabricGatewayService
         return $value;
     }
 
-    private function post(string $path, array $body): ?array
+    private function post(string $path, array $body, ?int $timeoutOverride = null): ?array
     {
-        $this->ensurePhpTimeLimit($this->timeout);
+        $timeout = $timeoutOverride ?? $this->timeout;
+        $this->ensurePhpTimeLimit($timeout);
 
         // Circuit breaker: verificar antes de intentar
         if (!$this->circuitBreaker->isAvailable()) {
@@ -2166,7 +2171,7 @@ class GraphFabricGatewayService
 
         try {
             $apiKey = env('GRAPHQL_API_KEY', '');
-            $req    = Http::timeout($this->timeout)
+            $req    = Http::timeout($timeout)
                          ->connectTimeout(10)  // Fabric puede tardar en responder
                          ->acceptJson();
 
@@ -2278,7 +2283,7 @@ class GraphFabricGatewayService
                         detail: $e->getMessage(),
                         userEmail: $body['user_email'] ?? null,
                         department: $body['department'] ?? null,
-                        elapsedMs: $this->timeout * 1000,
+                        elapsedMs: $timeout * 1000,
                         category: 'TIMEOUT',
                     );
                 } catch (\Throwable $logErr) {

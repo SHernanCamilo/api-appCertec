@@ -61,12 +61,16 @@ return [
     */
 
     'defaults' => [
+        // NOTA: Este bloque se usa como "template" para environments que no
+        // definen supervisors explícitos. En producción usamos los del bloque
+        // 'environments.production', así que este default es solo para entornos
+        // que no configuren sus propios workers.
         'supervisor-1' => [
             'connection' => 'redis',
-            'queue' => ['default', 'notifications'],
+            'queue' => ['default'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
-            'maxProcesses' => 3,
+            'maxProcesses' => 1,
             'minProcesses' => 1,
             'maxTime' => 3600,
             'maxJobs' => 500,
@@ -92,7 +96,7 @@ return [
                 'balance' => 'auto',
                 'autoScalingStrategy' => 'time',
                 'minProcesses' => 1,
-                'maxProcesses' => 3,
+                'maxProcesses' => 2,   // Reducido de 3 a 2 — VPS tiene RAM limitada
                 'maxTime' => 3600,
                 'maxJobs' => 1000,
                 'memory' => 256,
@@ -113,36 +117,18 @@ return [
                 'maxTime' => 3600,
                 'maxJobs' => 30,
                 'memory' => 768,
-                'tries' => 1,         // No reintentar automáticamente (el job tiene su propio retry)
-                'timeout' => 600,     // 10 min max — coherente con job timeout de 300s + margen
+                'tries' => 1,         // No reintentar automáticamente
+                'timeout' => 600,     // 10 min max
                 'nice' => 10,         // Prioridad baja (no afectar API)
             ],
 
-            // Workers para refrescar snapshots de OData en background.
-            // Patrón stale-while-revalidate: Excel recibe el snapshot actual al
-            // instante y este worker regenera el archivo sin que nadie espere.
-            'snapshot-workers' => [
-                'connection' => 'redis',
-                'queue' => ['snapshots'],
-                'balance' => 'auto',
-                'autoScalingStrategy' => 'size',
-                'minProcesses' => 1,
-                'maxProcesses' => 2,
-                'maxTime' => 3600,
-                'maxJobs' => 50,
-                'memory' => 512,
-                'tries' => 1,
-                'timeout' => 700, // > timeout del job (600s)
-                'nice' => 12,     // Prioridad baja: nunca por encima de la API
-            ],
-
-            // Workers para sincronización (Indigo, GLPI, etc.)
+            // Workers para sincronización (Indigo, GLPI, snapshots, etc.)
             'sync-workers' => [
                 'connection' => 'redis',
-                'queue' => ['sync'],
+                'queue' => ['sync', 'snapshots'],
                 'balance' => 'simple',
                 'minProcesses' => 1,
-                'maxProcesses' => 2,
+                'maxProcesses' => 1,  // Reducido de 2+2 a 1 — liberar RAM
                 'maxTime' => 3600,
                 'maxJobs' => 100,
                 'memory' => 512,
@@ -155,10 +141,10 @@ return [
         'local' => [
             'default-workers' => [
                 'connection' => 'redis',
-                'queue' => ['default', 'sync', 'notifications'],
+                'queue' => ['default', 'sync', 'notifications', 'snapshots'],
                 'balance' => 'auto',
                 'minProcesses' => 1,
-                'maxProcesses' => 3,
+                'maxProcesses' => 2,
                 'maxTime' => 3600,
                 'maxJobs' => 500,
                 'memory' => 512,
@@ -167,7 +153,6 @@ return [
                 'nice' => 0,
             ],
 
-            // Workers DEDICADOS para exports (mismo límite que production)
             'export-workers' => [
                 'connection' => 'redis',
                 'queue' => ['exports'],
@@ -181,22 +166,6 @@ return [
                 'timeout' => 600,
                 'nice' => 10,
             ],
-
-            // Workers para refrescar snapshots de OData en background
-            'snapshot-workers' => [
-                'connection' => 'redis',
-                'queue' => ['snapshots'],
-                'balance' => 'auto',
-                'autoScalingStrategy' => 'size',
-                'minProcesses' => 1,
-                'maxProcesses' => 1,
-                'maxTime' => 3600,
-                'maxJobs' => 50,
-                'memory' => 512,
-                'tries' => 1,
-                'timeout' => 700,
-                'nice' => 12,
-            ],
         ],
     ],
 
@@ -207,12 +176,12 @@ return [
     */
 
     'trim' => [
-        'recent' => 60,       // Mantener jobs recientes 60 min
-        'pending' => 60,
-        'completed' => 60,
-        'recent_failed' => 10080, // Jobs fallidos 7 días
-        'failed' => 10080,
-        'monitored' => 10080,
+        'recent' => 30,           // 30 min (era 60 — reduce memoria Redis)
+        'pending' => 30,
+        'completed' => 30,
+        'recent_failed' => 4320,  // Jobs fallidos 3 días (era 7)
+        'failed' => 4320,
+        'monitored' => 4320,
     ],
 
     /*

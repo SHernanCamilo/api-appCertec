@@ -76,6 +76,29 @@ class UserGrupSyncService
     {
         $stats = ['inserted' => 0, 'deleted' => 0, 'updated' => 0, 'unchanged' => 0];
 
+        // PROTECCIÓN: solo aceptar grupos con prefijo GG-BD- (evita corrupción
+        // como la que afectó a 354 usuarios con "FLA-SERVICIO MEDICO" en vista_bd)
+        $gruposDesdeAzure = array_filter(
+            $gruposDesdeAzure,
+            fn ($g) => str_starts_with(strtoupper(trim($g)), 'GG-BD-')
+        );
+
+        // Limpiar registros corruptos previos (sin prefijo GG-BD-) que pudieron
+        // insertarse antes del fix de validación. Esto garantiza una base limpia.
+        $corruptos = UserGrup::where('id_user', $user->id)
+            ->where('origen', UserGrup::ORIGEN_AZURE)
+            ->where('tipo', UserGrup::TIPO_VISTA_BD)
+            ->where('permiso', 'NOT LIKE', 'GG-BD-%')
+            ->delete();
+
+        if ($corruptos > 0) {
+            Log::warning('UserGrupSyncService: eliminados registros corruptos vista_bd', [
+                'user_id'  => $user->id,
+                'cantidad' => $corruptos,
+            ]);
+            $stats['deleted'] += $corruptos;
+        }
+
         $existentes = UserGrup::where('id_user', $user->id)
             ->where('origen', UserGrup::ORIGEN_AZURE)
             ->where('tipo', UserGrup::TIPO_VISTA_BD)

@@ -69,6 +69,16 @@ final class FabricStreamExportJob implements ShouldQueue
         ini_set('memory_limit', '512M');
         set_time_limit(0);
 
+        // Circuit breaker: si Python/Fabric está caído, no intentar
+        // (evita acumular jobs que saturan la cola cuando el servicio se recupere)
+        if (\Illuminate\Support\Facades\Cache::get('fabric_export_circuit_open')) {
+            $this->updateStatus(self::STATUS_FAILED, 'Servicio de datos temporalmente no disponible. Intente en unos minutos.');
+            Log::warning('FabricStreamExportJob: circuit breaker abierto, job rechazado', [
+                'job_id' => $this->jobId,
+            ]);
+            return;
+        }
+
         $this->updateStatus(self::STATUS_PROCESSING, null, ['progress' => 0, 'rows' => 0]);
 
         try {
@@ -82,7 +92,36 @@ final class FabricStreamExportJob implements ShouldQueue
                 'view'   => $this->view,
                 'error'  => $e->getMessage(),
             ]);
+
+            // Si Python no respondió (timeout/connection refused), incrementar contador
+            if ($this->isPythonConnectionError($e)) {
+                $failures = (int) \Illuminate\Support\Facades\Cache::get('fabric_export_failures', 0);
+                \Illuminate\Support\Facades\Cache::put('fabric_export_failures', $failures + 1, 300);
+
+                // 3 fallos consecutivos → abrir circuit breaker por 2 minutos
+                if ($failures + 1 >= 3) {
+                    \Illuminate\Support\Facades\Cache::put('fabric_export_circuit_open', true, 120);
+                    \Illuminate\Support\Facades\Cache::forget('fabric_export_failures');
+                    Log::critical('FabricStreamExportJob: CIRCUIT BREAKER ABIERTO — Python no responde', [
+                        'failures' => $failures + 1,
+                        'cooldown' => '2 min',
+                    ]);
+                }
+            }
         }
+    }
+
+    /**
+     * Detecta si el error es por falta de conexión con Python (timeout, refused, etc.)
+     */
+    private function isPythonConnectionError(\Throwable $e): bool
+    {
+        $msg = strtolower($e->getMessage());
+        return str_contains($msg, 'timeout')
+            || str_contains($msg, 'connection refused')
+            || str_contains($msg, 'connection reset')
+            || str_contains($msg, 'could not resolve')
+            || str_contains($msg, 'curl error');
     }
 
     /**
@@ -356,6 +395,10 @@ final class FabricStreamExportJob implements ShouldQueue
      */
     private function publishResult(ExportResult $result, string $source): void
     {
+        // Reset circuit breaker: si llegamos aquí, Python respondió correctamente
+        \Illuminate\Support\Facades\Cache::forget('fabric_export_failures');
+        \Illuminate\Support\Facades\Cache::forget('fabric_export_circuit_open');
+
         $this->updateStatus(self::STATUS_COMPLETED, null, [
             'progress'        => 100,
             'rows'            => $result->rows,

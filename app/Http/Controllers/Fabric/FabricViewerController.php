@@ -502,103 +502,39 @@ class FabricViewerController extends Controller
     }
 
     // =========================================================================
-    // EXPORT SSE — Server-Sent Events (reemplaza polling)
+    // EXPORT SSE — DESACTIVADO (saturaba PHP-FPM workers)
     // =========================================================================
 
     /**
-     * Stream SSE del progreso de un export.
-     * No requiere JWT — el jobId actúa como token implícito.
+     * SSE desactivado — cada conexión SSE bloqueaba un worker PHP-FPM hasta 10 min.
+     * Con 10 usuarios exportando = 10 workers muertos = VPS sin capacidad.
+     *
+     * El frontend ahora usa polling con GET /export/status/{jobId} (instantáneo, ~5ms).
+     * Este endpoint se mantiene para compatibilidad pero responde inmediato con el status actual.
      *
      * GET /api/fabric/viewer/export/stream/{jobId}
-     *
-     * Envía eventos:
-     *   data: {"progress":45,"rows":12000,"status":"processing","message":"..."}\n\n
-     *
-     * Cierra cuando status === 'completed' o 'failed', o tras 10 min de timeout.
      */
-    public function exportStream(string $jobId): \Symfony\Component\HttpFoundation\StreamedResponse
+    public function exportStream(string $jobId): JsonResponse
     {
-        // Validar formato de jobId (UUID o similar)
         if (!preg_match('/^[a-zA-Z0-9\-_]{10,80}$/', $jobId)) {
             abort(400, 'jobId inválido.');
         }
 
-        return response()->stream(function () use ($jobId) {
-            // Desactivar buffers de salida (Apache/nginx pueden bufferear SSE)
-            if (ob_get_level()) {
-                ob_end_clean();
-            }
+        $status = \Illuminate\Support\Facades\Cache::get("fabric_export:{$jobId}");
 
-            $cacheKey   = "fabric_export:{$jobId}";
-            $maxSeconds = 600; // 10 min timeout
-            $startTime  = time();
-            $interval   = 1_500_000; // 1.5 segundos en microsegundos
+        if ($status === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Export no encontrado. Usar GET /export/status/{jobId} en su lugar.',
+                'use_polling' => true,
+            ], 404);
+        }
 
-            // Enviar comentario SSE inicial para abrir conexión
-            echo ": stream opened\n\n";
-            if (ob_get_level()) ob_flush();
-            flush();
-
-            while ((time() - $startTime) < $maxSeconds) {
-                // Si el cliente cerró la conexión, salir
-                if (connection_aborted()) {
-                    break;
-                }
-
-                $status = \Illuminate\Support\Facades\Cache::get($cacheKey);
-
-                if ($status === null) {
-                    // Job no encontrado — puede que aún no se haya encolado
-                    $elapsed = time() - $startTime;
-                    if ($elapsed > 30) {
-                        // Después de 30s sin data, asumir expirado
-                        echo "data: " . json_encode([
-                            'status'   => 'failed',
-                            'progress' => 0,
-                            'rows'     => 0,
-                            'message'  => 'Export no encontrado o expirado.',
-                        ]) . "\n\n";
-                        flush();
-                        break;
-                    }
-                    // Enviar heartbeat mientras espera
-                    echo ": waiting\n\n";
-                    flush();
-                    usleep($interval);
-                    continue;
-                }
-
-                // Construir payload SSE
-                $payload = [
-                    'status'   => $status['status'] ?? 'pending',
-                    'progress' => (int) ($status['progress'] ?? 0),
-                    'rows'     => (int) ($status['rows'] ?? 0),
-                    'message'  => $status['message'] ?? '',
-                ];
-
-                // Agregar campos extra cuando completado
-                if (($status['status'] ?? '') === 'completed') {
-                    $payload['filename']        = $status['filename'] ?? null;
-                    $payload['file_size_human']  = $status['file_size_human'] ?? null;
-                }
-
-                echo "data: " . json_encode($payload) . "\n\n";
-                if (ob_get_level()) ob_flush();
-                flush();
-
-                // Si terminó (completado o fallido), cerrar stream
-                if (in_array($status['status'] ?? '', ['completed', 'failed'], true)) {
-                    break;
-                }
-
-                usleep($interval);
-            }
-        }, 200, [
-            'Content-Type'                => 'text/event-stream',
-            'Cache-Control'               => 'no-cache, no-store, must-revalidate',
-            'Connection'                  => 'keep-alive',
-            'X-Accel-Buffering'           => 'no', // Nginx: desactivar proxy_buffering
-            'Access-Control-Allow-Origin' => '*',
+        // Responder una sola vez con el estado actual (no mantener conexión abierta)
+        return response()->json([
+            'success' => true,
+            'data'    => $status,
+            'notice'  => 'SSE desactivado. Usar GET /export/status/{jobId} para polling.',
         ]);
     }
 
