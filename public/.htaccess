@@ -5,12 +5,31 @@
 
     RewriteEngine On
 
+    # CORS Preflight: dejar que Laravel maneje OPTIONS
+    # pero asegurar que el request llegue a index.php
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteRule ^ index.php [L]
+
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteRule ^ index.php [L]
+</IfModule>
+
+# CORS: asegurar que los headers se envíen en TODAS las respuestas
+# (no solo en OPTIONS preflight). Necesario cuando Apache genera
+# respuestas intermedias (redirects, errores) antes de llegar a Laravel.
+<IfModule mod_headers.c>
+    SetEnvIf Origin "https://review-dose-reasonable-pointed\.trycloudflare\.com$" CORS_ORIGIN=$0
+    SetEnvIf Origin "https://jade\.medilaser\.com\.co$" CORS_ORIGIN=$0
+    SetEnvIf Origin "http://localhost:4200$" CORS_ORIGIN=$0
+    SetEnvIf Origin "http://127\.0\.0\.1:4200$" CORS_ORIGIN=$0
+    Header always set Access-Control-Allow-Origin "%{CORS_ORIGIN}e" env=CORS_ORIGIN
+    Header always set Access-Control-Allow-Credentials "true" env=CORS_ORIGIN
+    Header always set Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" env=CORS_ORIGIN
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Accept, Origin" env=CORS_ORIGIN
 </IfModule>
 
 # Compresión gzip — Power Query y Excel soportan Accept-Encoding: gzip
