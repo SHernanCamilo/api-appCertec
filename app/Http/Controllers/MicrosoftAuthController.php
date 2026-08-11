@@ -144,11 +144,26 @@ class MicrosoftAuthController extends Controller
     /**
      * Redirigir a Microsoft para autenticación
      */
-    public function redirectToMicrosoft(): JsonResponse
+    public function redirectToMicrosoft(Request $request): JsonResponse
     {
         try {
+            // Determinar el redirect_uri según el origin del frontend que está pidiendo auth.
+            // Esto permite que el mismo backend sirva a múltiples frontends
+            // (producción jade.medilaser.com.co y tunnel de Cloudflare).
+            $origin = $request->header('Origin') ?? $request->header('Referer') ?? '';
+            $redirectUri = config('services.microsoft.redirect'); // Default: producción
+
+            // Si el request viene del tunnel de Cloudflare, usar su callback
+            if (str_contains($origin, 'trycloudflare.com')) {
+                $tunnelHost = parse_url($origin, PHP_URL_HOST);
+                $redirectUri = "https://{$tunnelHost}/auth/microsoft/callback";
+            } elseif (str_contains($origin, 'localhost:4200')) {
+                $redirectUri = 'http://localhost:4200/auth/microsoft/callback';
+            }
+
             $authUrl = Socialite::driver('microsoft')
                 ->stateless()
+                ->redirectUrl($redirectUri)
                 ->redirect()
                 ->getTargetUrl();
 
@@ -403,10 +418,19 @@ class MicrosoftAuthController extends Controller
         ]);
 
         try {
+            // Determinar redirect_uri según el origin del frontend
+            $origin = $request->header('Origin') ?? $request->header('Referer') ?? '';
+            $driver = Socialite::driver('microsoft')->stateless();
+
+            if (str_contains($origin, 'trycloudflare.com')) {
+                $tunnelHost = parse_url($origin, PHP_URL_HOST);
+                $driver = $driver->redirectUrl("https://{$tunnelHost}/auth/microsoft/callback");
+            } elseif (str_contains($origin, 'localhost:4200')) {
+                $driver = $driver->redirectUrl('http://localhost:4200/auth/microsoft/callback');
+            }
+
             // Obtener usuario usando el código
-            $microsoftUser = Socialite::driver('microsoft')
-                ->stateless()
-                ->user();
+            $microsoftUser = $driver->user();
 
             $email = $microsoftUser->getEmail();
             $domain = '@' . substr(strrchr($email, "@"), 1);
