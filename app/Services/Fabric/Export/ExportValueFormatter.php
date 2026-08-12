@@ -69,6 +69,55 @@ final class ExportValueFormatter
     }
 
     /**
+     * Dígitos que Excel representa sin pérdida de precisión.
+     *
+     * Excel guarda los números como double IEEE 754, con 15 dígitos
+     * significativos. Un valor más largo (llaves compuestas, IDs de 20+ dígitos)
+     * se redondea y se muestra en notación científica (6,00621E+36), o si excede
+     * el rango del double se convierte en INF. En ambos casos el dato se pierde.
+     */
+    private const MAX_EXCEL_DIGITS = 15;
+
+    /**
+     * ¿El valor se puede escribir como número en Excel sin perder información?
+     *
+     * Devuelve false para:
+     *   - Números con más de 15 dígitos (se redondearían: 6006205000000000001 → 6,00621E+18)
+     *   - Valores que desbordan el double (→ INF)
+     *   - Notación científica en el origen ("1E36")
+     *   - Ceros iniciales ("036004835"), que deben conservarse como texto
+     *
+     * Estos casos se escriben como string: es la única forma de que Excel
+     * muestre el valor exacto.
+     */
+    public static function isSafeExcelNumber(mixed $value): bool
+    {
+        if (is_int($value)) {
+            return abs($value) < 10 ** self::MAX_EXCEL_DIGITS;
+        }
+
+        if (is_float($value)) {
+            return is_finite($value) && abs($value) < 10 ** self::MAX_EXCEL_DIGITS;
+        }
+
+        if (!is_string($value)) {
+            return false;
+        }
+
+        $trimmed = trim($value);
+
+        // Solo enteros o decimales en notación normal. El patrón rechaza a
+        // propósito los ceros iniciales y la notación científica.
+        if (preg_match('/^-?(0|[1-9]\d*)(\.\d+)?$/', $trimmed) !== 1) {
+            return false;
+        }
+
+        $digits = strlen(str_replace(['-', '.'], '', $trimmed));
+
+        return $digits <= self::MAX_EXCEL_DIGITS;
+    }
+
+    /**
      * Formatea un valor para escribirlo en CSV.
      *
      * Las columnas de texto se envuelven en la fórmula ="valor", que es la
@@ -83,6 +132,12 @@ final class ExportValueFormatter
         }
 
         if (self::looksLikeLeadingZeroNumber($value)) {
+            return '="' . $value . '"';
+        }
+
+        // Número demasiado largo para el double de Excel: protegerlo como texto
+        // para que no se muestre como 6,00621E+36 al abrir el CSV.
+        if (is_string($value) && $value !== '' && is_numeric($value) && !self::isSafeExcelNumber($value)) {
             return '="' . $value . '"';
         }
 

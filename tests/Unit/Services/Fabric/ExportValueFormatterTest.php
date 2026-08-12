@@ -190,8 +190,52 @@ final class ExportValueFormatterTest extends TestCase
 
     public function test_reconoce_fecha_iso(): void
     {
-        $this->assertTrue(ExportValueFormatter::looksLikeIsoDate('2026-07-30'));
+        // looksLikeIsoDate exige hora; las fechas sin hora las cubre looksLikeDateOnly
         $this->assertTrue(ExportValueFormatter::looksLikeIsoDate('2026-07-30 14:05:00'));
+        $this->assertTrue(ExportValueFormatter::looksLikeIsoDate('2026-07-30T14:05:00'));
+        $this->assertTrue(ExportValueFormatter::looksLikeDateOnly('2026-07-30'));
+    }
+
+    // =========================================================================
+    // isSafeExcelNumber — evita notación científica e INF
+    // =========================================================================
+
+    public function test_acepta_numeros_dentro_de_la_precision_de_excel(): void
+    {
+        $this->assertTrue(ExportValueFormatter::isSafeExcelNumber('123'));
+        $this->assertTrue(ExportValueFormatter::isSafeExcelNumber('999999999999999')); // 15 dígitos
+        $this->assertTrue(ExportValueFormatter::isSafeExcelNumber('1500.50'));
+        $this->assertTrue(ExportValueFormatter::isSafeExcelNumber('-42'));
+        $this->assertTrue(ExportValueFormatter::isSafeExcelNumber(0));
+    }
+
+    public function test_rechaza_numeros_que_excel_redondearia(): void
+    {
+        // 16+ dígitos: Excel los mostraría como 1E+15 y perdería el detalle
+        $this->assertFalse(ExportValueFormatter::isSafeExcelNumber('1000000000000000'));
+        // Llave compuesta real que salía como 6,00621E+36
+        $this->assertFalse(
+            ExportValueFormatter::isSafeExcelNumber('6006205000000000000000000000000000000001')
+        );
+        // Desbordamiento del double: salía como INF
+        $this->assertFalse(ExportValueFormatter::isSafeExcelNumber(str_repeat('9', 320)));
+        // Cero inicial: debe conservarse como texto
+        $this->assertFalse(ExportValueFormatter::isSafeExcelNumber('036004835'));
+        // Notación científica en el origen
+        $this->assertFalse(ExportValueFormatter::isSafeExcelNumber('1E36'));
+        $this->assertFalse(ExportValueFormatter::isSafeExcelNumber('ABC'));
+        $this->assertFalse(ExportValueFormatter::isSafeExcelNumber(INF));
+    }
+
+    public function test_csv_protege_numeros_largos_como_texto(): void
+    {
+        $llave = '6006205000000000000000000000000000000001';
+
+        $this->assertSame(
+            '="' . $llave . '"',
+            ExportValueFormatter::forCsv($llave, false),
+            'Una llave larga debe ir como fórmula de texto para no salir en notación científica'
+        );
     }
 
     public function test_rechaza_lo_que_no_es_fecha_iso(): void
