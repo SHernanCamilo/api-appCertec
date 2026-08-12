@@ -36,6 +36,10 @@ return [
         'client_secret' => env('MICROSOFT_CLIENT_SECRET'),
         'redirect' => env('MICROSOFT_REDIRECT_URI'),
         'tenant' => env('MICROSOFT_TENANT_ID', 'common'), // 'common' para multi-tenant
+        'medilaser_tenant_id' => env('MICROSOFT_MEDILASER_TENANT_ID'),
+        'jersalud_client_id' => env('MICROSOFT_JERSALUD_CLIENT_ID'),
+        'jersalud_client_secret' => env('MICROSOFT_JERSALUD_CLIENT_SECRET'),
+        'jersalud_tenant_id' => env('MICROSOFT_JERSALUD_TENANT_ID'),
     ],
 
     'glpi' => [

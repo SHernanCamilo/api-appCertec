@@ -15,13 +15,13 @@ class MicrosoftGraphTenantService
      */
     public function resolveTenantConfig(User $user): ?array
     {
-        $jersaludTenantId = env('MICROSOFT_JERSALUD_TENANT_ID');
+        $jersaludTenantId = config('services.microsoft.jersalud_tenant_id');
 
         if ($user->tenant_id && $jersaludTenantId && $user->tenant_id === $jersaludTenantId) {
             return $this->jersaludConfig();
         }
 
-        if ($user->tenant_id && $user->tenant_id === env('MICROSOFT_MEDILASER_TENANT_ID')) {
+        if ($user->tenant_id && $user->tenant_id === config('services.microsoft.medilaser_tenant_id')) {
             return $this->medilaserConfig();
         }
 
@@ -89,7 +89,7 @@ class MicrosoftGraphTenantService
     {
         $clientId     = config('services.microsoft.client_id');
         $clientSecret = config('services.microsoft.client_secret');
-        $tenantId     = env('MICROSOFT_MEDILASER_TENANT_ID');
+        $tenantId     = config('services.microsoft.medilaser_tenant_id');
 
         if (!$clientId || !$clientSecret || !$tenantId) {
             return null;
@@ -105,9 +105,9 @@ class MicrosoftGraphTenantService
 
     private function jersaludConfig(): ?array
     {
-        $clientId     = env('MICROSOFT_JERSALUD_CLIENT_ID') ?: config('services.microsoft.client_id');
-        $clientSecret = env('MICROSOFT_JERSALUD_CLIENT_SECRET') ?: config('services.microsoft.client_secret');
-        $tenantId     = env('MICROSOFT_JERSALUD_TENANT_ID');
+        $clientId     = config('services.microsoft.jersalud_client_id') ?: config('services.microsoft.client_id');
+        $clientSecret = config('services.microsoft.jersalud_client_secret') ?: config('services.microsoft.client_secret');
+        $tenantId     = config('services.microsoft.jersalud_tenant_id');
 
         if (!$clientId || !$clientSecret || !$tenantId) {
             return null;
