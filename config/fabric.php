@@ -22,7 +22,7 @@ return [
     'timeout' => (int) env('GRAPHQL_TIMEOUT', 185),
 
     // Timeout para catálogo de vistas (debe ser rápido, es solo metadata)
-    'catalog_timeout' => (int) env('GRAPHQL_CATALOG_TIMEOUT', 30),
+    'catalog_timeout' => (int) env('GRAPHQL_CATALOG_TIMEOUT', 60),
 
     // Timeout para exports (más largo, datasets grandes)
     'export_timeout' => (int) env('GRAPHQL_EXPORT_TIMEOUT', 300),
