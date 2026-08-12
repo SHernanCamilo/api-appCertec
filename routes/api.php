@@ -32,12 +32,7 @@ Route::group([
     Route::get('/microsoft', [App\Http\Controllers\MicrosoftAuthController::class, 'redirectToMicrosoft']);
     Route::get('/microsoft/callback', [App\Http\Controllers\MicrosoftAuthController::class, 'handleMicrosoftCallback']);
     Route::post('/microsoft/token', [App\Http\Controllers\MicrosoftAuthController::class, 'loginWithCode']);
-    
-    // Rutas de validación (públicas)
-    Route::get('/microsoft/check-config', [App\Http\Controllers\MicrosoftAuthController::class, 'checkConfiguration']);
-    Route::post('/microsoft/check-email', [App\Http\Controllers\MicrosoftAuthController::class, 'checkEmail']);
-    Route::get('/microsoft/test-connection', [App\Http\Controllers\MicrosoftAuthController::class, 'testConnection']);
-    Route::get('/microsoft/admin-consent-url', [App\Http\Controllers\MicrosoftAuthController::class, 'getAdminConsentUrl']);
+
     
     // Rutas protegidas (requieren autenticación)
     Route::middleware(['auth:api', 'check.user.active'])->group(function () {
@@ -46,6 +41,12 @@ Route::group([
         Route::post('/me', [AuthController::class, 'me'])->name('me');
         Route::get('/sidebar-modules', [AuthController::class, 'sidebarModules'])->name('sidebar.modules');
         Route::get('/modulos', [App\Http\Controllers\ModuloController::class, 'getModulosUsuario'])->name('modulos.usuario');
+        
+        // Rutas de validación (requieren autenticación)
+        Route::get('/microsoft/check-config', [App\Http\Controllers\MicrosoftAuthController::class, 'checkConfiguration']);
+        Route::post('/microsoft/check-email', [App\Http\Controllers\MicrosoftAuthController::class, 'checkEmail']);
+        Route::get('/microsoft/test-connection', [App\Http\Controllers\MicrosoftAuthController::class, 'testConnection']);
+        Route::get('/microsoft/admin-consent-url', [App\Http\Controllers\MicrosoftAuthController::class, 'getAdminConsentUrl']);    
     });
 });
 

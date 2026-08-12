@@ -43,7 +43,14 @@ class MicrosoftGraphTenantService
     }
 
     /**
-     * @return array{success: bool, department: ?string, job_title: ?string, grupos_vista_bd: array<int, string>, error: ?string}
+     * @return array{
+     *   success: bool,
+     *   department: ?string,
+     *   job_title: ?string,
+     *   grupos_vista_bd: array<int, string>,
+     *   member_of_count: int,
+     *   error: ?string
+     * }
      */
     public function fetchUserTenantData(User $user): array
     {
@@ -65,13 +72,14 @@ class MicrosoftGraphTenantService
                 return $this->emptyResult('Usuario no encontrado en el tenant de Microsoft');
             }
 
-            $groups = $this->fetchGgBdGroups($graphUser['id'], $token);
+            $groupsResult = $this->fetchGgBdGroups($graphUser['id'], $token);
 
             return [
                 'success'          => true,
                 'department'       => $graphUser['department'] ?? null,
                 'job_title'        => $graphUser['jobTitle'] ?? null,
-                'grupos_vista_bd'  => $groups,
+                'grupos_vista_bd'  => $groupsResult['grupos'],
+                'member_of_count'  => $groupsResult['member_of_count'],
                 'error'            => null,
             ];
         } catch (\Throwable $e) {
@@ -139,8 +147,13 @@ class MicrosoftGraphTenantService
         ]);
 
         $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErr  = curl_error($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
+        if ($response === false || $httpCode === 0) {
+            throw new \RuntimeException('No se pudo obtener token Graph: ' . ($curlErr ?: 'fallo de red/timeout'));
+        }
 
         $data = json_decode($response, true);
 
@@ -164,25 +177,44 @@ class MicrosoftGraphTenantService
     }
 
     /**
-     * @return array<int, string>
+     * @return array{grupos: array<int, string>, member_of_count: int}
      */
     private function fetchGgBdGroups(string $graphUserId, string $token): array
     {
         $url   = "https://graph.microsoft.com/v1.0/users/{$graphUserId}/memberOf/microsoft.graph.group?\$top=999";
         $items = $this->graphGetAllPages($url, $token);
 
-        $roles = $this->decodeJwtRoles($token);
-        if (!empty($items) && $this->groupsNeedEnrichment($items) && in_array('Group.Read.All', $roles, true)) {
+        // Si Graph devolvió membresías sin nombre, hay que enriquecerlas.
+        // Sin eso el filtro GG-BD-* queda vacío y el sync borraría permisos reales.
+        if (!empty($items) && $this->groupsNeedEnrichment($items)) {
+            $roles = $this->decodeJwtRoles($token);
+            if (!in_array('Group.Read.All', $roles, true) && !in_array('Directory.Read.All', $roles, true)) {
+                throw new \RuntimeException(
+                    'Graph devolvió grupos sin displayName y el token no tiene Group.Read.All/Directory.Read.All'
+                );
+            }
+
             $items = $this->enrichGroups($items, $token);
+
+            if ($this->groupsNeedEnrichment($items)) {
+                throw new \RuntimeException(
+                    'No se pudo resolver el displayName de uno o más grupos Azure; sync abortado'
+                );
+            }
         }
 
-        return collect($items)
+        $grupos = collect($items)
             ->map(fn ($g) => $this->groupName($g))
             ->filter(fn ($name) => $name !== '' && str_starts_with(strtoupper($name), self::GRUPO_VISTA_PREFIX))
             ->unique()
             ->sort()
             ->values()
             ->all();
+
+        return [
+            'grupos'          => $grupos,
+            'member_of_count' => count($items),
+        ];
     }
 
     private function groupsNeedEnrichment(array $groups): bool
@@ -215,7 +247,7 @@ class MicrosoftGraphTenantService
 
             $id = $stub['id'] ?? null;
             if (!$id) {
-                return $stub;
+                throw new \RuntimeException('Grupo Azure sin id ni displayName; sync abortado');
             }
 
             $result = $this->graphGet(
@@ -223,7 +255,11 @@ class MicrosoftGraphTenantService
                 $token
             );
 
-            return $result ?: $stub;
+            if ($this->groupName($result) === '') {
+                throw new \RuntimeException("No se pudo enriquecer el grupo Azure {$id}");
+            }
+
+            return $result;
         }, $stubs);
     }
 
@@ -233,9 +269,6 @@ class MicrosoftGraphTenantService
 
         while ($url) {
             $data = $this->graphGet($url, $token);
-            if ($data === null) {
-                break;
-            }
 
             $items = array_merge($items, $data['value'] ?? []);
             $url   = $data['@odata.nextLink'] ?? null;
@@ -244,7 +277,10 @@ class MicrosoftGraphTenantService
         return $items;
     }
 
-    private function graphGet(string $url, string $token): ?array
+    /**
+     * @return array<string, mixed>
+     */
+    private function graphGet(string $url, string $token): array
     {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -258,16 +294,28 @@ class MicrosoftGraphTenantService
         ]);
 
         $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErr  = curl_error($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
+        // Antes: curl false / HTTP 0 devolvía null y el sync seguía como "éxito" vacío,
+        // borrando permisos GG-BD-* existentes. Ahora falla explícitamente.
+        if ($response === false || $httpCode === 0) {
+            throw new \RuntimeException('Error Graph (red/timeout): ' . ($curlErr ?: 'sin respuesta'));
+        }
+
+        $data = json_decode($response, true);
+
         if ($httpCode >= 400) {
-            $data = json_decode($response, true);
-            $msg  = $data['error']['message'] ?? "HTTP {$httpCode}";
+            $msg = is_array($data) ? ($data['error']['message'] ?? "HTTP {$httpCode}") : "HTTP {$httpCode}";
             throw new \RuntimeException("Error Graph: {$msg}");
         }
 
-        return json_decode($response, true);
+        if (!is_array($data)) {
+            throw new \RuntimeException('Error Graph: respuesta JSON inválida');
+        }
+
+        return $data;
     }
 
     private function decodeJwtRoles(string $token): array
@@ -289,6 +337,7 @@ class MicrosoftGraphTenantService
             'department'      => null,
             'job_title'       => null,
             'grupos_vista_bd' => [],
+            'member_of_count' => 0,
             'error'           => $error,
         ];
     }

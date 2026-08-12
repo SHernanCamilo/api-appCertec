@@ -15,9 +15,12 @@ class UserGrupSyncService
     ) {}
 
     /**
-     * Sincroniza grupos/departamento desde Azure al iniciar sesión.
+     * Sincroniza grupos/departamento desde Azure (login o "Traer grupos Azure").
      * Solo agrega los que faltan, elimina los que ya no vienen de Azure
      * y actualiza departamento si cambió. No recrea registros existentes.
+     *
+     * Si Graph falla o memberOf viene vacío con grupos previos, NO borra:
+     * conserva users_grups y retorna synced=false + error.
      *
      * @return array{synced: bool, users_grups: array<int, array<string, string>>, error: ?string}
      */
@@ -40,18 +43,36 @@ class UserGrupSyncService
 
         $stats = ['inserted' => 0, 'deleted' => 0, 'updated' => 0, 'unchanged' => 0];
 
-        DB::transaction(function () use ($user, $tenantData, &$stats) {
-            $vistaStats = $this->syncVistaBdGrups($user, $tenantData['grupos_vista_bd']);
-            $deptStats  = $this->syncDepartamento($user, $tenantData['department']);
+        try {
+            DB::transaction(function () use ($user, $tenantData, &$stats) {
+                $vistaStats = $this->syncVistaBdGrups(
+                    $user,
+                    $tenantData['grupos_vista_bd'],
+                    (int) ($tenantData['member_of_count'] ?? 0)
+                );
+                $deptStats  = $this->syncDepartamento($user, $tenantData['department']);
 
-            foreach (['inserted', 'deleted', 'updated', 'unchanged'] as $key) {
-                $stats[$key] = $vistaStats[$key] + $deptStats[$key];
-            }
+                foreach (['inserted', 'deleted', 'updated', 'unchanged'] as $key) {
+                    $stats[$key] = $vistaStats[$key] + $deptStats[$key];
+                }
 
-            if (!empty($tenantData['job_title']) && $user->cargo !== $tenantData['job_title']) {
-                $user->update(['cargo' => $tenantData['job_title']]);
-            }
-        });
+                if (!empty($tenantData['job_title']) && $user->cargo !== $tenantData['job_title']) {
+                    $user->update(['cargo' => $tenantData['job_title']]);
+                }
+            });
+        } catch (\RuntimeException $e) {
+            // Las guardas anti-borrado lanzan RuntimeException: conservar estado previo.
+            Log::warning('UserGrupSyncService: sync abortado, se conservan datos previos', [
+                'user_id' => $user->id,
+                'error'   => $e->getMessage(),
+            ]);
+
+            return [
+                'synced'      => false,
+                'users_grups' => $this->formatGrups($this->loadUserGrups($user)),
+                'error'       => $e->getMessage(),
+            ];
+        }
 
         Log::info('UserGrupSyncService: sync Azure completado', [
             'user_id'  => $user->id,
@@ -72,7 +93,7 @@ class UserGrupSyncService
      * @param  array<int, string>  $gruposDesdeAzure
      * @return array{inserted: int, deleted: int, updated: int, unchanged: int}
      */
-    private function syncVistaBdGrups(User $user, array $gruposDesdeAzure): array
+    private function syncVistaBdGrups(User $user, array $gruposDesdeAzure, int $memberOfCount = 0): array
     {
         $stats = ['inserted' => 0, 'deleted' => 0, 'updated' => 0, 'unchanged' => 0];
 
@@ -109,6 +130,15 @@ class UserGrupSyncService
         $aEliminar  = array_diff($existentes, $nuevos);
         $aInsertar  = array_diff($nuevos, $existentes);
         $sinCambio  = array_intersect($existentes, $nuevos);
+
+        // GUARDA ANTI-BORRADO: si Graph no trajo ninguna membresía (memberOf vacío)
+        // pero el usuario ya tenía GG-BD-*, es casi seguro un fallo parcial/intermitente.
+        // Si memberOf sí trajo grupos y ninguno es GG-BD-*, se permite limpiar.
+        if (!empty($existentes) && empty($nuevos) && $memberOfCount === 0) {
+            throw new \RuntimeException(
+                'Azure devolvió memberOf vacío pero el usuario ya tenía grupos GG-BD-*; sync abortado para no borrar permisos'
+            );
+        }
 
         if (!empty($aEliminar)) {
             $deleted = UserGrup::where('id_user', $user->id)
