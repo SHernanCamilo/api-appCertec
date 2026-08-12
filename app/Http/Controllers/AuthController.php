@@ -229,7 +229,7 @@ class AuthController extends Controller
      */
     public function refresh()
     {
-        return $this->respondWithToken(auth('api')->refresh());
+        return $this->respondWithToken(auth('api')->refresh(), false);
     }
 
     /**
@@ -239,14 +239,20 @@ class AuthController extends Controller
      *
      * @return \Illuminate\Http\JsonResponse
      */
-    protected function respondWithToken($token)
+    protected function respondWithToken($token, bool $syncAzure = true)
         {
             $user = auth('api')->user();
             $user->load(['rolesCustom.perfiles.permisos', 'empresas', 'sucursal', 'sede']);
 
             $permisosUnicos = $this->getUserPermissions($user);
             $sidebar        = $this->sidebarService->getSidebarModules($user);
-            $tenantSync     = $this->userGrupSyncService->syncFromAzureOnLogin($user);
+            $tenantSync     = $syncAzure
+                ? $this->userGrupSyncService->syncFromAzureOnLogin($user, false)
+                : [
+                    'synced'      => false,
+                    'users_grups' => $this->userGrupSyncService->currentGrups($user),
+                    'error'       => null,
+                ];
 
             // Obtener sedes según el rol del usuario (4-tier logic)
             $sedes = $this->getSedesForUser($user);

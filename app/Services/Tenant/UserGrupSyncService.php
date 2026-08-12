@@ -15,16 +15,18 @@ class UserGrupSyncService
     ) {}
 
     /**
-     * Sincroniza grupos/departamento desde Azure (login o "Traer grupos Azure").
-     * Solo agrega los que faltan, elimina los que ya no vienen de Azure
-     * y actualiza departamento si cambió. No recrea registros existentes.
+     * Sincroniza grupos/departamento desde Azure.
      *
-     * Si Graph falla o memberOf viene vacío con grupos previos, NO borra:
-     * conserva users_grups y retorna synced=false + error.
+     * Login: solo AGREGA GG-BD-* faltantes. Nunca borra (Graph a menudo trae
+     * otros grupos sin los GG-BD-* y eso vaciaba users_grups).
+     *
+     * Sync explícito (Traer grupos Azure / artisan): puede quitar grupos que
+     * Azure ya no tiene, pero NUNCA si Azure devolvió 0 GG-BD-* y el usuario
+     * ya tenía asignaciones.
      *
      * @return array{synced: bool, users_grups: array<int, array<string, string>>, error: ?string}
      */
-    public function syncFromAzureOnLogin(User $user): array
+    public function syncFromAzureOnLogin(User $user, bool $allowDelete = false): array
     {
         $tenantData = $this->graphTenantService->fetchUserTenantData($user);
 
@@ -44,13 +46,13 @@ class UserGrupSyncService
         $stats = ['inserted' => 0, 'deleted' => 0, 'updated' => 0, 'unchanged' => 0];
 
         try {
-            DB::transaction(function () use ($user, $tenantData, &$stats) {
+            DB::transaction(function () use ($user, $tenantData, $allowDelete, &$stats) {
                 $vistaStats = $this->syncVistaBdGrups(
                     $user,
                     $tenantData['grupos_vista_bd'],
-                    (int) ($tenantData['member_of_count'] ?? 0)
+                    $allowDelete
                 );
-                $deptStats  = $this->syncDepartamento($user, $tenantData['department']);
+                $deptStats  = $this->syncDepartamento($user, $tenantData['department'], $allowDelete);
 
                 foreach (['inserted', 'deleted', 'updated', 'unchanged'] as $key) {
                     $stats[$key] = $vistaStats[$key] + $deptStats[$key];
@@ -61,7 +63,6 @@ class UserGrupSyncService
                 }
             });
         } catch (\RuntimeException $e) {
-            // Las guardas anti-borrado lanzan RuntimeException: conservar estado previo.
             Log::warning('UserGrupSyncService: sync abortado, se conservan datos previos', [
                 'user_id' => $user->id,
                 'error'   => $e->getMessage(),
@@ -75,11 +76,12 @@ class UserGrupSyncService
         }
 
         Log::info('UserGrupSyncService: sync Azure completado', [
-            'user_id'  => $user->id,
-            'inserted' => $stats['inserted'],
-            'deleted'  => $stats['deleted'],
-            'updated'  => $stats['updated'],
-            'unchanged'=> $stats['unchanged'],
+            'user_id'      => $user->id,
+            'allow_delete' => $allowDelete,
+            'inserted'     => $stats['inserted'],
+            'deleted'      => $stats['deleted'],
+            'updated'      => $stats['updated'],
+            'unchanged'    => $stats['unchanged'],
         ]);
 
         return [
@@ -90,22 +92,26 @@ class UserGrupSyncService
     }
 
     /**
+     * @return array<int, array<string, string>>
+     */
+    public function currentGrups(User $user): array
+    {
+        return $this->formatGrups($this->loadUserGrups($user));
+    }
+
+    /**
      * @param  array<int, string>  $gruposDesdeAzure
      * @return array{inserted: int, deleted: int, updated: int, unchanged: int}
      */
-    private function syncVistaBdGrups(User $user, array $gruposDesdeAzure, int $memberOfCount = 0): array
+    private function syncVistaBdGrups(User $user, array $gruposDesdeAzure, bool $allowDelete = false): array
     {
         $stats = ['inserted' => 0, 'deleted' => 0, 'updated' => 0, 'unchanged' => 0];
 
-        // PROTECCIÓN: solo aceptar grupos con prefijo GG-BD- (evita corrupción
-        // como la que afectó a 354 usuarios con "FLA-SERVICIO MEDICO" en vista_bd)
         $gruposDesdeAzure = array_filter(
             $gruposDesdeAzure,
             fn ($g) => str_starts_with(strtoupper(trim($g)), 'GG-BD-')
         );
 
-        // Limpiar registros corruptos previos (sin prefijo GG-BD-) que pudieron
-        // insertarse antes del fix de validación. Esto garantiza una base limpia.
         $corruptos = UserGrup::where('id_user', $user->id)
             ->where('origen', UserGrup::ORIGEN_AZURE)
             ->where('tipo', UserGrup::TIPO_VISTA_BD)
@@ -131,22 +137,27 @@ class UserGrupSyncService
         $aInsertar  = array_diff($nuevos, $existentes);
         $sinCambio  = array_intersect($existentes, $nuevos);
 
-        // GUARDA ANTI-BORRADO: si Graph no trajo ninguna membresía (memberOf vacío)
-        // pero el usuario ya tenía GG-BD-*, es casi seguro un fallo parcial/intermitente.
-        // Si memberOf sí trajo grupos y ninguno es GG-BD-*, se permite limpiar.
-        if (!empty($existentes) && empty($nuevos) && $memberOfCount === 0) {
+        // Graph suele devolver decenas de grupos (Teams, etc.) sin los GG-BD-*.
+        // Tratar eso como "ya no tiene BI" borraba los permisos al rato del login.
+        if (!empty($existentes) && empty($nuevos)) {
             throw new \RuntimeException(
-                'Azure devolvió memberOf vacío pero el usuario ya tenía grupos GG-BD-*; sync abortado para no borrar permisos'
+                'Azure no devolvió grupos GG-BD-* pero el usuario ya tenía asignaciones; sync abortado para no borrar permisos'
             );
         }
 
-        if (!empty($aEliminar)) {
+        if ($allowDelete && !empty($aEliminar)) {
             $deleted = UserGrup::where('id_user', $user->id)
                 ->where('origen', UserGrup::ORIGEN_AZURE)
                 ->where('tipo', UserGrup::TIPO_VISTA_BD)
                 ->whereIn('permiso', $aEliminar)
                 ->delete();
             $stats['deleted'] += $deleted;
+        } elseif (!$allowDelete && !empty($aEliminar)) {
+            Log::info('UserGrupSyncService: login aditivo, no se eliminan GG-BD-*', [
+                'user_id'    => $user->id,
+                'conservados'=> array_values($aEliminar),
+            ]);
+            $aEliminar = [];
         }
 
         foreach ($aInsertar as $grupo) {
@@ -166,7 +177,7 @@ class UserGrupSyncService
         return $stats;
     }
 
-    private function syncDepartamento(User $user, ?string $department): array
+    private function syncDepartamento(User $user, ?string $department, bool $allowDelete = false): array
     {
         $stats = ['inserted' => 0, 'deleted' => 0, 'updated' => 0, 'unchanged' => 0];
 
@@ -176,7 +187,7 @@ class UserGrupSyncService
             ->first();
 
         if (empty($department)) {
-            if ($registro) {
+            if ($allowDelete && $registro) {
                 $registro->delete();
                 $stats['deleted']++;
             }

@@ -98,7 +98,7 @@ class MicrosoftAuthController extends Controller
         
         // Obtener módulos del sidebar con permisos básicos
         $sidebar = $this->sidebarService->getSidebarModules($user);
-        $tenantSync = $this->userGrupSyncService->syncFromAzureOnLogin($user);
+        $tenantSync = $this->userGrupSyncService->syncFromAzureOnLogin($user, false);
         
         \Log::info('🔐 Login con Microsoft exitoso:', [
             'user' => $user->name,
