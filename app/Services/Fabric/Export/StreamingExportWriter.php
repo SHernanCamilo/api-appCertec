@@ -246,8 +246,6 @@ final class StreamingExportWriter
 
         // BOM UTF-8 para que Excel respete los acentos
         fwrite($handle, "\xEF\xBB\xBF");
-        // Indica a Excel que el separador es ';' (evita el asistente de importación)
-        fwrite($handle, "sep=;\n");
         fwrite($handle, $this->encodeCsvLine($this->headers));
 
         $this->csvHandle = $handle;
@@ -280,7 +278,7 @@ final class StreamingExportWriter
     }
 
     /**
-     * Serializa una fila a CSV.
+     * Serializa una fila a CSV con separador coma (universal).
      *
      * No se usa fputcsv() a propósito: fputcsv escaparía las comillas de la
      * fórmula ="036004835" convirtiéndola en "=""036004835""", y Excel dejaría
@@ -298,7 +296,7 @@ final class StreamingExportWriter
             $fields[] = $this->encodeCsvField($value);
         }
 
-        return implode(';', $fields) . "\r\n";
+        return implode(',', $fields) . "\r\n";
     }
 
     private function encodeCsvField(mixed $value): string
@@ -316,7 +314,7 @@ final class StreamingExportWriter
         }
 
         if (
-            str_contains($asString, ';')
+            str_contains($asString, ',')
             || str_contains($asString, '"')
             || str_contains($asString, "\n")
             || str_contains($asString, "\r")

@@ -165,7 +165,6 @@ final class StreamingExportWriterTest extends TestCase
         $inicio = (string) file_get_contents($result->path, false, null, 0, 20);
 
         $this->assertStringStartsWith("\xEF\xBB\xBF", $inicio, 'Falta el BOM UTF-8');
-        $this->assertStringContainsString('sep=;', $inicio);
     }
 
     public function test_csv_escribe_la_cabecera_una_sola_vez(): void
@@ -181,8 +180,8 @@ final class StreamingExportWriterTest extends TestCase
         $result = $writer->finish();
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        // 1 línea sep= + 1 cabecera + $total datos
-        $this->assertCount($total + 2, $lineas);
+        // 1 cabecera + $total datos (ya no hay línea sep=)
+        $this->assertCount($total + 1, $lineas);
         $this->assertSame(1, substr_count(implode("\n", $lineas), 'Cantidad'));
     }
 
@@ -198,8 +197,8 @@ final class StreamingExportWriterTest extends TestCase
         $result = $writer->finish();
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        // Restamos sep= y cabecera
-        $this->assertCount($total, array_slice($lineas, 2));
+        // Restamos cabecera
+        $this->assertCount($total, array_slice($lineas, 1));
         $this->assertSame($total, $result->rows);
     }
 
@@ -218,8 +217,8 @@ final class StreamingExportWriterTest extends TestCase
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
         // La columna A siempre va primero, según la cabecera
-        $this->assertSame('a1;b1', $lineas[2]);
-        $this->assertSame('a2;b2', $lineas[4]);
+        $this->assertSame('a1,b1', $lineas[1]);
+        $this->assertSame('a2,b2', $lineas[3]);
     }
 
     public function test_rellena_columnas_ausentes(): void
@@ -233,7 +232,7 @@ final class StreamingExportWriterTest extends TestCase
         $result = $writer->finish();
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        $this->assertSame('1;', $lineas[3], 'La columna ausente debe quedar vacía, no desplazar');
+        $this->assertSame('1,', $lineas[2], 'La columna ausente debe quedar vacía, no desplazar');
     }
 
     public function test_limpia_saltos_de_linea_para_no_romper_el_csv(): void
@@ -247,7 +246,7 @@ final class StreamingExportWriterTest extends TestCase
         $result = $writer->finish();
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        $this->assertCount($this->rowsForCsv() + 2, $lineas, 'Los saltos internos no deben crear filas extra');
+        $this->assertCount($this->rowsForCsv() + 1, $lineas, 'Los saltos internos no deben crear filas extra');
     }
 
     // =========================================================================
