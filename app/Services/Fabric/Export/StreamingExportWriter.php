@@ -41,7 +41,10 @@ use RuntimeException;
  */
 final class StreamingExportWriter
 {
-    /** Hasta este número de filas se genera xlsx con formato; por encima, CSV directo. */
+    /** Hasta este número de filas se genera xlsx con PhpSpreadsheet (con formato
+     *  corporativo: header azul, zebra, autofit). Por encima se usa OpenSpout
+     *  streaming (sin buffer en RAM). En ambos casos sale como .xlsx.
+     *  Solo por encima del límite de Excel (1,048,576) se cae a CSV. */
     private const XLSX_THRESHOLD = 50000;
 
     /** Cada cuántas filas se invoca el callback de progreso. */
@@ -144,7 +147,17 @@ final class StreamingExportWriter
             fclose($this->csvHandle);
             $this->csvHandle = null;
 
-            return $this->buildResult($this->csvPath(), 'csv');
+            // Convertir el CSV a xlsx con OpenSpout (streaming, sin cargar en RAM)
+            // Esto elimina el CSV crudo que confunde a los usuarios.
+            $baseName = pathinfo($this->csvPath(), PATHINFO_FILENAME);
+            $result = self::fromCsvFile($this->csvPath(), $this->targetDir, $baseName, $this->schema, $this->view);
+
+            // Si la conversión falló por algún motivo, devolver el CSV como fallback
+            if ($result->isEmpty()) {
+                return $this->buildResult($this->csvPath(), 'csv');
+            }
+
+            return $result;
         }
 
         // Dataset pequeño: xlsx con formato corporativo
