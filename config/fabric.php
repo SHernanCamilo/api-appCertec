@@ -24,8 +24,13 @@ return [
     // Timeout para catálogo de vistas (debe ser rápido, es solo metadata)
     'catalog_timeout' => (int) env('GRAPHQL_CATALOG_TIMEOUT', 60),
 
-    // Timeout para exports (más largo, datasets grandes)
-    'export_timeout' => (int) env('GRAPHQL_EXPORT_TIMEOUT', 300),
+    // Timeout para exports (segundos). Las vistas de 460K filas tardan 1-6 min
+    // en el carril "heavy" de Graph-Fabric; 300s las cortaba antes de terminar.
+    'export_timeout' => (int) env('GRAPHQL_EXPORT_TIMEOUT', 600),
+
+    // Máximo de filas exportables. Excel corta en 1.048.576 y por encima de
+    // ese volumen el export monopoliza un carril de Python varios minutos.
+    'max_export_rows' => (int) env('FABRIC_MAX_EXPORT_ROWS', 1000000),
 
     // Chunk size para exports paginados (filas por request)
     'export_chunk' => (int) env('FABRIC_EXPORT_CHUNK', 50000),

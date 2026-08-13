@@ -106,19 +106,24 @@ return [
             ],
 
             // Workers DEDICADOS para exports Excel/CSV (aislados, no bloquean la API)
-            // ⚠️ MAX 1 proceso para no saturar a Python ni agotar RAM.
-            // Con los fixes de Python (streaming a disco) el pico es ~100 MB por export.
+            //
+            // 3 procesos: Graph-Fabric implementa "carriles" (bulkhead) y atiende
+            // hasta 15 exports en paralelo — con 1 worker PHP los jobs se
+            // serializaban aunque Python tuviera capacidad libre.
+            //
+            // RAM: el writer es streaming (OpenSpout + CSV a disco), ~5-100 MB por
+            // export. 3 × 100 MB = 300 MB peor caso, holgado para la VPS.
             'export-workers' => [
                 'connection' => 'redis',
                 'queue' => ['exports'],
                 'balance' => 'simple',
                 'minProcesses' => 1,
-                'maxProcesses' => 1,  // 1 export a la vez — evita represamiento
+                'maxProcesses' => 3,
                 'maxTime' => 3600,
                 'maxJobs' => 30,
                 'memory' => 768,
-                'tries' => 1,         // No reintentar automáticamente
-                'timeout' => 600,     // 10 min max
+                'tries' => 1,         // No reintentar: una vista pesada no será más rápida al segundo intento
+                'timeout' => 960,     // 16 min — margen sobre el timeout del job (900s)
                 'nice' => 10,         // Prioridad baja (no afectar API)
             ],
 
@@ -158,12 +163,12 @@ return [
                 'queue' => ['exports'],
                 'balance' => 'simple',
                 'minProcesses' => 1,
-                'maxProcesses' => 1,
+                'maxProcesses' => 2,
                 'maxTime' => 3600,
                 'maxJobs' => 30,
                 'memory' => 768,
                 'tries' => 1,
-                'timeout' => 600,
+                'timeout' => 960,
                 'nice' => 10,
             ],
         ],

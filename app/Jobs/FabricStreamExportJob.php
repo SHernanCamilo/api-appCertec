@@ -41,10 +41,17 @@ final class FabricStreamExportJob implements ShouldQueue
     public int $tries   = 1;
 
     /**
-     * 5 min max. Con Python streaming (100 MB RAM) el peor caso real es ~40s.
-     * Si se pasa de 5 min, algo salió muy mal y Horizon lo mata.
+     * 15 min. Las vistas grandes (CarteraXEdades: 460K filas,
+     * EvolucionesEspecialistas: 280K) tardan 1-6 min en Fabric + ~35s generando
+     * el CSV en DuckDB. Con 300s el job moría antes de que Python respondiera.
+     *
+     * El worker de Horizon usa 960s para dejar margen y que el job falle con
+     * mensaje propio en vez de que Horizon lo mate en seco.
      */
-    public int $timeout = 300;
+    public int $timeout = 900;
+
+    /** Por encima de este total no se genera archivo: hay que filtrar antes. */
+    private const MAX_EXPORTABLE_ROWS = 1_000_000;
 
     private const STATUS_PENDING    = 'pending';
     private const STATUS_PROCESSING = 'processing';
@@ -85,7 +92,7 @@ final class FabricStreamExportJob implements ShouldQueue
             $user = User::findOrFail($this->userId);
             $this->exportToExcel($user);
         } catch (\Throwable $e) {
-            $this->updateStatus(self::STATUS_FAILED, $e->getMessage());
+            $this->updateStatus(self::STATUS_FAILED, $this->mensajeParaUsuario($e));
             Log::error('FabricStreamExportJob [ERROR]', [
                 'job_id' => $this->jobId,
                 'schema' => $this->schema,
@@ -166,9 +173,11 @@ final class FabricStreamExportJob implements ShouldQueue
         ]);
 
         try {
-            $maxRows = min((int)($this->options['max_rows'] ?? 500000), 1000000);
+            $maxRows = min((int)($this->options['max_rows'] ?? 500000), self::MAX_EXPORTABLE_ROWS);
 
-            $response = Http::timeout(300)
+            // Timeout alineado al del job: Graph-Fabric asigna la vista a un
+            // carril según su tamaño y las pesadas pueden tardar varios minutos.
+            $response = Http::timeout((int) config('fabric.export_timeout', 600))
                 ->connectTimeout(10)
                 ->withHeaders(['X-API-Key' => config('fabric.api_key', '')])
                 ->post($url . '/api/data/export/r2', [
@@ -194,6 +203,26 @@ final class FabricStreamExportJob implements ShouldQueue
             }
 
             $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
+
+            // Guarda de tamaño: por encima de 1M filas el archivo es inmanejable
+            // (Excel corta en 1.048.576) y el proceso monopoliza un carril de
+            // Python varios minutos. Se pide filtrar en vez de fallar por timeout.
+            if ($totalRows > self::MAX_EXPORTABLE_ROWS) {
+                unset($response);
+                $this->updateStatus(self::STATUS_FAILED, sprintf(
+                    'La vista tiene %s registros y excede el máximo exportable (%s). Aplique filtros para reducir los datos.',
+                    number_format($totalRows),
+                    number_format(self::MAX_EXPORTABLE_ROWS)
+                ));
+
+                Log::warning('FabricStreamExportJob: export rechazado por tamaño', [
+                    'job_id' => $this->jobId,
+                    'view'   => "{$this->schema}.{$this->view}",
+                    'rows'   => $totalRows,
+                ]);
+
+                return true; // Resuelto: no reintentar por Fabric directo
+            }
 
             Log::info('FabricStreamExportJob: R2 OK', [
                 'job_id' => $this->jobId,
@@ -444,9 +473,44 @@ final class FabricStreamExportJob implements ShouldQueue
         Cache::put("fabric_export:{$this->jobId}", $data, 1800); // 30 min TTL
     }
 
+    /**
+     * Se invoca cuando Horizon mata el job (timeout duro) o agota los intentos.
+     *
+     * El mensaje técnico ("FabricStreamExportJob has timed out") no le dice nada
+     * al usuario. Se traduce a una acción concreta.
+     */
     public function failed(\Throwable $e): void
     {
-        $this->updateStatus(self::STATUS_FAILED, $e->getMessage());
+        $this->updateStatus(self::STATUS_FAILED, $this->mensajeParaUsuario($e));
+
+        Log::error('FabricStreamExportJob: job fallido', [
+            'job_id'  => $this->jobId,
+            'view'    => "{$this->schema}.{$this->view}",
+            'error'   => $e->getMessage(),
+        ]);
+    }
+
+    /**
+     * Traduce excepciones técnicas a instrucciones accionables.
+     */
+    private function mensajeParaUsuario(\Throwable $e): string
+    {
+        $msg = strtolower($e->getMessage());
+
+        if (str_contains($msg, 'timed out') || str_contains($msg, 'timeout')) {
+            return 'La vista es demasiado pesada y superó el tiempo máximo de exportación. '
+                 . 'Aplique filtros (fechas, sede, estado) para reducir los datos e intente de nuevo.';
+        }
+
+        if (str_contains($msg, 'connection refused') || str_contains($msg, 'could not resolve')) {
+            return 'El servicio de datos no está disponible en este momento. Intente en unos minutos.';
+        }
+
+        if (str_contains($msg, 'memory')) {
+            return 'La vista excede la memoria disponible para exportar. Aplique filtros o exporte por rangos de fecha.';
+        }
+
+        return $e->getMessage();
     }
 
     /**
