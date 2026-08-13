@@ -482,13 +482,14 @@ final class StreamingExportWriter
     // =========================================================================
 
     /**
-     * Genera un archivo desde un CSV en disco.
+     * Genera un archivo xlsx desde un CSV en disco.
      *
-     * - ≤ 100K filas: xlsx con formato profesional (filtros, colores, autofit)
-     * - > 100K filas: CSV con BOM UTF-8 + separador coma (Excel lo abre bien)
+     * Siempre genera xlsx con formato profesional (filtros, autofit, header azul).
+     * OpenSpout escribe en streaming (RAM fija ~5 MB) hasta el límite de Excel
+     * (1,048,576 filas). Solo excediendo ese límite se entrega el CSV crudo.
      *
-     * El threshold de 100K evita que OpenSpout genere archivos de 380s/139MB
-     * que bloquean workers y causan timeouts en otros servicios.
+     * Los CSV sin formato confundían a los usuarios: los campos con comas
+     * internas (notas médicas, descripciones) rompían la separación de columnas.
      */
     public static function fromCsvFile(
         string $csvPath,
@@ -524,8 +525,13 @@ final class StreamingExportWriter
             }
         }
 
-        // > 100K filas: dejar como CSV (instantáneo, funcional en Excel)
-        if ($dataRows > 100000) {
+        // Siempre generar xlsx — el CSV sin formato confunde a los usuarios
+        // (los campos con comas internas rompen la separación de columnas).
+        // OpenSpout escribe en streaming: ~5 MB de RAM fijos, sin importar el
+        // tamaño. Para >1M filas (límite de Excel) se trunca al máximo.
+        if ($dataRows > 1048576) {
+            // Excel no soporta más de 1,048,576 filas — se entrega como CSV
+            // porque no hay forma de abrirlo en Excel de todas formas.
             $finalPath = "{$targetDir}/{$baseName}.csv";
             if (realpath($csvPath) !== realpath($finalPath)) {
                 rename($csvPath, $finalPath);
