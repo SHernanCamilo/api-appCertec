@@ -25,6 +25,30 @@ Route::patch('recepciones/{recepcion}/confirmar', [App\Http\Controllers\Inventor
 Route::apiResource('recepciones', App\Http\Controllers\Inventory\InvRecepcionController::class);
 
 // =========================================================================
+// ACTIVOS FIJOS — Toma de inventario y trazabilidad
+//
+// El maestro de activos es de solo lectura (vista Fabric ra.VW_Fixed_DetalleActivos).
+// Lo que se escribe son las novedades encontradas en sitio (inv_traz_activo).
+//
+// Las rutas específicas van ANTES de /{placa} para que no las capture el wildcard.
+// =========================================================================
+Route::prefix('activos-fijos')->group(function () {
+    $controller = App\Http\Controllers\Inventory\InvActivoFijoController::class;
+
+    Route::get('columnas', [$controller, 'columnas']);
+    Route::get('opciones', [$controller, 'opciones']);
+    Route::get('buscar', [$controller, 'buscar']);
+
+    Route::get('trazabilidad/resumen', [$controller, 'resumen']);
+    Route::get('trazabilidad', [$controller, 'trazabilidad']);
+
+    Route::post('novedad', [$controller, 'registrarNovedad']);
+
+    Route::get('{placa}/historial', [$controller, 'historial'])->where('placa', '[A-Za-z0-9\-_.]+');
+    Route::get('{placa}', [$controller, 'show'])->where('placa', '[A-Za-z0-9\-_.]+');
+});
+
+// =========================================================================
 // INVIMA (datos.gov.co)
 // =========================================================================
 Route::prefix('invima')->group(function () {
