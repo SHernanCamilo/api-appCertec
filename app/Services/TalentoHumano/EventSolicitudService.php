@@ -35,13 +35,18 @@ class EventSolicitudService
     public function listar(array $filters = [], ?int $userId = null)
     {
         $query = EventHoraExtra::with([
-            'empleado:id,nombre',
+            'empleado:id,nombre,numero_identificacion,id_empresa',
             'aprobador:id,nombre',
-            'empleadoCubre:id,nombre',
+            'empleadoCubre:id,nombre,numero_identificacion',
             'novedad:id,codigo,descripcion',
             'motivoRechazo:id,codigo,descriocion,id_modulo',
         ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
-          ->select('event_horas_extra.*', 'uf.nombre as unidad_funcional');
+          ->select(
+              'event_horas_extra.*',
+              'uf.nombre as unidad_funcional',
+              'uf.codigo as unidad_funcional_codigo',
+              'uf.id_empresa as empresa_id'
+          );
 
         if ($userId) {
             $query->where('event_horas_extra.id_user_reg', $userId);
@@ -65,6 +70,8 @@ class EventSolicitudService
 
     public function crear(array $data, int $userId): EventHoraExtra
     {
+        $this->validarDuracionMinima($data['fecha_inicial'] ?? null, $data['fecha_final'] ?? null);
+
         $empresaId = $this->resolverEmpresaId((int)$data['empleado_id']);
 
         if (!$this->empleadoEnUnidadesResponsable($userId, (int)$data['empleado_id'], $empresaId)) {
@@ -447,12 +454,17 @@ class EventSolicitudService
         );
 
         $query = EventHoraExtra::with([
-            'empleado:id,nombre,numero_identificacion',
+            'empleado:id,nombre,numero_identificacion,id_empresa',
             'novedad:id,codigo,descripcion',
-            'empleadoCubre:id,nombre',
+            'empleadoCubre:id,nombre,numero_identificacion',
             'motivoRechazo:id,codigo,descriocion,id_modulo',
         ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
-          ->select('event_horas_extra.*', 'uf.nombre as unidad_funcional')
+          ->select(
+              'event_horas_extra.*',
+              'uf.nombre as unidad_funcional',
+              'uf.codigo as unidad_funcional_codigo',
+              'uf.id_empresa as empresa_id'
+          )
           ->whereIn('event_horas_extra.id', $recordIds)
           ->where('event_horas_extra.estado', '!=', EventoEstadoMapper::ANULADO);
 
@@ -519,12 +531,17 @@ class EventSolicitudService
         $recordIds = array_keys($accionPorRecord);
 
         $query = EventHoraExtra::with([
-            'empleado:id,nombre,numero_identificacion',
+            'empleado:id,nombre,numero_identificacion,id_empresa',
             'novedad:id,codigo,descripcion',
-            'empleadoCubre:id,nombre',
+            'empleadoCubre:id,nombre,numero_identificacion',
             'motivoRechazo:id,codigo,descriocion,id_modulo',
         ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
-          ->select('event_horas_extra.*', 'uf.nombre as unidad_funcional')
+          ->select(
+              'event_horas_extra.*',
+              'uf.nombre as unidad_funcional',
+              'uf.codigo as unidad_funcional_codigo',
+              'uf.id_empresa as empresa_id'
+          )
           ->whereIn('event_horas_extra.id', $recordIds);
 
         if (!empty($filters['search'])) {
@@ -676,6 +693,13 @@ class EventSolicitudService
             $solicitud = EventHoraExtra::findOrFail($id);
             $anular = array_key_exists('estado', $data)
                 && (int) $data['estado'] === EventoEstadoMapper::ANULADO;
+
+            if (!$anular && (array_key_exists('fecha_inicial', $data) || array_key_exists('fecha_final', $data))) {
+                $this->validarDuracionMinima(
+                    $data['fecha_inicial'] ?? $solicitud->fecha_nov_ini,
+                    $data['fecha_final'] ?? $solicitud->fecha_nov_fin
+                );
+            }
 
             $solicitud->update([
                 'id_user_nov'         => $data['empleado_id']       ?? $solicitud->id_user_nov,
@@ -991,6 +1015,35 @@ class EventSolicitudService
         }
 
         return $query->orderBy('nombre')->value('id');
+    }
+
+    /** La fecha de fin debe ser al menos 30 minutos posterior a la de inicio. */
+    private function validarDuracionMinima(mixed $fechaInicial, mixed $fechaFinal): void
+    {
+        $ini = $this->aTimestamp($fechaInicial);
+        $fin = $this->aTimestamp($fechaFinal);
+
+        if ($ini === null || $fin === null) {
+            throw new \RuntimeException('Las fechas de inicio y fin no son válidas.');
+        }
+
+        if (($fin - $ini) < 30 * 60) {
+            throw new \RuntimeException('La fecha de fin debe ser al menos 30 minutos posterior a la de inicio.');
+        }
+    }
+
+    private function aTimestamp(mixed $valor): ?int
+    {
+        if ($valor instanceof \DateTimeInterface) {
+            return $valor->getTimestamp();
+        }
+
+        if (is_string($valor) && trim($valor) !== '') {
+            $ts = strtotime($valor);
+            return $ts === false ? null : $ts;
+        }
+
+        return null;
     }
 
     private function enriquecerEventoConIntervinientes(EventHoraExtra $evento): EventHoraExtra
