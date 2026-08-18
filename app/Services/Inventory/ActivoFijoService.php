@@ -332,6 +332,14 @@ class ActivoFijoService
             $query->whereDate('created_at', '<=', $filtros['hasta']);
         }
 
+        if (!empty($filtros['unidad_funcional'])) {
+            $query->where('unidad_funcional', $filtros['unidad_funcional']);
+        }
+
+        if (isset($filtros['es_externo'])) {
+            $query->where('es_externo', (bool) $filtros['es_externo']);
+        }
+
         $paginador = $query->paginate($porPagina);
 
         return [
@@ -355,6 +363,8 @@ class ActivoFijoService
      */
     public function resumen(): array
     {
+        $inicioMes = now()->startOfMonth()->toDateString();
+
         $resultado = DB::table('inv_traz_activo')
             ->selectRaw('COUNT(*) as total_tomas')
             ->selectRaw('COUNT(DISTINCT placa) as activos_distintos')
@@ -362,7 +372,25 @@ class ActivoFijoService
             ->selectRaw("SUM(CASE WHEN novedad_estado_fisico = ? THEN 1 ELSE 0 END) as para_reparacion", [InvTrazActivo::ESTADO_FISICO_REPARACION])
             ->selectRaw("SUM(CASE WHEN novedad_estado_fisico = ? THEN 1 ELSE 0 END) as en_buen_estado", [InvTrazActivo::ESTADO_FISICO_BUENO])
             ->selectRaw("SUM(CASE WHEN DATE(created_at) = CURDATE() THEN 1 ELSE 0 END) as tomas_hoy")
+            ->selectRaw("SUM(CASE WHEN es_externo = 1 THEN 1 ELSE 0 END) as externos")
             ->first();
+
+        // Desglose por unidad funcional del mes actual
+        $porUnidad = DB::table('inv_traz_activo')
+            ->select('unidad_funcional')
+            ->selectRaw('COUNT(*) as tomas')
+            ->selectRaw('COUNT(DISTINCT placa) as activos')
+            ->where('created_at', '>=', $inicioMes)
+            ->whereNotNull('unidad_funcional')
+            ->groupBy('unidad_funcional')
+            ->orderByDesc('tomas')
+            ->get()
+            ->map(fn ($row) => [
+                'unidad_funcional' => $row->unidad_funcional,
+                'tomas'            => (int) $row->tomas,
+                'activos'          => (int) $row->activos,
+            ])
+            ->all();
 
         return [
             'total_tomas'       => (int) ($resultado->total_tomas ?? 0),
@@ -371,7 +399,290 @@ class ActivoFijoService
             'para_reparacion'   => (int) ($resultado->para_reparacion ?? 0),
             'en_buen_estado'    => (int) ($resultado->en_buen_estado ?? 0),
             'tomas_hoy'         => (int) ($resultado->tomas_hoy ?? 0),
+            'externos'          => (int) ($resultado->externos ?? 0),
+            'por_unidad_funcional' => $porUnidad,
         ];
+    }
+
+    // =========================================================================
+    // EXPORTAR EXCEL
+    // =========================================================================
+
+    /**
+     * Genera un archivo XLSX con la trazabilidad, clasificando inventariados
+     * vs pendientes del mes actual.
+     *
+     * @param  array<string, mixed> $filtros
+     * @return \Symfony\Component\HttpFoundation\StreamedResponse
+     */
+    public function exportarExcel(array $filtros = []): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $query = InvTrazActivo::with('usuario:id,name,email')->recientesPrimero();
+
+        if (!empty($filtros['unidad_funcional'])) {
+            $query->where('unidad_funcional', $filtros['unidad_funcional']);
+        }
+
+        if (!empty($filtros['placa'])) {
+            $query->where('placa', 'like', '%' . $filtros['placa'] . '%');
+        }
+
+        if (!empty($filtros['estado_fisico'])) {
+            $query->where('novedad_estado_fisico', $filtros['estado_fisico']);
+        }
+
+        if (!empty($filtros['desde'])) {
+            $query->whereDate('created_at', '>=', $filtros['desde']);
+        }
+
+        if (!empty($filtros['hasta'])) {
+            $query->whereDate('created_at', '<=', $filtros['hasta']);
+        }
+
+        if (isset($filtros['es_externo'])) {
+            $query->where('es_externo', (bool) $filtros['es_externo']);
+        }
+
+        $registros = $query->get();
+
+        $inicioMes = now()->startOfMonth();
+
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Trazabilidad');
+
+        // Encabezados
+        $headers = [
+            'Placa', 'Serie', 'Artículo Código', 'Artículo Nombre',
+            'Estado Físico', 'Localización', 'Sucursal Origen',
+            'Unidad Funcional', 'Responsable', 'Observación',
+            'Es Externo', 'Inventariado Este Mes', 'Registrado Por',
+            'Fecha Registro',
+        ];
+
+        foreach ($headers as $col => $header) {
+            $sheet->setCellValue([$col + 1, 1], $header);
+        }
+
+        // Estilos encabezado
+        $headerStyle = [
+            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
+            'fill' => [
+                'fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
+                'startColor' => ['rgb' => '4472C4'],
+            ],
+        ];
+        $sheet->getStyle([1, 1, count($headers), 1])->applyFromArray($headerStyle);
+
+        // Datos
+        $row = 2;
+        foreach ($registros as $registro) {
+            $inventariadoEsteMes = $registro->created_at && $registro->created_at->gte($inicioMes) ? 'Sí' : 'No';
+
+            $sheet->setCellValue([1, $row], $registro->placa);
+            $sheet->setCellValue([2, $row], $registro->serie);
+            $sheet->setCellValue([3, $row], $registro->articulo_codigo);
+            $sheet->setCellValue([4, $row], $registro->articulo_nombre);
+            $sheet->setCellValue([5, $row], $registro->novedad_estado_fisico);
+            $sheet->setCellValue([6, $row], $registro->novedad_localizacion);
+            $sheet->setCellValue([7, $row], $registro->sucursal_origen);
+            $sheet->setCellValue([8, $row], $registro->unidad_funcional);
+            $sheet->setCellValue([9, $row], $registro->novedad_responsable);
+            $sheet->setCellValue([10, $row], $registro->observacion);
+            $sheet->setCellValue([11, $row], $registro->es_externo ? 'Sí' : 'No');
+            $sheet->setCellValue([12, $row], $inventariadoEsteMes);
+            $sheet->setCellValue([13, $row], $registro->usuario?->name ?? 'N/A');
+            $sheet->setCellValue([14, $row], $registro->created_at?->format('d/m/Y H:i'));
+
+            $row++;
+        }
+
+        // Auto-size columns
+        foreach (range(1, count($headers)) as $col) {
+            $sheet->getColumnDimensionByColumn($col)->setAutoSize(true);
+        }
+
+        $filename = 'trazabilidad_activos_' . now()->format('Y-m-d_His') . '.xlsx';
+
+        return response()->streamDownload(function () use ($spreadsheet) {
+            $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+            $writer->save('php://output');
+        }, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Cache-Control' => 'max-age=0',
+        ]);
+    }
+
+    // =========================================================================
+    // NOVEDAD EXTERNA (activos que no están en el maestro)
+    // =========================================================================
+
+    /**
+     * Registra un activo encontrado en campo que NO existe en el maestro de Indigo.
+     *
+     * @param  array<string, mixed> $datos Datos ya validados por el controller
+     * @return array{success: bool, data?: InvTrazActivo, message?: string, code?: int}
+     */
+    public function registrarNovedadExterna(User $user, array $datos): array
+    {
+        $placa = trim((string) ($datos['placa'] ?? ''));
+
+        if ($placa === '') {
+            return ['success' => false, 'message' => 'La placa es obligatoria.', 'code' => 422];
+        }
+
+        try {
+            $registro = InvTrazActivo::create([
+                'placa'                  => $placa,
+                'serie'                  => $this->limpiar($datos['serie'] ?? null),
+                'articulo_codigo'        => null,
+                'articulo_nombre'        => $this->limpiar($datos['articulo_nombre'] ?? null),
+                'valores_origen'         => null,
+                'novedad_marca'          => $this->limpiar($datos['marca'] ?? null),
+                'novedad_modelo'         => $this->limpiar($datos['modelo'] ?? null),
+                'novedad_responsable'    => $this->limpiar($datos['responsable'] ?? null),
+                'novedad_localizacion'   => $this->limpiar($datos['localizacion'] ?? null),
+                'novedad_sucursal'       => $this->limpiar($datos['sucursal'] ?? null),
+                'novedad_estado_fisico'  => $this->limpiar($datos['estado_fisico'] ?? null),
+                'observacion'            => $this->limpiar($datos['observacion'] ?? null),
+                'sucursal_origen'        => $this->limpiar($datos['sucursal'] ?? null),
+                'es_externo'             => true,
+                'unidad_funcional'       => $this->limpiar($datos['unidad_funcional'] ?? null),
+                'id_empresa'             => $datos['id_empresa'] ?? null,
+                'id_sucursal'            => $datos['id_sucursal'] ?? null,
+                'registrado_por'         => $user->id,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('ActivoFijoService: error registrando novedad externa', [
+                'placa'   => $placa,
+                'user_id' => $user->id,
+                'error'   => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'No se pudo guardar el activo externo. Intente de nuevo.',
+                'code'    => 500,
+            ];
+        }
+
+        Log::info('ActivoFijoService: novedad externa registrada', [
+            'placa'    => $placa,
+            'traz_id'  => $registro->id,
+            'user'     => $user->email,
+        ]);
+
+        return ['success' => true, 'data' => $this->formatearRegistro($registro->load('usuario:id,name,email'))];
+    }
+
+    // =========================================================================
+    // UNIDADES FUNCIONALES
+    // =========================================================================
+
+    /**
+     * Devuelve la lista única de unidades funcionales combinando:
+     * - novedad_localizacion de inv_traz_activo
+     * - sucursal_origen de inv_traz_activo
+     * - unidad_funcional de inv_traz_activo
+     *
+     * Opcionalmente también incluye las localizaciones de la vista de Fabric.
+     *
+     * @return array{success: bool, data: list<array{valor: string, origen: string}>}
+     */
+    public function unidadesFuncionales(User $user): array
+    {
+        $valores = collect();
+
+        // Desde inv_traz_activo — novedad_localizacion
+        $localizaciones = DB::table('inv_traz_activo')
+            ->distinct()
+            ->whereNotNull('novedad_localizacion')
+            ->where('novedad_localizacion', '!=', '')
+            ->pluck('novedad_localizacion');
+
+        foreach ($localizaciones as $loc) {
+            $valores->push(['valor' => $loc, 'origen' => 'trazabilidad_localizacion']);
+        }
+
+        // Desde inv_traz_activo — sucursal_origen
+        $sucursales = DB::table('inv_traz_activo')
+            ->distinct()
+            ->whereNotNull('sucursal_origen')
+            ->where('sucursal_origen', '!=', '')
+            ->pluck('sucursal_origen');
+
+        foreach ($sucursales as $suc) {
+            $valores->push(['valor' => $suc, 'origen' => 'trazabilidad_sucursal']);
+        }
+
+        // Desde inv_traz_activo — unidad_funcional
+        $unidades = DB::table('inv_traz_activo')
+            ->distinct()
+            ->whereNotNull('unidad_funcional')
+            ->where('unidad_funcional', '!=', '')
+            ->pluck('unidad_funcional');
+
+        foreach ($unidades as $uf) {
+            $valores->push(['valor' => $uf, 'origen' => 'trazabilidad_unidad_funcional']);
+        }
+
+        // Intentar incluir localizaciones de Fabric (si hay cache o la vista responde)
+        try {
+            $fabricLocalizaciones = $this->obtenerLocalizacionesFabric($user);
+            foreach ($fabricLocalizaciones as $loc) {
+                $valores->push(['valor' => $loc, 'origen' => 'fabric_maestro']);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('ActivoFijoService: no se pudieron obtener UFs de Fabric', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        // Deduplicar por valor (case-insensitive), mantener el primer origen
+        $unicos = $valores
+            ->unique(fn ($item) => mb_strtolower(trim($item['valor'])))
+            ->sortBy(fn ($item) => mb_strtolower(trim($item['valor'])))
+            ->values()
+            ->all();
+
+        return ['success' => true, 'data' => $unicos];
+    }
+
+    /**
+     * Obtiene las localizaciones únicas de la vista de Fabric.
+     * Cachea por 30 min para no saturar las queries a Fabric.
+     *
+     * @return list<string>
+     */
+    private function obtenerLocalizacionesFabric(User $user): array
+    {
+        return Cache::remember('activo_fijo:uf_fabric', 1800, function () use ($user) {
+            $resultado = $this->gateway->queryViewData($user, self::SCHEMA, self::VIEW, [
+                'columns'    => [],
+                'filters'    => [],
+                'limit'      => 5000,
+                'offset'     => 0,
+                'sort_col'   => '',
+                'sort_dir'   => 'asc',
+                'skip_count' => true,
+            ]);
+
+            if (!($resultado['success'] ?? false)) {
+                return [];
+            }
+
+            $localizaciones = collect($resultado['data'] ?? [])
+                ->map(function (array $fila) {
+                    $normalizado = $this->normalizar($fila);
+                    return $normalizado['localizacion'] ?? null;
+                })
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            return $localizaciones;
+        });
     }
 
     // =========================================================================
@@ -494,22 +805,24 @@ class ActivoFijoService
     private function formatearRegistro(InvTrazActivo $t): array
     {
         return [
-            'id'              => $t->id,
-            'placa'           => $t->placa,
-            'serie'           => $t->serie,
-            'articulo_codigo' => $t->articulo_codigo,
-            'articulo_nombre' => $t->articulo_nombre,
-            'observacion'     => $t->observacion,
-            'sucursal_origen' => $t->sucursal_origen,
-            'estado_fisico'   => $t->novedad_estado_fisico,
-            'cambios'         => $t->cambios(),
-            'total_cambios'   => count($t->cambios()),
-            'registrado_por'  => [
+            'id'               => $t->id,
+            'placa'            => $t->placa,
+            'serie'            => $t->serie,
+            'articulo_codigo'  => $t->articulo_codigo,
+            'articulo_nombre'  => $t->articulo_nombre,
+            'observacion'      => $t->observacion,
+            'sucursal_origen'  => $t->sucursal_origen,
+            'estado_fisico'    => $t->novedad_estado_fisico,
+            'es_externo'       => (bool) $t->es_externo,
+            'unidad_funcional' => $t->unidad_funcional,
+            'cambios'          => $t->cambios(),
+            'total_cambios'    => count($t->cambios()),
+            'registrado_por'   => [
                 'id'     => $t->usuario?->id,
                 'nombre' => $t->usuario?->name ?? 'Usuario eliminado',
                 'email'  => $t->usuario?->email,
             ],
-            'created_at'      => $t->created_at?->toIso8601String(),
+            'created_at'       => $t->created_at?->toIso8601String(),
             'created_at_human' => $t->created_at?->format('d/m/Y H:i'),
         ];
     }

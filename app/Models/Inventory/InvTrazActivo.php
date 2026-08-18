@@ -71,6 +71,8 @@ class InvTrazActivo extends Model
         'novedad_estado_fisico',
         'observacion',
         'sucursal_origen',
+        'es_externo',
+        'unidad_funcional',
         'id_empresa',
         'id_sucursal',
         'registrado_por',
@@ -78,6 +80,7 @@ class InvTrazActivo extends Model
 
     protected $casts = [
         'valores_origen' => 'array',
+        'es_externo'     => 'boolean',
         'created_at'     => 'datetime',
         'updated_at'     => 'datetime',
     ];
@@ -105,6 +108,12 @@ class InvTrazActivo extends Model
     public function scopeParaBaja(Builder $query): Builder
     {
         return $query->where('novedad_estado_fisico', self::ESTADO_FISICO_BAJA);
+    }
+
+    /** Solo los activos registrados por fuera del maestro de Indigo. */
+    public function scopeExternos(Builder $query): Builder
+    {
+        return $query->where('es_externo', true);
     }
 
     // =========================================================================
