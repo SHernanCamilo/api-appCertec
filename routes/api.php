@@ -448,3 +448,8 @@ Route::prefix('public/tableros/urgencias')->group(function () {
 Route::middleware(['auth:api'])->prefix('tableros')->group(function () {
     require __DIR__ . '/Tableros/TablerosRouter.php';
 });
+
+// Rutas de Mesa de Servicio — Parametrizador GLPI
+Route::middleware(['auth:api', 'check.user.active'])->prefix('mesa-servicio/glpi')->group(function () {
+    require __DIR__ . '/MesaServicio/GlpiParamRouter.php';
+});
