@@ -193,15 +193,20 @@ class CuadroTurnoPermisoController extends Controller
 
     /**
      * GET /api/cuadro-turno-permisos/empresas
-     * Listar todas las empresas de la base de datos
+     * Listar empresas habilitadas para el módulo de Cuadro de Turnos
      */
     public function listarEmpresas(): JsonResponse
     {
         try {
-            $empresas = \DB::table('ent_empresas')
-                ->select('id', 'nombre', 'prefijo')
-                ->orderBy('nombre')
-                ->get();
+            $query = \DB::table('ent_empresas')
+                ->select('id', 'nombre', 'prefijo');
+
+            $empresasHabilitadas = config('cuadro_turnos.empresas_habilitadas', []);
+            if (!empty($empresasHabilitadas)) {
+                $query->whereIn('id', $empresasHabilitadas);
+            }
+
+            $empresas = $query->orderBy('nombre')->get();
 
             return response()->json([
                 'success' => true,

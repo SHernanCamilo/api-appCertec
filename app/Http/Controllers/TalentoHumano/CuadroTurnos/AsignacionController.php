@@ -44,7 +44,7 @@ class AsignacionController extends Controller
     {
         $request->validate([
             'id_cuadro' => 'required|integer|exists:humtal_ct_cuadro,id',
-            'id_empleado' => 'required|integer|exists:users,id',
+            'id_empleado' => 'required|integer|exists:config_person_tercero,id',
             'fecha' => 'required|date',
             'id_plantilla' => 'nullable|integer|exists:humtal_ct_plantillas,id',
             'es_descanso' => 'boolean',

@@ -576,10 +576,10 @@ class CuadroTurnoService
             $fechaInicio = Carbon::createFromDate($anio, $mes, 1)->startOfMonth()->toDateString();
             $fechaFin    = Carbon::createFromDate($anio, $mes, 1)->endOfMonth()->toDateString();
 
-            // Obtener datos del empleado desde users
-            $empleado = \DB::table('users')
+            // Obtener datos del empleado desde config_person_tercero
+            $empleado = \DB::table('config_person_tercero')
                 ->where('id', $idEmpleado)
-                ->select('id', 'name as nombre', 'email')
+                ->select('id', 'nombre', 'email')
                 ->first();
 
             $turnos = $this->obtenerTurnosEmpleado($idEmpleado, $anio, $mes);
