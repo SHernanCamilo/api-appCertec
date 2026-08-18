@@ -44,6 +44,8 @@ Route::prefix('activos-fijos')->group(function () {
 
     Route::get('exportar', [$controller, 'exportar']);
     Route::get('unidades-funcionales', [$controller, 'unidadesFuncionales']);
+    Route::get('empleados', [$controller, 'empleados']);
+    Route::get('centros-costo', [$controller, 'centrosCosto']);
 
     Route::post('novedad', [$controller, 'registrarNovedad']);
     Route::post('novedad-externa', [$controller, 'registrarNovedadExterna']);

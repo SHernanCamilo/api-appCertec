@@ -648,6 +648,129 @@ class ActivoFijoService
         return ['success' => true, 'data' => $unicos];
     }
 
+    // =========================================================================
+    // EMPLEADOS (Fabric: No.VW_Payroll_EmpleadosActivos)
+    // =========================================================================
+
+    /**
+     * Busca empleados activos desde la vista de Fabric.
+     * Devuelve solo documento y nombre completo para los selects de responsable.
+     *
+     * @param  string $busqueda Filtro parcial por nombre o documento
+     * @return array{success: bool, data: list<array{documento: string, nombre: string}>}
+     */
+    public function empleados(User $user, string $busqueda = '', int $limit = 50): array
+    {
+        $cacheKey = 'activo_fijo:empleados:' . md5($busqueda . $limit);
+
+        // Cache 5 min para búsquedas repetidas
+        $cached = Cache::get($cacheKey);
+        if ($cached !== null) {
+            return ['success' => true, 'data' => $cached];
+        }
+
+        $filters = [];
+        if ($busqueda !== '') {
+            // Buscar por nombre o documento (parcial)
+            $filters['Nombres'] = "%{$busqueda}%";
+        }
+
+        $resultado = $this->gateway->queryViewData($user, 'No', 'VW_Payroll_EmpleadosActivos', [
+            'columns'    => ['NumeroIdentificacion', 'Nombres', 'Apellidos'],
+            'filters'    => $filters,
+            'limit'      => $limit,
+            'offset'     => 0,
+            'sort_col'   => 'Apellidos',
+            'sort_dir'   => 'asc',
+            'skip_count' => true,
+        ]);
+
+        if (!($resultado['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => $resultado['message'] ?? 'No se pudo consultar empleados.',
+                'data'    => [],
+            ];
+        }
+
+        $empleados = collect($resultado['data'] ?? [])
+            ->map(function (array $fila) {
+                $doc = $fila['NumeroIdentificacion'] ?? $fila['Numeroidentificacion'] ?? $fila['numeroidentificacion'] ?? '';
+                $nombres = $fila['Nombres'] ?? $fila['nombres'] ?? '';
+                $apellidos = $fila['Apellidos'] ?? $fila['apellidos'] ?? '';
+                $nombreCompleto = trim("{$nombres} {$apellidos}");
+
+                return [
+                    'documento' => (string) $doc,
+                    'nombre'    => $nombreCompleto,
+                ];
+            })
+            ->filter(fn ($e) => $e['nombre'] !== '')
+            ->unique('documento')
+            ->values()
+            ->all();
+
+        Cache::put($cacheKey, $empleados, 300);
+
+        return ['success' => true, 'data' => $empleados];
+    }
+
+    // =========================================================================
+    // CENTROS DE COSTO / UNIDADES FUNCIONALES (Fabric: cp.VW_Payroll_UnidadFuncionales_CC)
+    // =========================================================================
+
+    /**
+     * Obtiene los centros de costo (Unidades Funcionales) desde Fabric.
+     * Devuelve code y UnidadFuncional para poblar el select de localización.
+     *
+     * @return array{success: bool, data: list<array{code: string, unidad_funcional: string}>}
+     */
+    public function centrosCosto(User $user): array
+    {
+        // Cache 30 min — estos datos cambian poco
+        $cached = Cache::get('activo_fijo:centros_costo');
+        if ($cached !== null) {
+            return ['success' => true, 'data' => $cached];
+        }
+
+        $resultado = $this->gateway->queryViewData($user, 'cp', 'VW_Payroll_UnidadFuncionales_CC', [
+            'columns'    => ['code', 'UnidadFuncional'],
+            'filters'    => [],
+            'limit'      => 1000,
+            'offset'     => 0,
+            'sort_col'   => 'UnidadFuncional',
+            'sort_dir'   => 'asc',
+            'skip_count' => true,
+        ]);
+
+        if (!($resultado['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => $resultado['message'] ?? 'No se pudieron obtener los centros de costo.',
+                'data'    => [],
+            ];
+        }
+
+        $centros = collect($resultado['data'] ?? [])
+            ->map(function (array $fila) {
+                $code = $fila['code'] ?? $fila['Code'] ?? '';
+                $uf = $fila['UnidadFuncional'] ?? $fila['unidadfuncional'] ?? $fila['Unidadfuncional'] ?? '';
+
+                return [
+                    'code'             => (string) $code,
+                    'unidad_funcional' => (string) $uf,
+                ];
+            })
+            ->filter(fn ($c) => $c['unidad_funcional'] !== '')
+            ->unique('code')
+            ->values()
+            ->all();
+
+        Cache::put('activo_fijo:centros_costo', $centros, 1800);
+
+        return ['success' => true, 'data' => $centros];
+    }
+
     /**
      * Obtiene las localizaciones únicas de la vista de Fabric.
      * Cachea por 30 min para no saturar las queries a Fabric.

@@ -276,6 +276,45 @@ class InvActivoFijoController extends Controller
         ]);
     }
 
+    // =========================================================================
+    // EMPLEADOS Y CENTROS DE COSTO (Fabric)
+    // =========================================================================
+
+    /**
+     * GET /api/inventario/activos-fijos/empleados?busqueda=MARIA&limit=30
+     *
+     * Busca empleados activos en la vista No.VW_Payroll_EmpleadosActivos.
+     * Devuelve documento y nombre para poblar el select de Responsable.
+     */
+    public function empleados(Request $request): JsonResponse
+    {
+        $request->validate([
+            'busqueda' => 'nullable|string|max:100',
+            'limit'    => 'nullable|integer|min:1|max:200',
+        ]);
+
+        $resultado = $this->activos->empleados(
+            auth()->user(),
+            $request->input('busqueda', ''),
+            (int) $request->input('limit', 50)
+        );
+
+        return response()->json($resultado);
+    }
+
+    /**
+     * GET /api/inventario/activos-fijos/centros-costo
+     *
+     * Obtiene los centros de costo (Unidades Funcionales) desde
+     * cp.VW_Payroll_UnidadFuncionales_CC. Devuelve code + UnidadFuncional.
+     */
+    public function centrosCosto(): JsonResponse
+    {
+        $resultado = $this->activos->centrosCosto(auth()->user());
+
+        return response()->json($resultado);
+    }
+
     /**
      * GET /api/inventory/activos-fijos/opciones
      *
