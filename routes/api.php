@@ -453,3 +453,5 @@ Route::middleware(['auth:api'])->prefix('tableros')->group(function () {
 Route::middleware(['auth:api', 'check.user.active'])->prefix('mesa-servicio/glpi')->group(function () {
     require __DIR__ . '/MesaServicio/GlpiParamRouter.php';
 });
+// ─── Rutas del ChatBot IA → routes/ChatBot/ChatBotRouter.php ─────────────────
+require __DIR__ . '/ChatBot/ChatBotRouter.php';
