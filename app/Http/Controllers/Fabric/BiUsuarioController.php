@@ -34,7 +34,7 @@ class BiUsuarioController extends Controller
 
             $syncResult = null;
             if ($request->boolean('sync')) {
-                $syncResult = $this->userGrupSyncService->syncFromAzureOnLogin($user);
+                $syncResult = $this->userGrupSyncService->syncFromAzureOnLogin($user, true);
             }
 
             $data = $this->permisosService->getPermisos($user, $empresaId);

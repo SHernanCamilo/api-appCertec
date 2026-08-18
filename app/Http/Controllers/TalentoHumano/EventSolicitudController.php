@@ -293,6 +293,11 @@ class EventSolicitudController extends Controller
                 'message' => 'Solicitud actualizada',
                 'data'    => $solicitud,
             ]);
+        } catch (\RuntimeException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
         } catch (\Exception $e) {
             return $this->error('Error al actualizar la solicitud', $e);
         }

@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services\Inventory;
+namespace App\Services\Inventory\Pharmacy;
 
 use App\Models\Inventory\InvOrdenCompra;
 use App\Models\Inventory\InvOrdenCompraDetalle;
@@ -11,6 +11,7 @@ use App\Models\Inventory\InvIndigoItem;
 use App\Models\Inventory\InvIndigoTrazabilidad;
 use App\Models\Inventory\InvIndigoEvento;
 use App\Models\Inventory\InvCompraAuditoria;
+use App\Services\Inventory\FabricInventoryService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 

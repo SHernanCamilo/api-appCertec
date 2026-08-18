@@ -6,9 +6,11 @@ use App\Models\User;
 use App\Services\Tenant\TenantPersonaSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 
 class UserController extends Controller
 {
@@ -400,7 +402,7 @@ class UserController extends Controller
         $accion = $request->estado ? 'activado' : 'inactivado';
         
         // Log de auditoría
-        \Log::info("Usuario {$accion}", [
+        Log::info("Usuario {$accion}", [
             'usuario_modificado' => $user->email,
             'modificado_por' => auth()->user()->email,
             'estado_anterior' => $estadoAnterior,
@@ -423,19 +425,19 @@ class UserController extends Controller
      */
     public function obtenerUsuariosTenant(Request $request)
     {
-        \Log::info('🔍 Iniciando obtenerUsuariosTenant');
+        Log::info('🔍 Iniciando obtenerUsuariosTenant');
         
         try {
             // Verificar permisos (solo usuarios autenticados por ahora)
             $user = auth()->user();
             if (!$user) {
-                \Log::error('❌ Usuario no autenticado');
+                Log::error('❌ Usuario no autenticado');
                 return response()->json([
                     'message' => 'No tienes permisos para sincronizar usuarios del tenant'
                 ], 403);
             }
 
-            \Log::info('✅ Usuario autenticado:', ['user' => $user->email]);
+            Log::info('✅ Usuario autenticado:', ['user' => $user->email]);
 
             // Obtener el tenant solicitado (medilaser o jersalud)
             $tenantType = $request->query('tenant', 'medilaser');
@@ -446,15 +448,22 @@ class UserController extends Controller
             $clientSecret = config('services.microsoft.client_secret');
             
             if ($tenantType === 'jersalud') {
-                $tenantId = env('MICROSOFT_JERSALUD_TENANT_ID');
+                $tenantId = config('services.microsoft.jersalud_tenant_id');
                 $tenantName = 'Jersalud';
             } else {
                 // Para Medilaser usamos el tenant específico, NO 'common'
-                $tenantId = env('MICROSOFT_MEDILASER_TENANT_ID');
+                $tenantId = config('services.microsoft.medilaser_tenant_id');
                 $tenantName = 'Medilaser';
             }
 
-            \Log::info('🔧 Configuración Microsoft:', [
+            if (!$tenantId) {
+                Log::error('❌ Tenant ID no configurado', ['tenant_type' => $tenantType]);
+                return response()->json([
+                    'message' => "Tenant ID de {$tenantName} no está configurado en el servidor"
+                ], 500);
+            }
+
+            Log::info('🔧 Configuración Microsoft:', [
                 'tenant_type' => $tenantType,
                 'tenant_name' => $tenantName,
                 'client_id' => $clientId ? 'Configurado' : 'No configurado',
@@ -463,7 +472,7 @@ class UserController extends Controller
             ]);
 
             if (!$clientId || !$clientSecret) {
-                \Log::error('❌ Microsoft Graph API no configurado');
+                Log::error('❌ Microsoft Graph API no configurado');
                 return response()->json([
                     'message' => 'Microsoft Graph API no está configurado correctamente'
                 ], 500);
@@ -479,17 +488,17 @@ class UserController extends Controller
                 'grant_type' => 'client_credentials'
             ];
 
-            \Log::info('🔑 Solicitando token a Microsoft Graph');
+            Log::info('🔑 Solicitando token a Microsoft Graph');
             $tokenResponse = $this->makeHttpRequest($tokenUrl, 'POST', $tokenData);
             
             if (!$tokenResponse || !isset($tokenResponse['access_token'])) {
-                \Log::error('❌ Error al obtener token:', ['response' => $tokenResponse]);
+                Log::error('❌ Error al obtener token:', ['response' => $tokenResponse]);
                 return response()->json([
                     'message' => 'Error al obtener token de Microsoft Graph'
                 ], 500);
             }
 
-            \Log::info('✅ Token obtenido exitosamente');
+            Log::info('✅ Token obtenido exitosamente');
             $accessToken = $tokenResponse['access_token'];
 
             // Obtener TODOS los usuarios del tenant usando paginación
@@ -504,24 +513,24 @@ class UserController extends Controller
             $pageCount = 0;
             $maxPages = 50; // Límite de seguridad para evitar loops infinitos
 
-            \Log::info('👥 Iniciando carga paginada de usuarios del tenant');
+            Log::info('👥 Iniciando carga paginada de usuarios del tenant');
 
             // Loop para obtener todas las páginas de usuarios
             while ($usersUrl && $pageCount < $maxPages) {
                 $pageCount++;
-                \Log::info("📄 Cargando página {$pageCount} de usuarios", ['url' => $usersUrl]);
+                Log::info("📄 Cargando página {$pageCount} de usuarios", ['url' => $usersUrl]);
 
                 $usersResponse = $this->makeHttpRequest($usersUrl, 'GET', null, $headers);
 
                 if (!$usersResponse || !isset($usersResponse['value'])) {
-                    \Log::error('❌ Error al obtener usuarios en página ' . $pageCount, ['response' => $usersResponse]);
+                    Log::error('❌ Error al obtener usuarios en página ' . $pageCount, ['response' => $usersResponse]);
                     break;
                 }
 
                 $pageUsers = $usersResponse['value'];
                 $allTenantUsers = array_merge($allTenantUsers, $pageUsers);
                 
-                \Log::info("✅ Página {$pageCount} cargada", [
+                Log::info("✅ Página {$pageCount} cargada", [
                     'usuarios_en_pagina' => count($pageUsers),
                     'total_acumulado' => count($allTenantUsers)
                 ]);
@@ -529,21 +538,21 @@ class UserController extends Controller
                 // Verificar si hay más páginas
                 if (isset($usersResponse['@odata.nextLink'])) {
                     $usersUrl = $usersResponse['@odata.nextLink'];
-                    \Log::info('➡️ Hay más páginas, continuando...');
+                    Log::info('➡️ Hay más páginas, continuando...');
                 } else {
                     $usersUrl = null;
-                    \Log::info('🏁 No hay más páginas, carga completa');
+                    Log::info('🏁 No hay más páginas, carga completa');
                 }
             }
 
             $tenantUsers = $allTenantUsers;
-            \Log::info('📊 Total de usuarios obtenidos del tenant:', [
+            Log::info('📊 Total de usuarios obtenidos del tenant:', [
                 'count' => count($tenantUsers),
                 'paginas_procesadas' => $pageCount
             ]);
             
             $existingUsers = User::pluck('email')->toArray();
-            \Log::info('📊 Usuarios existentes en la app:', ['count' => count($existingUsers)]);
+            Log::info('📊 Usuarios existentes en la app:', ['count' => count($existingUsers)]);
 
             // Procesar usuarios del tenant
             $usuariosDisponibles = [];
@@ -566,11 +575,11 @@ class UserController extends Controller
                         'exists_in_app' => false
                     ];
                 } else {
-                    \Log::info('🚫 Usuario ya existe en la app:', ['email' => $email]);
+                    Log::info('🚫 Usuario ya existe en la app:', ['email' => $email]);
                 }
             }
 
-            \Log::info('✅ Procesamiento completado:', [
+            Log::info('✅ Procesamiento completado:', [
                 'total_tenant_users' => count($tenantUsers),
                 'usuarios_disponibles' => count($usuariosDisponibles)
             ]);
@@ -586,7 +595,7 @@ class UserController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            \Log::error('💥 Error en obtenerUsuariosTenant:', [
+            Log::error('💥 Error en obtenerUsuariosTenant:', [
                 'error' => $e->getMessage(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
@@ -640,16 +649,15 @@ class UserController extends Controller
             $usuariosCreados = [];
             $tercerosSync = [];
             $errores = [];
-            $idEmpresa = (int) (
-                $request->input('id_empresa')
-                ?? auth()->user()?->empresas()->value('ent_empresas.id')
-                ?? 1
-            );
+            /** @var User|null $authUser */
+            $authUser = auth()->user();
+            $empresaIdAuth = $authUser ? $authUser->empresas()->value('ent_empresas.id') : null;
+            $idEmpresa = (int) ($request->input('id_empresa') ?? $empresaIdAuth ?? 1);
 
             foreach ($request->usuarios as $userData) {
                 try {
                     [$newUser, $terceroResult] = DB::transaction(function () use ($userData, $idEmpresa) {
-                        $randomPassword = \Str::random(16);
+                        $randomPassword = Str::random(16);
 
                         $newUser = User::create([
                             'name' => $userData['name'],
@@ -700,7 +708,7 @@ class UserController extends Controller
             }
 
             // Log de auditoría
-            \Log::info('Sincronización de usuarios del tenant:', [
+            Log::info('Sincronización de usuarios del tenant:', [
                 'sincronizado_por' => auth()->user()->email,
                 'usuarios_creados' => count($usuariosCreados),
                 'terceros_sync' => $tercerosSync,
@@ -718,7 +726,7 @@ class UserController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            \Log::error('Error en sincronización de usuarios del tenant:', [
+            Log::error('Error en sincronización de usuarios del tenant:', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -735,7 +743,7 @@ class UserController extends Controller
      */
     private function makeHttpRequest($url, $method = 'GET', $data = null, $headers = [])
     {
-        \Log::info('🌐 Realizando petición HTTP:', [
+        Log::info('🌐 Realizando petición HTTP:', [
             'url' => $url,
             'method' => $method,
             'has_data' => !is_null($data),
@@ -758,10 +766,10 @@ class UserController extends Controller
             if (is_array($data)) {
                 $postData = http_build_query($data);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
-                \Log::info('📤 Datos POST:', ['data' => $postData]);
+                Log::info('📤 Datos POST:', ['data' => $postData]);
             } else {
                 curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
-                \Log::info('📤 Datos POST (raw):', ['data' => $data]);
+                Log::info('📤 Datos POST (raw):', ['data' => $data]);
             }
         }
 
@@ -770,7 +778,7 @@ class UserController extends Controller
         $curlError = curl_error($ch);
         curl_close($ch);
 
-        \Log::info('📥 Respuesta HTTP:', [
+        Log::info('📥 Respuesta HTTP:', [
             'http_code' => $httpCode,
             'curl_error' => $curlError,
             'response_length' => strlen($response),
@@ -778,16 +786,16 @@ class UserController extends Controller
         ]);
 
         if ($curlError) {
-            \Log::error('❌ Error cURL:', ['error' => $curlError]);
+            Log::error('❌ Error cURL:', ['error' => $curlError]);
             return null;
         }
 
         if ($httpCode >= 200 && $httpCode < 300) {
             $decodedResponse = json_decode($response, true);
-            \Log::info('✅ Respuesta decodificada exitosamente');
+            Log::info('✅ Respuesta decodificada exitosamente');
             return $decodedResponse;
         } else {
-            \Log::error('❌ Código HTTP de error:', [
+            Log::error('❌ Código HTTP de error:', [
                 'code' => $httpCode,
                 'response' => $response
             ]);
@@ -846,7 +854,7 @@ class UserController extends Controller
         }
 
         // Obtener asignaciones actuales en BD
-        $actuales = \DB::table('seg_empresa_user')
+        $actuales = DB::table('seg_empresa_user')
             ->where('user_id', $user->id)
             ->get();
 
@@ -864,17 +872,17 @@ class UserController extends Controller
             }
         }
 
-        \DB::transaction(function () use ($user, $idsEliminar, $nuevasAsignaciones, $keysExistentes) {
+        DB::transaction(function () use ($user, $idsEliminar, $nuevasAsignaciones, $keysExistentes) {
             // Eliminar los que ya no aplican
             if (!empty($idsEliminar)) {
-                \DB::table('seg_empresa_user')->whereIn('id', $idsEliminar)->delete();
+                DB::table('seg_empresa_user')->whereIn('id', $idsEliminar)->delete();
             }
 
             // Insertar o actualizar
             foreach ($nuevasAsignaciones as $key => $data) {
                 if (isset($keysExistentes[$key])) {
                     // Actualizar solo el campo recursivo (y sede si cambió)
-                    \DB::table('seg_empresa_user')
+                    DB::table('seg_empresa_user')
                         ->where('id', $keysExistentes[$key])
                         ->update([
                             'id_sede'    => $data['id_sede'],
@@ -883,7 +891,7 @@ class UserController extends Controller
                         ]);
                 } else {
                     // Insertar nuevo registro
-                    \DB::table('seg_empresa_user')->insert($data);
+                    DB::table('seg_empresa_user')->insert($data);
                 }
             }
         });
@@ -891,7 +899,7 @@ class UserController extends Controller
     public function tercerosYUsuariosPorEmpresa($empresaId)
     {
         // UNION: Terceros + Users (deduplicados por numero_identificacion)
-        $resultados = \DB::select("
+        $resultados = DB::select("
             SELECT t.id, t.nombre AS name, t.email, t.numero_identificacion, 'tercero' AS tipo
             FROM config_person_tercero t
             WHERE t.id_empresa = ? AND t.estado = 1

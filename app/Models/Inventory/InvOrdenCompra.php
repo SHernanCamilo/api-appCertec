@@ -13,8 +13,8 @@ class InvOrdenCompra extends Model
     protected $table = 'inv_ordenes_compra';
 
     protected $fillable = [
-        'numero_orden_compra', 'fecha_orden', 'observaciones', 'estado',
-        'sincronizado_indigo', 'creado_por', 'oc_indigo'
+        'numero_orden_compra', 'fecha_orden', 'observaciones', 'proveedor_nombre',
+        'estado', 'sincronizado_indigo', 'creado_por', 'oc_indigo'
     ];
 
     public function detalles()

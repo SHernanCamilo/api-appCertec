@@ -1,8 +1,9 @@
 <?php
 
-namespace App\Services\Inventory;
+namespace App\Services\Inventory\Pharmacy;
 
 use App\Models\Inventory\InvProducto;
+use App\Services\Inventory\FabricInventoryService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
 

@@ -1,11 +1,11 @@
 <?php
 
-namespace App\Services\Inventory;
+namespace App\Services\Inventory\Pharmacy;
 
 use App\Models\Inventory\InvPedido;
 use App\Models\Inventory\InvPedidoDetalle;
 use App\Models\Inventory\InvPedidoTrazabilidad;
-use App\Services\Inventory\InvSequenceService;
+use App\Services\Inventory\Pharmacy\InvSequenceService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 

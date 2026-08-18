@@ -136,7 +136,7 @@ class GLPIService
             }
         }
 
-        return $response->json();
+        return $response->json() ?? [];
     }
 
     /**
@@ -316,6 +316,160 @@ class GLPIService
     public function getItems(string $itemType, array $params = []): array
     {
         return $this->get("/{$itemType}", $params);
+    }
+
+    /**
+     * Recorre el rango de la API REST de GLPI hasta agotar los registros.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function getAllItems(string $itemType, array $params = [], int $pageSize = 200): array
+    {
+        $all = [];
+        $start = 0;
+        $params['get_hateoas'] = $params['get_hateoas'] ?? false;
+        $params['expand_dropdowns'] = $params['expand_dropdowns'] ?? false;
+
+        while ($start < 15000) {
+            $end = $start + $pageSize - 1;
+            $pageParams = array_merge($params, ['range' => "{$start}-{$end}"]);
+
+            try {
+                $batch = $this->get("/{$itemType}", $pageParams);
+            } catch (Exception $e) {
+                $mensaje = $e->getMessage();
+                if (
+                    str_contains($mensaje, 'ERROR_RANGE_EXCEED_TOTAL')
+                    || str_contains($mensaje, 'ERROR_GLPI_RANGE')
+                ) {
+                    break;
+                }
+                throw $e;
+            }
+
+            $rows = $this->normalizeCollection($batch);
+            if ($rows === []) {
+                break;
+            }
+
+            foreach ($rows as $row) {
+                if (is_array($row) && isset($row['id'])) {
+                    $all[] = $row;
+                }
+            }
+
+            if (count($rows) < $pageSize) {
+                break;
+            }
+
+            $start += $pageSize;
+        }
+
+        return $all;
+    }
+
+    /**
+     * Recorre /search/{itemType} y mapea columnas de search options a nombres.
+     *
+     * @param  list<int|string>  $forcedisplay
+     * @param  array<int|string, string>  $columnMap  search option id => nombre de campo
+     * @param  list<array{field: int|string, searchtype?: string, value?: mixed, link?: string}>  $criteria
+     * @return list<array<string, mixed>>
+     */
+    public function searchAllItems(
+        string $itemType,
+        array $forcedisplay,
+        array $columnMap,
+        int $pageSize = 400,
+        array $criteria = []
+    ): array {
+        $all = [];
+        $start = 0;
+        $params = [];
+        foreach (array_values($forcedisplay) as $i => $fieldId) {
+            $params['forcedisplay['.$i.']'] = $fieldId;
+        }
+        foreach (array_values($criteria) as $i => $criterio) {
+            $params['criteria['.$i.'][field]'] = $criterio['field'];
+            $params['criteria['.$i.'][searchtype]'] = $criterio['searchtype'] ?? 'equals';
+            $params['criteria['.$i.'][value]'] = $criterio['value'] ?? '';
+            if ($i > 0) {
+                $params['criteria['.$i.'][link]'] = $criterio['link'] ?? 'AND';
+            }
+        }
+
+        while ($start < 20000) {
+            $end = $start + $pageSize - 1;
+            try {
+                $batch = $this->get("/search/{$itemType}", array_merge($params, [
+                    'range' => "{$start}-{$end}",
+                ]));
+            } catch (Exception $e) {
+                $mensaje = $e->getMessage();
+                if (
+                    str_contains($mensaje, 'ERROR_RANGE_EXCEED_TOTAL')
+                    || str_contains($mensaje, 'ERROR_GLPI_RANGE')
+                ) {
+                    break;
+                }
+                throw $e;
+            }
+
+            $rows = is_array($batch['data'] ?? null) ? $batch['data'] : [];
+            $total = (int) ($batch['totalcount'] ?? 0);
+
+            foreach ($rows as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+                $mapped = [];
+                foreach ($columnMap as $fieldId => $nombre) {
+                    $mapped[$nombre] = $row[$fieldId] ?? $row[(string) $fieldId] ?? null;
+                }
+                if (isset($mapped['id'])) {
+                    $mapped['id'] = (int) $mapped['id'];
+                }
+                $all[] = $mapped;
+            }
+
+            $start += $pageSize;
+            if ($rows === [] || $start >= $total || count($rows) < $pageSize) {
+                break;
+            }
+        }
+
+        return $all;
+    }
+
+    /**
+     * Normaliza listados de GLPI (array plano, {data}, {myentities} o un solo item).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function normalizeCollection(mixed $batch): array
+    {
+        if (! is_array($batch) || $batch === []) {
+            return [];
+        }
+
+        if (isset($batch['myentities']) && is_array($batch['myentities'])) {
+            return array_values($batch['myentities']);
+        }
+
+        if (isset($batch['data']) && is_array($batch['data'])) {
+            return array_values($batch['data']);
+        }
+
+        if (isset($batch['id']) && ! array_key_exists(0, $batch)) {
+            return [$batch];
+        }
+
+        $values = array_values($batch);
+        if ($values !== [] && is_array($values[0])) {
+            return $values;
+        }
+
+        return [];
     }
 
     /**

@@ -49,7 +49,8 @@ Route::middleware(['auth:api'])->group(function () {
     // =========================================================================
     Route::get('unidades-funcionales/del-usuario', [UnidadFuncionalController::class, 'delUsuario']);
     Route::get('unidades-funcionales/{id}/empleados', [UnidadFuncionalController::class, 'empleados']);
-    Route::apiResource('unidades-funcionales', UnidadFuncionalController::class);
+    Route::apiResource('unidades-funcionales', UnidadFuncionalController::class)
+        ->names('turnos.unidades-funcionales');
 
     // =========================================================================
     // PLANTILLAS DE TURNO

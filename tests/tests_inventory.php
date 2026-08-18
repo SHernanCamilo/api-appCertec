@@ -99,12 +99,12 @@ foreach ($models as $model) {
 echo "\n── 4. Resolución de Servicios ────────────────────────────────────\n";
 
 $services = [
-    'App\Services\Inventory\InvimaService',
+    'App\Services\Inventory\Pharmacy\InvimaService',
     'App\Services\Inventory\GraphQLClientService',
-    'App\Services\Inventory\InvProductoService',
-    'App\Services\Inventory\InvPedidoService',
-    'App\Services\Inventory\InvOrdenCompraService',
-    'App\Services\Inventory\InvRecepcionService',
+    'App\Services\Inventory\Pharmacy\InvProductoService',
+    'App\Services\Inventory\Pharmacy\InvPedidoService',
+    'App\Services\Inventory\Pharmacy\InvOrdenCompraService',
+    'App\Services\Inventory\Pharmacy\InvRecepcionService',
 ];
 
 foreach ($services as $service) {
@@ -170,7 +170,7 @@ try {
 echo "\n── 7. Prueba INVIMA (datos.gov.co) ──────────────────────────────\n";
 
 try {
-    $invima = app('App\Services\Inventory\InvimaService');
+    $invima = app('App\Services\Inventory\Pharmacy\InvimaService');
     $result = $invima->searchProduct('DOLEX');
     
     if (isset($result['success']) && $result['success'] === true) {

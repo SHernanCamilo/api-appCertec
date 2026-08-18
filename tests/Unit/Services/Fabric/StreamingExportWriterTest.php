@@ -47,6 +47,22 @@ final class StreamingExportWriterTest extends TestCase
         return new StreamingExportWriter($this->tmpDir, $baseName, 'ca', 'VW_Portfolio_Test');
     }
 
+    /**
+     * Umbral real de la clase. Se lee por reflexión para que los tests no
+     * queden desfasados cuando se ajusta la constante.
+     */
+    private function threshold(): int
+    {
+        return (new \ReflectionClass(StreamingExportWriter::class))
+            ->getConstant('XLSX_THRESHOLD');
+    }
+
+    /** Cantidad mínima de filas que fuerza la salida en CSV. */
+    private function rowsForCsv(int $extra = 1): int
+    {
+        return $this->threshold() + $extra;
+    }
+
     // =========================================================================
     // Formato según tamaño
     // =========================================================================
@@ -71,14 +87,14 @@ final class StreamingExportWriterTest extends TestCase
         $writer = $this->makeWriter();
 
         // 20.001 filas: una más que el umbral
-        for ($i = 0; $i < 20001; $i++) {
+        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
             $writer->writeRow(['Id' => $i, 'Nombre' => "Fila {$i}"]);
         }
 
         $result = $writer->finish();
 
         $this->assertSame('csv', $result->format);
-        $this->assertSame(20001, $result->rows);
+        $this->assertSame($this->rowsForCsv(), $result->rows);
         $this->assertFileExists($result->path);
         $this->assertStringEndsWith('.csv', $result->filename);
     }
@@ -87,14 +103,14 @@ final class StreamingExportWriterTest extends TestCase
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0; $i < 20000; $i++) {
+        for ($i = 0, $n = $this->threshold(); $i < $n; $i++) {
             $writer->writeRow(['Id' => $i]);
         }
 
         $result = $writer->finish();
 
         $this->assertSame('xlsx', $result->format);
-        $this->assertSame(20000, $result->rows);
+        $this->assertSame($this->threshold(), $result->rows);
     }
 
     // =========================================================================
@@ -126,7 +142,7 @@ final class StreamingExportWriterTest extends TestCase
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0; $i < 20001; $i++) {
+        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
             $writer->writeRow(['Nro_Cuenta' => '036004835', 'Valor' => 100]);
         }
 
@@ -141,7 +157,7 @@ final class StreamingExportWriterTest extends TestCase
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0; $i < 20001; $i++) {
+        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
             $writer->writeRow(['A' => 1]);
         }
 
@@ -149,29 +165,30 @@ final class StreamingExportWriterTest extends TestCase
         $inicio = (string) file_get_contents($result->path, false, null, 0, 20);
 
         $this->assertStringStartsWith("\xEF\xBB\xBF", $inicio, 'Falta el BOM UTF-8');
-        $this->assertStringContainsString('sep=;', $inicio);
     }
 
     public function test_csv_escribe_la_cabecera_una_sola_vez(): void
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0; $i < 20005; $i++) {
+        $total = $this->rowsForCsv(5);
+
+        for ($i = 0; $i < $total; $i++) {
             $writer->writeRow(['Codigo' => "C{$i}", 'Cantidad' => $i]);
         }
 
         $result = $writer->finish();
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        // 1 línea sep= + 1 cabecera + 20005 datos
-        $this->assertCount(20007, $lineas);
+        // 1 cabecera + $total datos (ya no hay línea sep=)
+        $this->assertCount($total + 1, $lineas);
         $this->assertSame(1, substr_count(implode("\n", $lineas), 'Cantidad'));
     }
 
     public function test_no_pierde_filas_al_cruzar_el_umbral(): void
     {
         $writer = $this->makeWriter();
-        $total  = 20050;
+        $total  = $this->rowsForCsv(50);
 
         for ($i = 0; $i < $total; $i++) {
             $writer->writeRow(['Id' => $i]);
@@ -180,8 +197,8 @@ final class StreamingExportWriterTest extends TestCase
         $result = $writer->finish();
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        // Restamos sep= y cabecera
-        $this->assertCount($total, array_slice($lineas, 2));
+        // Restamos cabecera
+        $this->assertCount($total, array_slice($lineas, 1));
         $this->assertSame($total, $result->rows);
     }
 
@@ -190,7 +207,7 @@ final class StreamingExportWriterTest extends TestCase
         $writer = $this->makeWriter();
 
         // Fabric puede devolver las claves en otro orden en filas posteriores
-        for ($i = 0; $i < 20001; $i++) {
+        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
             $writer->writeRow($i === 0
                 ? ['A' => 'a1', 'B' => 'b1']
                 : ['B' => "b{$i}", 'A' => "a{$i}"]);
@@ -200,36 +217,36 @@ final class StreamingExportWriterTest extends TestCase
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
         // La columna A siempre va primero, según la cabecera
-        $this->assertSame('a1;b1', $lineas[2]);
-        $this->assertSame('a2;b2', $lineas[4]);
+        $this->assertSame('a1,b1', $lineas[1]);
+        $this->assertSame('a2,b2', $lineas[3]);
     }
 
     public function test_rellena_columnas_ausentes(): void
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0; $i < 20001; $i++) {
+        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
             $writer->writeRow($i === 0 ? ['A' => 1, 'B' => 2] : ['A' => 1]);
         }
 
         $result = $writer->finish();
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        $this->assertSame('1;', $lineas[3], 'La columna ausente debe quedar vacía, no desplazar');
+        $this->assertSame('1,', $lineas[2], 'La columna ausente debe quedar vacía, no desplazar');
     }
 
     public function test_limpia_saltos_de_linea_para_no_romper_el_csv(): void
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0; $i < 20001; $i++) {
+        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
             $writer->writeRow(['Descripcion' => "LINEA1\nLINEA2", 'Id' => $i]);
         }
 
         $result = $writer->finish();
         $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        $this->assertCount(20003, $lineas, 'Los saltos internos no deben crear filas extra');
+        $this->assertCount($this->rowsForCsv() + 1, $lineas, 'Los saltos internos no deben crear filas extra');
     }
 
     // =========================================================================
@@ -241,13 +258,13 @@ final class StreamingExportWriterTest extends TestCase
         $writer = $this->makeWriter();
 
         // Reproduce VW_Inventory_AlmacenesPivot_315_Cmi
-        for ($i = 0; $i < 20001; $i++) {
+        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
             $writer->writeRow(['315' => 1, '051' => 54, 'Producto' => 'ALOPURINOL']);
         }
 
         $result = $writer->finish();
 
-        $this->assertSame(20001, $result->rows);
+        $this->assertSame($this->rowsForCsv(), $result->rows);
         $this->assertFileExists($result->path);
 
         $cabecera = (string) file_get_contents($result->path, false, null, 0, 100);
@@ -292,7 +309,7 @@ final class StreamingExportWriterTest extends TestCase
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0; $i < 20001; $i++) {
+        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
             $writer->writeRow(['Id' => $i]);
         }
 
@@ -380,5 +397,139 @@ final class StreamingExportWriterTest extends TestCase
         $result = new ExportResult('/tmp/x.csv', 'x.csv', 'csv', 100, 5 * 1024 * 1024);
 
         $this->assertSame('5 MB', $result->humanSize());
+    }
+
+    // =========================================================================
+    // fromCsvFile — ruta de R2/DuckDB
+    // =========================================================================
+
+    /**
+     * Regresión: el post-procesamiento con PhpSpreadsheet leía solo las primeras
+     * 50 filas (para estimar anchos) y luego guardaba sobre el mismo archivo,
+     * borrando el resto del dataset. Todo export salía con 50 filas.
+     */
+    public function test_from_csv_file_conserva_todas_las_filas(): void
+    {
+        $total   = 500;
+        $csvPath = $this->tmpDir . '/origen.csv';
+
+        if (!is_dir($this->tmpDir)) {
+            mkdir($this->tmpDir, 0775, true);
+        }
+
+        $handle = fopen($csvPath, 'w');
+        fwrite($handle, "Id;Nombre;Valor\r\n");
+        for ($i = 1; $i <= $total; $i++) {
+            fwrite($handle, "{$i};FILA {$i};100\r\n");
+        }
+        fclose($handle);
+
+        $result = StreamingExportWriter::fromCsvFile(
+            $csvPath,
+            $this->tmpDir,
+            'export_completo',
+            'dt',
+            'VW_Test'
+        );
+
+        $this->assertSame('xlsx', $result->format);
+        $this->assertSame($total, $result->rows, 'El xlsx debe conservar todas las filas');
+
+        // Verificar en el archivo real, no solo en el contador
+        $filasLeidas = $this->contarFilasXlsx($result->path);
+        $this->assertSame(
+            $total + 1,
+            $filasLeidas,
+            'El xlsx en disco debe tener las filas de datos + la cabecera'
+        );
+
+        @unlink($result->path);
+        $this->limpiarTempOpenSpout();
+    }
+
+    /**
+     * Regresión: una llave numérica de 37 dígitos se casteaba a float y salía
+     * como 6,00621E+36; si excedía el rango del double salía como INF.
+     */
+    public function test_from_csv_file_no_corrompe_numeros_largos(): void
+    {
+        $llave   = '6006205000000000000000000000000000001';
+        $csvPath = $this->tmpDir . '/origen.csv';
+
+        if (!is_dir($this->tmpDir)) {
+            mkdir($this->tmpDir, 0775, true);
+        }
+
+        file_put_contents($csvPath, "Llave;Identificacion;Valor\r\n{$llave};036004835;1500\r\n");
+
+        $result = StreamingExportWriter::fromCsvFile(
+            $csvPath,
+            $this->tmpDir,
+            'export_llaves',
+            'dt',
+            'VW_Test'
+        );
+
+        $primeraFila = $this->primeraFilaDatosXlsx($result->path);
+
+        $this->assertSame($llave, (string) $primeraFila[0], 'La llave larga debe salir íntegra');
+        $this->assertSame('036004835', (string) $primeraFila[1], 'El cero inicial debe conservarse');
+        $this->assertSame(1500.0, (float) $primeraFila[2], 'Los números normales siguen siendo números');
+
+        @unlink($result->path);
+        $this->limpiarTempOpenSpout();
+    }
+
+    private function contarFilasXlsx(string $path): int
+    {
+        $reader = new \OpenSpout\Reader\XLSX\Reader();
+        $reader->open($path);
+
+        $filas = 0;
+        foreach ($reader->getSheetIterator() as $sheet) {
+            foreach ($sheet->getRowIterator() as $row) {
+                $filas++;
+            }
+            break;
+        }
+        $reader->close();
+
+        return $filas;
+    }
+
+    /**
+     * @return list<mixed>
+     */
+    private function primeraFilaDatosXlsx(string $path): array
+    {
+        $reader = new \OpenSpout\Reader\XLSX\Reader();
+        $reader->open($path);
+
+        $fila  = [];
+        $index = 0;
+        foreach ($reader->getSheetIterator() as $sheet) {
+            foreach ($sheet->getRowIterator() as $row) {
+                $index++;
+                if ($index === 2) {
+                    $fila = $row->toArray();
+                    break;
+                }
+            }
+            break;
+        }
+        $reader->close();
+
+        return $fila;
+    }
+
+    private function limpiarTempOpenSpout(): void
+    {
+        $temp = $this->tmpDir . '/openspout_temp';
+        if (is_dir($temp)) {
+            foreach (glob($temp . '/*') ?: [] as $f) {
+                @unlink($f);
+            }
+            @rmdir($temp);
+        }
     }
 }

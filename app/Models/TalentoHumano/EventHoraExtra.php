@@ -41,6 +41,33 @@ class EventHoraExtra extends Model
         'fecha_solicitud' => 'datetime',
     ];
 
+    /** Alias que consume el frontend al editar/listar solicitudes. */
+    protected $appends = ['empleado_id', 'novedad_id', 'aprobador_id', 'empleado_cubre_id'];
+
+    public function getEmpleadoIdAttribute(): ?int
+    {
+        $valor = $this->attributes['id_user_nov'] ?? null;
+        return $valor !== null ? (int) $valor : null;
+    }
+
+    public function getNovedadIdAttribute(): ?int
+    {
+        $valor = $this->attributes['id_motivo_evento'] ?? null;
+        return $valor !== null ? (int) $valor : null;
+    }
+
+    public function getAprobadorIdAttribute(): ?int
+    {
+        $valor = $this->attributes['id_user_aprobador'] ?? null;
+        return $valor !== null ? (int) $valor : null;
+    }
+
+    public function getEmpleadoCubreIdAttribute(): ?int
+    {
+        $valor = $this->attributes['id_user_cubre'] ?? null;
+        return $valor !== null ? (int) $valor : null;
+    }
+
     public function empleado()
     {
         return $this->belongsTo(Empleado::class, 'id_user_nov');

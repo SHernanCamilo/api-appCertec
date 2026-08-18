@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services\Inventory;
+namespace App\Services\Inventory\Pharmacy;
 
 use App\Services\SecuenciaNumericaService;
 use App\Models\Modulo;
