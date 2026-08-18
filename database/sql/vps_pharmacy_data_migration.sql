@@ -7254,6 +7254,14 @@ INSERT IGNORE INTO `inv_muestreo_exclusiones` (`id`, `codigo_producto`, `nombre_
 (261, '20051749-1', 'IBANDRONICO ACIDO 6MG/6ML SOLUCION INYECTABLE', 'ALTO COSTO', 1, '2026-03-20 19:47:29'),
 (262, '19947719-1', 'INMUNOGLOBULINA HUMANA ANTI D 300MCG/2ML POLVO ESTERIL PARA RECONSTITUIR A SOLUCION INYECTABLE', 'ALTO COSTO', 1, '2026-03-20 19:47:29');
 
+
+-- === POBLAR codigo_producto_indigo y producto_nombre desde pedido_detalles ===
+UPDATE inv_orden_compra_detalles ocd
+INNER JOIN inv_pedido_detalles pd ON pd.id = ocd.pedido_detalle_id
+SET ocd.codigo_producto_indigo = pd.codigo_producto,
+    ocd.producto_nombre = pd.producto_nombre
+WHERE ocd.codigo_producto_indigo IS NULL
+  AND ocd.pedido_detalle_id IS NOT NULL;
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- === VERIFICACION ===
