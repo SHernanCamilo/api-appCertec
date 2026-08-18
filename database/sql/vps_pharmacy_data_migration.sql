@@ -3712,7 +3712,7 @@ INSERT IGNORE INTO `inv_compras_pedidos` (`id`, `compra_id`, `pedido_id`, `creat
 (178, 178, 2, '2026-07-14 14:09:55');
 
 -- === inv_compras_auditoria (origen: compras_auditoria) ===
-INSERT IGNORE INTO `inv_compras_auditoria` (`id`, `compra_id`, `campo_modificado`, `valor_anterior`, `valor_nuevo`, `motivo_modificacion`, `modificado_por`, `fecha_modificacion`) VALUES
+INSERT IGNORE INTO `inv_compras_auditoria` (`id`, `compra_id`, `campo_modificado`, `valor_anterior`, `valor_nuevo`, `motivo_modificacion`, `modificado_por`, `created_at`) VALUES
 (1, 1, 'estado', 'pendiente', 'confirmado', 'Modificación automática detectada', 1, '2026-05-15 23:02:49'),
 (2, 4, 'estado', 'pendiente', 'confirmado', 'Modificación automática detectada', 1, '2026-05-15 23:04:24'),
 (3, 11, 'estado', 'pendiente', 'confirmado', 'Modificación automática detectada', 1, '2026-05-15 23:06:25'),
