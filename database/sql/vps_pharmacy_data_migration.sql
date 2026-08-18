@@ -1278,8 +1278,8 @@ INSERT IGNORE INTO `inv_pedido_detalles` (`id`, `pedido_id`, `codigo_producto`, 
 (1250, 4, '20021498-2', 'SODIO CLORURO 0.9% BOLSA X 100ML SOLUCION INYECTABLE (MINIBAG PLUS)', 'MEDICAMENTO', 'LABORATORIOS BAXTER S.A.', '0', 'nula', NULL, NULL, 320, 0, NULL, NULL, 6750.00, 'pendiente', NULL, NULL, NULL, NULL, NULL, NULL, 'Marca: LABORATORIOS BAXTER S.A. | Promedio: 0 | Rotación: nula', '2026-07-17 18:04:42', '2026-07-17 18:04:42'),
 (1251, 4, '302005507', 'SONDA NASOGASTRICA PEDIATRICA DE POLIURETANO CON CONECTOR ENFIT 6FR X 50CM REF NCE06PU', 'DISPOSITIVO MEDICO', 'HB SUPPLIER S.A.', '0', 'nula', NULL, NULL, 40, 0, NULL, NULL, 24100.00, 'pendiente', NULL, NULL, NULL, NULL, NULL, NULL, 'Marca: HB SUPPLIER S.A. | Promedio: 0 | Rotación: nula', '2026-07-17 18:04:42', '2026-07-17 18:04:42');
 
--- === inv_pedido_trazabilidads (origen: pedidos_trazabilidad) ===
-INSERT IGNORE INTO `inv_pedido_trazabilidads` (`id`, `pedido_id`, `estado`, `comentarios`, `cambiado_por`, `created_at`) VALUES
+-- === inv_pedidos_trazabilidad (origen: pedidos_trazabilidad) ===
+INSERT IGNORE INTO `inv_pedidos_trazabilidad` (`id`, `pedido_id`, `estado`, `comentarios`, `cambiado_por`, `created_at`) VALUES
 (1, 1, 'pendiente', 'Orden creada', 12, '2026-05-13 19:35:54'),
 (2, 1, 'en_proceso', 'Pedido confirmado - Orden realizada', 12, '2026-05-13 19:42:24'),
 (3, 1, 'en_proceso', 'OC Indigo FLA-2026-000001-OC | Proveedor MEDIC COLOMBIA SAS | Cantidad 100', 13, '2026-05-14 03:04:58'),
@@ -1702,7 +1702,7 @@ INSERT IGNORE INTO `inv_pedido_trazabilidads` (`id`, `pedido_id`, `estado`, `com
 (420, 1, 'en_proceso', 'OC Indigo  | Proveedor NIPRO MEDICAL CORPORATION | Cantidad 12000', 13, '2026-05-29 15:46:04'),
 (421, 1, 'en_proceso', 'OC Indigo FLA-2026-000073-OC | Proveedor FARMAPOS LTDA | Cantidad 96', 13, '2026-05-29 15:46:04'),
 (422, 1, 'en_proceso', 'OC Indigo  | Proveedor FARMAPOS LTDA | Cantidad 96', 13, '2026-05-29 15:46:04');
-INSERT IGNORE INTO `inv_pedido_trazabilidads` (`id`, `pedido_id`, `estado`, `comentarios`, `cambiado_por`, `created_at`) VALUES
+INSERT IGNORE INTO `inv_pedidos_trazabilidad` (`id`, `pedido_id`, `estado`, `comentarios`, `cambiado_por`, `created_at`) VALUES
 (423, 1, 'en_proceso', 'OC Indigo  | Proveedor FARMAPOS LTDA | Cantidad 40', 13, '2026-05-29 15:46:04'),
 (424, 1, 'en_proceso', 'OC Indigo  | Proveedor FARMAPOS LTDA | Cantidad 4', 13, '2026-05-29 15:46:04'),
 (425, 1, 'en_proceso', 'OC Indigo  | Proveedor FARMAPOS LTDA | Cantidad 96', 13, '2026-05-29 15:46:04'),
@@ -2134,7 +2134,7 @@ INSERT IGNORE INTO `inv_pedido_trazabilidads` (`id`, `pedido_id`, `estado`, `com
 (851, 2, 'en_proceso', 'OC Indigo FLA-2026-000122-OC | Proveedor SURGICON & CIA SAS | Cantidad 300', 1, '2026-06-16 13:03:50'),
 (852, 2, 'en_proceso', 'OC Indigo FLA-2026-000123-OC | Proveedor ICU MEDICAL COLOMBIA LTDA | Cantidad 300', 1, '2026-06-16 13:03:50'),
 (853, 2, 'en_proceso', 'OC Indigo  | Proveedor ICU MEDICAL COLOMBIA LTDA | Cantidad 100', 1, '2026-06-16 13:03:50');
-INSERT IGNORE INTO `inv_pedido_trazabilidads` (`id`, `pedido_id`, `estado`, `comentarios`, `cambiado_por`, `created_at`) VALUES
+INSERT IGNORE INTO `inv_pedidos_trazabilidad` (`id`, `pedido_id`, `estado`, `comentarios`, `cambiado_por`, `created_at`) VALUES
 (854, 2, 'en_proceso', 'OC Indigo  | Proveedor ICU MEDICAL COLOMBIA LTDA | Cantidad 1000', 1, '2026-06-16 13:03:50'),
 (855, 2, 'en_proceso', 'OC Indigo  | Proveedor ICU MEDICAL COLOMBIA LTDA | Cantidad 50', 1, '2026-06-16 13:03:50'),
 (856, 2, 'en_proceso', 'OC Indigo FLA-2026-000124-OC | Proveedor RAFAEL ANTONIO SALAMANCA / DEPOSITO DE DROGAS BOYACA | Cantidad 12', 1, '2026-06-16 13:03:50'),
