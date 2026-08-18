@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services\Inventory;
+namespace App\Services\Inventory\Pharmacy;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;

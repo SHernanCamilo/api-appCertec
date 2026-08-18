@@ -1,12 +1,12 @@
 <?php
 
-namespace App\Services\Inventory;
+namespace App\Services\Inventory\Pharmacy;
 
 use App\Models\Inventory\InvOrdenCompra;
 use App\Models\Inventory\InvOrdenCompraDetalle;
 use App\Models\Inventory\External\IndigoOrdenCompra;
-use App\Services\Inventory\InvSequenceService;
-use App\Services\Inventory\InvPedidoService;
+use App\Services\Inventory\Pharmacy\InvSequenceService;
+use App\Services\Inventory\Pharmacy\InvPedidoService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 

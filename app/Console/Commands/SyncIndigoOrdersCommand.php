@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use App\Services\Inventory\MonitoringService;
+use App\Services\Inventory\Pharmacy\MonitoringService;
 
 class SyncIndigoOrdersCommand extends Command
 {

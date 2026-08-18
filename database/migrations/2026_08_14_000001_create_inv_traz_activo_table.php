@@ -19,6 +19,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (Schema::hasTable('inv_traz_activo')) {
+            return;
+        }
+
         Schema::create('inv_traz_activo', function (Blueprint $table) {
             $table->id();
 

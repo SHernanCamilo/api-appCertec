@@ -1,9 +1,9 @@
 <?php
 
-namespace App\Http\Controllers\Inventory;
+namespace App\Http\Controllers\Inventory\Pharmacy;
 
 use App\Http\Controllers\Controller;
-use App\Services\Inventory\InvProductoService;
+use App\Services\Inventory\Pharmacy\InvProductoService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;

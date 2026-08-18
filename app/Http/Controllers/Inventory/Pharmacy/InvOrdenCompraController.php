@@ -1,9 +1,9 @@
 <?php
 
-namespace App\Http\Controllers\Inventory;
+namespace App\Http\Controllers\Inventory\Pharmacy;
 
 use App\Http\Controllers\Controller;
-use App\Services\Inventory\InvOrdenCompraService;
+use App\Services\Inventory\Pharmacy\InvOrdenCompraService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -149,7 +149,7 @@ class InvOrdenCompraController extends Controller
      * Sincronizar orden desde Indigo (o general)
      * POST /api/inventario/ordenes-compra/sync
      */
-    public function sync(Request $request, \App\Services\Inventory\MonitoringService $monitoringService): JsonResponse
+    public function sync(Request $request, \App\Services\Inventory\Pharmacy\MonitoringService $monitoringService): JsonResponse
     {
         $numero_orden = $request->input('numero_orden');
         

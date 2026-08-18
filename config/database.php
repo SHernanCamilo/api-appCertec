@@ -106,6 +106,25 @@ return [
         ],
 
         // ─────────────────────────────────────────────────────────────────
+        // DIGIPHARMA (Migración de inventario farmacia - solo lectura)
+        // BD legacy en 192.168.12.20, usada para migrar datos hacia la VPS.
+        // ─────────────────────────────────────────────────────────────────
+        'digipharma' => [
+            'driver'         => 'mysql',
+            'host'           => env('DIGIPHARMA_HOST', '192.168.12.20'),
+            'port'           => env('DIGIPHARMA_PORT', '3306'),
+            'database'       => env('DIGIPHARMA_DATABASE', 'digipharma'),
+            'username'       => env('DIGIPHARMA_USERNAME', 'digipharma_app'),
+            'password'       => env('DIGIPHARMA_PASSWORD', 'kD21c2P7wQW9'),
+            'charset'        => 'utf8mb4',
+            'collation'      => 'utf8mb4_unicode_ci',
+            'prefix'         => '',
+            'prefix_indexes' => true,
+            'strict'         => false,
+            'engine'         => null,
+        ],
+
+        // ─────────────────────────────────────────────────────────────────
         // ERP INDIGO777 (Órdenes de Compra)
         // ─────────────────────────────────────────────────────────────────
         'sqlsrv_indigo' => [

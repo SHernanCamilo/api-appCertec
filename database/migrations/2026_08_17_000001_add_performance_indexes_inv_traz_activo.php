@@ -15,11 +15,16 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('inv_traz_activo', function (Blueprint $table) {
-            // Paginación natural: la query más frecuente ordena por fecha desc + id desc
-            $table->index(['created_at', 'id'], 'idx_traz_activo_fecha_id');
+            $sm = Schema::getConnection()->getDoctrineSchemaManager();
+            $indexes = collect($sm->listTableIndexes('inv_traz_activo'))->keys();
 
-            // Filtro combinado (usado desde el tab de trazabilidad)
-            $table->index(['placa', 'novedad_estado_fisico', 'created_at'], 'idx_traz_activo_placa_estado');
+            if (!$indexes->contains('idx_traz_activo_fecha_id')) {
+                $table->index(['created_at', 'id'], 'idx_traz_activo_fecha_id');
+            }
+
+            if (!$indexes->contains('idx_traz_activo_placa_estado')) {
+                $table->index(['placa', 'novedad_estado_fisico', 'created_at'], 'idx_traz_activo_placa_estado');
+            }
         });
     }
 

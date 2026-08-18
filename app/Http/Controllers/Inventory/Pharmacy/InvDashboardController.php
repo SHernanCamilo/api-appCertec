@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Inventory;
+namespace App\Http\Controllers\Inventory\Pharmacy;
 
 use App\Http\Controllers\Controller;
 use App\Models\Inventory\InvOrdenCompra;
