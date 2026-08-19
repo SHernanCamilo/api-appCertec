@@ -17,6 +17,34 @@ class InvOrdenCompra extends Model
         'estado', 'sincronizado_indigo', 'creado_por', 'oc_indigo'
     ];
 
+    protected $appends = ['total', 'items_count', 'creado_por_nombre'];
+
+    /**
+     * Accessor: Total de la OC (suma de cantidad × precio de cada detalle)
+     */
+    public function getTotalAttribute(): float
+    {
+        return $this->detalles->sum(function ($detalle) {
+            return ($detalle->cantidad_solicitada_compra ?? 0) * ($detalle->precio_unitario_compra ?? 0);
+        });
+    }
+
+    /**
+     * Accessor: Cantidad de ítems en la OC
+     */
+    public function getItemsCountAttribute(): int
+    {
+        return $this->detalles->count();
+    }
+
+    /**
+     * Accessor: Nombre del creador
+     */
+    public function getCreadoPorNombreAttribute(): string
+    {
+        return $this->creador?->name ?? 'Administrador del Sistema';
+    }
+
     public function detalles()
     {
         return $this->hasMany(InvOrdenCompraDetalle::class, 'compra_id');
