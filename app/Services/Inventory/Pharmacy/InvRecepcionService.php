@@ -18,16 +18,32 @@ class InvRecepcionService
         $this->sequenceService = $sequenceService;
     }
     /**
-     * Obtener historial de recepciones con filtros
+     * Obtener historial de recepciones o compras pendientes de recepción.
+     * Si se envía status con estados de OC (confirmado, en_sitio, parcial),
+     * devuelve las OC listas para recepción.
+     * Si se envía status con estados de recepción (RECEPCIONADO, CONFIRMADO),
+     * devuelve recepciones históricas.
      */
     public function getAll(array $filters = []): array
     {
+        $status = $filters['status'] ?? $filters['estado'] ?? '';
+
+        // Si el status contiene estados de OC, devolver compras pendientes de recepción
+        $ocStates = ['confirmado', 'en_sitio', 'parcial', 'en_transito'];
+        $requestedStates = array_map('trim', explode(',', strtolower($status)));
+        $isOcQuery = !empty($status) && count(array_intersect($requestedStates, $ocStates)) > 0;
+
+        if ($isOcQuery) {
+            return $this->getOrdenesPendientesRecepcion($requestedStates, $filters);
+        }
+
+        // Caso default: listar recepciones históricas
         $query = InvRecepcion::with(['compra', 'recibidoPor']);
 
-        if (!empty($filters['estado'])) {
-            $query->where('estado', $filters['estado']);
+        if (!empty($status)) {
+            $query->whereIn('estado', $requestedStates);
         }
-        
+
         if (!empty($filters['compra_id'])) {
             $query->where('compra_id', $filters['compra_id']);
         }
@@ -45,13 +61,74 @@ class InvRecepcionService
 
         $limit  = isset($filters['limit']) ? max(1, (int) $filters['limit']) : 25;
         $offset = isset($filters['offset']) ? max(0, (int) $filters['offset']) : 0;
-        
+
         $total = $query->count();
         $recepciones = $query->offset($offset)->limit($limit)->get();
 
         return [
             'success' => true,
             'data'    => $recepciones,
+            'meta'    => [
+                'total'  => $total,
+                'limit'  => $limit,
+                'offset' => $offset,
+            ],
+        ];
+    }
+
+    /**
+     * Obtener OCs pendientes de recepción técnica.
+     * Retorna las órdenes de compra con estructura compatible con la vista de recepciones.
+     */
+    private function getOrdenesPendientesRecepcion(array $estados, array $filters): array
+    {
+        $query = InvOrdenCompra::with(['detalles'])
+            ->whereIn('estado', $estados);
+
+        if (!empty($filters['search'])) {
+            $search = $filters['search'];
+            $query->where(function ($q) use ($search) {
+                $q->where('numero_orden_compra', 'LIKE', "%{$search}%")
+                  ->orWhere('oc_indigo', 'LIKE', "%{$search}%")
+                  ->orWhere('proveedor_nombre', 'LIKE', "%{$search}%");
+            });
+        }
+
+        $query->orderBy('id', 'desc');
+
+        $limit  = isset($filters['limit']) ? max(1, (int) $filters['limit']) : 25;
+        $offset = isset($filters['offset']) ? max(0, (int) $filters['offset']) : 0;
+
+        $total = $query->count();
+        $ordenes = $query->offset($offset)->limit($limit)->get();
+
+        // Mapear a estructura compatible con la vista de recepciones
+        $data = $ordenes->map(function ($oc) {
+            $totalItems = $oc->detalles->count();
+            // Items recibidos = que ya tienen recepción asociada
+            $itemsRecibidos = DB::table('inv_recepcion_detalles as rd')
+                ->join('inv_recepciones as r', 'r.id', '=', 'rd.recepcion_id')
+                ->where('r.compra_id', $oc->id)
+                ->distinct('rd.codigo_producto')
+                ->count('rd.codigo_producto');
+
+            return [
+                'id' => $oc->id,
+                'compra_id' => $oc->id,
+                'numero_orden_compra' => $oc->numero_orden_compra,
+                'oc_indigo' => $oc->oc_indigo,
+                'fecha_orden' => $oc->fecha_orden,
+                'proveedor_nombre' => $oc->proveedor_nombre,
+                'estado' => $oc->estado,
+                'creado_por_nombre' => $oc->creado_por_nombre,
+                'total_items' => $totalItems,
+                'items_recibidos' => $itemsRecibidos,
+            ];
+        });
+
+        return [
+            'success' => true,
+            'data'    => $data,
             'meta'    => [
                 'total'  => $total,
                 'limit'  => $limit,

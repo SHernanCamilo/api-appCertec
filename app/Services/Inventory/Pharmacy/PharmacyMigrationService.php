@@ -167,6 +167,14 @@ class PharmacyMigrationService
 
         $count = 0;
         foreach ($rows as $row) {
+            // Obtener proveedor del primer detalle (compras_detalle no tiene proveedor en header)
+            $primerDetalle = DB::connection($this->sourceConnection)
+                ->table('compras_detalle')
+                ->where('compra_id', $row->id)
+                ->whereNotNull('proveedor')
+                ->where('proveedor', '!=', '')
+                ->first();
+
             DB::connection($this->targetConnection)
                 ->table('inv_ordenes_compra')
                 ->updateOrInsert(
@@ -175,6 +183,7 @@ class PharmacyMigrationService
                         'numero_orden_compra' => $row->numero_orden_compra,
                         'fecha_orden' => $row->fecha_orden,
                         'observaciones' => $row->observaciones,
+                        'proveedor_nombre' => $primerDetalle->proveedor ?? null,
                         'estado' => $row->estado,
                         'sincronizado_indigo' => $row->sincronizado_indigo,
                         'creado_por' => 1,

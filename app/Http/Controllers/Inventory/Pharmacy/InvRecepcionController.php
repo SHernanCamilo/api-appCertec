@@ -27,6 +27,7 @@ class InvRecepcionController extends Controller
             $filters = [
                 'search'    => $request->query('search'),
                 'estado'    => $request->query('estado'),
+                'status'    => $request->query('status'),
                 'compra_id' => $request->query('compra_id'),
                 'limit'     => $request->query('limit', 25),
                 'offset'    => $request->query('offset', 0),
@@ -45,25 +46,48 @@ class InvRecepcionController extends Controller
     }
 
     /**
-     * Mostrar recepción específica
+     * Mostrar recepción específica o detalles de OC para recepcionar
      * GET /api/inventario/recepciones/{id}
      */
     public function show(string $id): JsonResponse
     {
         try {
+            // Primero intentar como recepcion ID
             $recepcion = $this->service->getById((int) $id);
 
-            if (!$recepcion) {
+            if ($recepcion) {
                 return response()->json([
-                    'success' => false,
-                    'message' => 'Recepción no encontrada',
-                ], 404);
+                    'success' => true,
+                    'data'    => $recepcion->detalles ?? $recepcion,
+                ], 200);
+            }
+
+            // Si no existe como recepción, intentar como compra_id (para recepcionar)
+            $compra = \App\Models\Inventory\InvOrdenCompra::with('detalles')->find((int) $id);
+            if ($compra) {
+                // Retornar los detalles de la OC formateados para el formulario de recepción
+                $data = $compra->detalles->map(function ($d) {
+                    return [
+                        'pedido_detalle_id' => $d->pedido_detalle_id,
+                        'codigo_producto' => $d->codigo_producto_indigo,
+                        'producto_nombre' => $d->producto_nombre,
+                        'cantidad_solicitada_compra' => $d->cantidad_solicitada_compra,
+                        'precio_unitario_compra' => $d->precio_unitario_compra,
+                        'proveedor' => $d->proveedor,
+                        'estado' => $d->estado,
+                    ];
+                });
+
+                return response()->json([
+                    'success' => true,
+                    'data'    => $data,
+                ], 200);
             }
 
             return response()->json([
-                'success' => true,
-                'data'    => $recepcion,
-            ], 200);
+                'success' => false,
+                'message' => 'Recepción u orden no encontrada',
+            ], 404);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -113,20 +137,30 @@ class InvRecepcionController extends Controller
     }
 
     /**
-     * Confirmar la recepción técnica (Aprobación final)
+     * Confirmar llegada o recepción.
+     * Si el ID es una OC → confirmar llegada (cambiar a en_sitio).
+     * Si el ID es una recepción → confirmar la recepción técnica.
      * PATCH /api/inventario/recepciones/{id}/confirmar
      */
     public function confirmar(Request $request, string $id): JsonResponse
     {
         try {
             $userId = auth()->user()->id ?? 1;
-            $result = $this->service->confirmar((int) $id, $userId);
 
+            // Verificar si es una OC (confirmar llegada)
+            $compra = \App\Models\Inventory\InvOrdenCompra::find((int) $id);
+            if ($compra && in_array(strtolower($compra->estado), ['confirmado', 'en_transito'])) {
+                $result = $this->service->confirmArrival((int) $id, $userId);
+                return response()->json($result, $result['success'] ? 200 : 400);
+            }
+
+            // Si no es OC con estado para llegada, intentar confirmar recepción
+            $result = $this->service->confirmar((int) $id, $userId);
             return response()->json($result, $result['success'] ? 200 : 400);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Error al confirmar la recepción',
+                'message' => 'Error al confirmar',
                 'error'   => $e->getMessage(),
             ], 500);
         }
