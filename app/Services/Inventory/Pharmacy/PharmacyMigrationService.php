@@ -190,8 +190,29 @@ class PharmacyMigrationService
 
     private function migrateComprasDetalle(): int
     {
+        // JOIN con pedidos_detalle para obtener codigo_producto y producto_nombre
+        // ya que compras_detalle NO tiene esas columnas en Digipharma
         $rows = DB::connection($this->sourceConnection)
-            ->table('compras_detalle')
+            ->table('compras_detalle as cd')
+            ->leftJoin('pedidos_detalle as pd', 'pd.id', '=', 'cd.pedido_detalle_id')
+            ->select([
+                'cd.id',
+                'cd.compra_id',
+                'cd.pedido_detalle_id',
+                'cd.clasificacion_venta',
+                'cd.proveedor',
+                'cd.cantidad_solicitada_compra',
+                'cd.fecha_entrega_estimada',
+                'cd.clasificacion_vie',
+                'cd.precio_unitario_compra',
+                'cd.observaciones',
+                'cd.estado',
+                'cd.creado_en',
+                'cd.actualizado_en',
+                // Traer datos del producto desde pedidos_detalle
+                'pd.codigo_producto',
+                'pd.producto_nombre',
+            ])
             ->get();
 
         $count = 0;
@@ -204,11 +225,13 @@ class PharmacyMigrationService
                         [
                             'compra_id' => $row->compra_id,
                             'pedido_detalle_id' => $row->pedido_detalle_id,
-                            'codigo_producto_indigo' => $row->codigo_producto_indigo ?? null,
+                            'codigo_producto_indigo' => $row->codigo_producto ?? null,
                             'producto_nombre' => $row->producto_nombre ?? null,
+                            'clasificacion_venta' => $row->clasificacion_venta ?? null,
                             'proveedor' => $row->proveedor ?? '',
                             'cantidad_solicitada_compra' => $row->cantidad_solicitada_compra,
                             'fecha_entrega_estimada' => $row->fecha_entrega_estimada ?? null,
+                            'clasificacion_vie' => $row->clasificacion_vie ?? null,
                             'precio_unitario_compra' => $row->precio_unitario_compra ?? null,
                             'observaciones' => $row->observaciones ?? null,
                             'estado' => $row->estado ?? 'pendiente',
