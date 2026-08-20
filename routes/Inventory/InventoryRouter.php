@@ -42,7 +42,13 @@ Route::prefix('activos-fijos')->group(function () {
     Route::get('trazabilidad/resumen', [$controller, 'resumen']);
     Route::get('trazabilidad', [$controller, 'trazabilidad']);
 
+    Route::get('exportar', [$controller, 'exportar']);
+    Route::get('unidades-funcionales', [$controller, 'unidadesFuncionales']);
+    Route::get('empleados', [$controller, 'empleados']);
+    Route::get('centros-costo', [$controller, 'centrosCosto']);
+
     Route::post('novedad', [$controller, 'registrarNovedad']);
+    Route::post('novedad-externa', [$controller, 'registrarNovedadExterna']);
 
     Route::get('{placa}/historial', [$controller, 'historial'])->where('placa', '[A-Za-z0-9\-_.]+');
     Route::get('{placa}', [$controller, 'show'])->where('placa', '[A-Za-z0-9\-_.]+');

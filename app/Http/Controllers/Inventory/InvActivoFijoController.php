@@ -151,16 +151,18 @@ class InvActivoFijoController extends Controller
     public function trazabilidad(Request $request): JsonResponse
     {
         $request->validate([
-            'placa'         => 'nullable|string|max:100',
-            'estado_fisico' => 'nullable|string|in:' . implode(',', InvTrazActivo::ESTADOS_FISICOS),
-            'usuario_id'    => 'nullable|integer|exists:users,id',
-            'desde'         => 'nullable|date',
-            'hasta'         => 'nullable|date|after_or_equal:desde',
-            'per_page'      => 'nullable|integer|min:1|max:100',
+            'placa'            => 'nullable|string|max:100',
+            'estado_fisico'    => 'nullable|string|in:' . implode(',', InvTrazActivo::ESTADOS_FISICOS),
+            'usuario_id'       => 'nullable|integer|exists:users,id',
+            'desde'            => 'nullable|date',
+            'hasta'            => 'nullable|date|after_or_equal:desde',
+            'unidad_funcional' => 'nullable|string|max:255',
+            'es_externo'       => 'nullable|boolean',
+            'per_page'         => 'nullable|integer|min:1|max:100',
         ]);
 
         $resultado = $this->activos->listar(
-            $request->only(['placa', 'estado_fisico', 'usuario_id', 'desde', 'hasta']),
+            $request->only(['placa', 'estado_fisico', 'usuario_id', 'desde', 'hasta', 'unidad_funcional', 'es_externo']),
             (int) $request->input('per_page', 25)
         );
 
@@ -180,6 +182,137 @@ class InvActivoFijoController extends Controller
             'success' => true,
             'data'    => $this->activos->resumen(),
         ]);
+    }
+
+    // =========================================================================
+    // EXPORTAR EXCEL
+    // =========================================================================
+
+    /**
+     * GET /api/inventory/activos-fijos/exportar
+     *
+     * Exporta la trazabilidad a XLSX con clasificación inventariado/pendiente.
+     * Filtros opcionales: unidad_funcional, desde, hasta, estado_fisico, placa, es_externo.
+     */
+    public function exportar(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $request->validate([
+            'unidad_funcional' => 'nullable|string|max:255',
+            'placa'            => 'nullable|string|max:100',
+            'estado_fisico'    => 'nullable|string|in:' . implode(',', InvTrazActivo::ESTADOS_FISICOS),
+            'desde'            => 'nullable|date',
+            'hasta'            => 'nullable|date|after_or_equal:desde',
+            'es_externo'       => 'nullable|boolean',
+        ]);
+
+        return $this->activos->exportarExcel(
+            $request->only(['unidad_funcional', 'placa', 'estado_fisico', 'desde', 'hasta', 'es_externo'])
+        );
+    }
+
+    // =========================================================================
+    // NOVEDAD EXTERNA
+    // =========================================================================
+
+    /**
+     * POST /api/inventory/activos-fijos/novedad-externa
+     *
+     * Registra un activo encontrado en campo que NO está en el maestro de Indigo.
+     */
+    public function registrarNovedadExterna(Request $request): JsonResponse
+    {
+        $estadosFisicos = implode(',', InvTrazActivo::ESTADOS_FISICOS);
+
+        $validado = $request->validate([
+            'placa'            => 'required|string|max:100',
+            'serie'            => 'nullable|string|max:150',
+            'articulo_nombre'  => 'nullable|string|max:255',
+            'marca'            => 'nullable|string|max:150',
+            'modelo'           => 'nullable|string|max:150',
+            'responsable'      => 'nullable|string|max:255',
+            'localizacion'     => 'nullable|string|max:255',
+            'sucursal'         => 'nullable|string|max:150',
+            'estado_fisico'    => "nullable|string|in:{$estadosFisicos}",
+            'observacion'      => 'nullable|string|max:2000',
+            'unidad_funcional' => 'nullable|string|max:255',
+            'id_empresa'       => 'nullable|integer|exists:ent_empresas,id',
+            'id_sucursal'      => 'nullable|integer',
+        ], [
+            'estado_fisico.in' => 'El estado físico debe ser: ' . implode(', ', InvTrazActivo::ESTADOS_FISICOS) . '.',
+        ]);
+
+        $resultado = $this->activos->registrarNovedadExterna(auth()->user(), $validado);
+
+        if (!($resultado['success'] ?? false)) {
+            return response()->json([
+                'success' => false,
+                'message' => $resultado['message'],
+            ], $resultado['code'] ?? 400);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Activo externo registrado correctamente.',
+            'data'    => $resultado['data'],
+        ], 201);
+    }
+
+    // =========================================================================
+    // UNIDADES FUNCIONALES
+    // =========================================================================
+
+    /**
+     * GET /api/inventory/activos-fijos/unidades-funcionales
+     *
+     * Lista de unidades funcionales únicas para poblar dropdowns/filtros.
+     */
+    public function unidadesFuncionales(): JsonResponse
+    {
+        $resultado = $this->activos->unidadesFuncionales(auth()->user());
+
+        return response()->json([
+            'success' => true,
+            'data'    => $resultado['data'],
+        ]);
+    }
+
+    // =========================================================================
+    // EMPLEADOS Y CENTROS DE COSTO (Fabric)
+    // =========================================================================
+
+    /**
+     * GET /api/inventario/activos-fijos/empleados?busqueda=MARIA&limit=30
+     *
+     * Busca empleados activos en la vista No.VW_Payroll_EmpleadosActivos.
+     * Devuelve documento y nombre para poblar el select de Responsable.
+     */
+    public function empleados(Request $request): JsonResponse
+    {
+        $request->validate([
+            'busqueda' => 'nullable|string|max:100',
+            'limit'    => 'nullable|integer|min:1|max:200',
+        ]);
+
+        $resultado = $this->activos->empleados(
+            auth()->user(),
+            $request->input('busqueda', ''),
+            (int) $request->input('limit', 50)
+        );
+
+        return response()->json($resultado);
+    }
+
+    /**
+     * GET /api/inventario/activos-fijos/centros-costo
+     *
+     * Obtiene los centros de costo (Unidades Funcionales) desde
+     * cp.VW_Payroll_UnidadFuncionales_CC. Devuelve code + UnidadFuncional.
+     */
+    public function centrosCosto(): JsonResponse
+    {
+        $resultado = $this->activos->centrosCosto(auth()->user());
+
+        return response()->json($resultado);
     }
 
     /**
