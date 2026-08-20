@@ -587,19 +587,79 @@ class CuadroTurnoService
             $totales = $this->calcularTotalesMes($turnos, $festivos, $fechaInicio, $fechaFin);
             $porDia = $this->desglosarPorDia($turnos, $festivos, $fechaInicio, $fechaFin);
 
+            // Obtener horas extras registradas para el empleado en el mes
+            $horasExtras = $this->obtenerHorasExtrasMes($idEmpleado, $anio, $mes);
+
+            // Obtener parametro de jornada vigente (el más reciente activo)
+            $jornadaMax = \App\Models\TalentoHumano\CuadroTurnos\ParametroJornada::where('activo', true)
+                ->orderByDesc('vigente_desde')
+                ->first();
+
             return [
-                'empleado'  => $empleado ? (array) $empleado : ['id' => $idEmpleado, 'nombre' => 'Desconocido'],
-                'anio'      => $anio,
-                'mes'       => $mes,
-                'turnos'    => $turnos,
-                'totales'   => $totales,
-                'por_dia'   => $porDia,
-                'festivos'  => $festivos,
+                'empleado'    => $empleado ? (array) $empleado : ['id' => $idEmpleado, 'nombre' => 'Desconocido'],
+                'anio'        => $anio,
+                'mes'         => $mes,
+                'turnos'      => $turnos,
+                'totales'     => $totales,
+                'por_dia'     => $porDia,
+                'festivos'    => $festivos,
+                'horas_extras' => $horasExtras,
+                'jornada_max' => $jornadaMax,
             ];
         } catch (\Exception $e) {
             throw new \Exception('Error al obtener cuadro del empleado: ' . $e->getMessage());
         }
     }
+/**
+ * Obtener horas extras registradas para un empleado en un mes.
+ * Retorna totales por tipo (diurnas, nocturnas, festivas, etc.)
+ */
+private function obtenerHorasExtrasMes(int $idEmpleado, int $anio, int $mes): array
+{
+    $fechaInicio = Carbon::createFromDate($anio, $mes, 1)->startOfMonth()->toDateString();
+    $fechaFin    = Carbon::createFromDate($anio, $mes, 1)->endOfMonth()->toDateString();
+
+    $registros = \DB::table('humtal_horas_extras')
+        ->where('id_empleado', $idEmpleado)
+        ->whereBetween('fecha', [$fechaInicio, $fechaFin])
+        ->get();
+
+    $totalExtras = 0;
+    $extrasDiurnas = 0;
+    $extrasNocturnas = 0;
+    $extrasFestivas = 0;
+    $extrasFestivasNocturnas = 0;
+    $extrasManuales = 0;
+
+    foreach ($registros as $r) {
+        $inicio = Carbon::parse($r->fecha . ' ' . $r->hora_inicio);
+        $fin = Carbon::parse($r->fecha . ' ' . $r->hora_fin);
+        if ($fin <= $inicio) $fin->addDay(); // Turno cruza medianoche
+
+        $horas = $inicio->diffInMinutes($fin) / 60;
+        $totalExtras += $horas;
+        $extrasManuales += $horas;
+
+        // Clasificar: diurna (06-21) o nocturna (21-06)
+        $horaInicioNum = (int) Carbon::parse($r->hora_inicio)->format('H');
+        if ($horaInicioNum >= 6 && $horaInicioNum < 21) {
+            $extrasDiurnas += $horas;
+        } else {
+            $extrasNocturnas += $horas;
+        }
+    }
+
+    return [
+        'total_extras' => round($totalExtras, 2),
+        'extras_diurnas' => round($extrasDiurnas, 2),
+        'extras_nocturnas' => round($extrasNocturnas, 2),
+        'extras_festivas' => round($extrasFestivas, 2),
+        'extras_festivas_nocturnas' => round($extrasFestivasNocturnas, 2),
+        'extras_manuales' => round($extrasManuales, 2),
+        'registros' => $registros,
+    ];
+}
+
 /**
  * Eliminar todos los turnos de un empleado en un mes/año
  */

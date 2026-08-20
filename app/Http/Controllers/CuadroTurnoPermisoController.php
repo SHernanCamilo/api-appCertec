@@ -193,7 +193,8 @@ class CuadroTurnoPermisoController extends Controller
 
     /**
      * GET /api/cuadro-turno-permisos/empresas
-     * Listar empresas habilitadas para el módulo de Cuadro de Turnos
+     * Listar empresas habilitadas para el módulo de Cuadro de Turnos.
+     * Si el usuario no es super_admin/transversal, intersecta con sus empresas asignadas.
      */
     public function listarEmpresas(): JsonResponse
     {
@@ -201,9 +202,28 @@ class CuadroTurnoPermisoController extends Controller
             $query = \DB::table('ent_empresas')
                 ->select('id', 'nombre', 'prefijo');
 
+            // Filtro 1: empresas habilitadas para el módulo
             $empresasHabilitadas = config('cuadro_turnos.empresas_habilitadas', []);
             if (!empty($empresasHabilitadas)) {
                 $query->whereIn('id', $empresasHabilitadas);
+            }
+
+            // Filtro 2: intersectar con empresas del usuario (si no es super_admin)
+            $user = auth()->user();
+            if ($user) {
+                $accessControl = new \App\Services\TalentoHumano\CuadroTurnos\AccessControlService($user);
+                $accessLevel = $accessControl->getAccessLevel();
+
+                if ($accessLevel !== 'super_admin' && $accessLevel !== 'transversal') {
+                    $empresasUsuario = \DB::table('seg_empresa_user')
+                        ->where('user_id', $user->id)
+                        ->pluck('empresa_id')
+                        ->toArray();
+
+                    if (!empty($empresasUsuario)) {
+                        $query->whereIn('id', $empresasUsuario);
+                    }
+                }
             }
 
             $empresas = $query->orderBy('nombre')->get();
