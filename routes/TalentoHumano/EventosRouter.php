@@ -15,6 +15,7 @@ Route::prefix('solicitudes')->group(function () {
     Route::get('/',        [EventSolicitudController::class, 'index']);
     Route::get('/pendientes', [EventSolicitudController::class, 'pendientes']);
     Route::get('/gestionados', [EventSolicitudController::class, 'gestionados']);
+    Route::get('/solapamiento', [EventSolicitudController::class, 'solapamiento']);
     Route::post('/',       [EventSolicitudController::class, 'store']);
 
     // Acciones de flujo
@@ -22,6 +23,7 @@ Route::prefix('solicitudes')->group(function () {
     Route::post('/{id}/rechazar', [EventSolicitudController::class, 'rechazar']);
     Route::get('/{id}/historial', [EventSolicitudController::class, 'historial']);
 
+    Route::get('/{id}',    [EventSolicitudController::class, 'show']);
     Route::put('/{id}',    [EventSolicitudController::class, 'update']);
     Route::delete('/{id}', [EventSolicitudController::class, 'destroy']);
 });

@@ -176,7 +176,9 @@ class GLPIService
             }
         }
 
-        return $response->json();
+        $json = $response->json();
+
+        return is_array($json) ? $json : [];
     }
 
     /**

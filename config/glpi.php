@@ -161,4 +161,21 @@ return [
         'Item_DeviceCase' => 'Carcasa',
         'Item_DeviceGeneric' => 'Dispositivo Genérico',
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Tablero TIC — Nivel 1 Nacional
+    |--------------------------------------------------------------------------
+    |
+    | Tickets abiertos del grupo técnico 29 (Nivel 1 Nacional) y alerta ANS
+    | dos horas antes del vencimiento de time_to_resolve.
+    |
+    */
+    'web_url' => env('GLPI_WEB_URL'),
+
+    'tic_tablero' => [
+        'grupo_id' => (int) env('GLPI_TIC_GRUPO_ID', 29),
+        'alerta_horas' => (int) env('GLPI_TIC_ALERTA_HORAS', 2),
+        'cache_segundos' => (int) env('GLPI_TIC_CACHE_SEGUNDOS', 60),
+    ],
 ];

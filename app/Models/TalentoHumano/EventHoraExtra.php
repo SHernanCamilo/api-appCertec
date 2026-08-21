@@ -90,7 +90,7 @@ class EventHoraExtra extends Model
 
     public function motivoRechazo()
     {
-        return $this->belongsTo(\App\Models\Config\ConfigMotRechazo::class, 'id_motivo_rechazo');
+        return $this->belongsTo(EventMotRechazo::class, 'id_motivo_rechazo');
     }
 
     public function instancia()
