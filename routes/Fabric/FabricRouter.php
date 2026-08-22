@@ -44,6 +44,26 @@ Route::middleware(['auth:api'])->group(function () {
         // Contexto del usuario: grupos, esquemas permitidos y departamento
         Route::get('/context', [FabricViewerController::class, 'context']);
 
+        // Workbook state (guardar/cargar estado del visor Excel)
+        Route::get('/workbooks', [\App\Http\Controllers\Fabric\BiWorkbookController::class, 'index']);
+        Route::get('/workbook/{schema}/{view}', [\App\Http\Controllers\Fabric\BiWorkbookController::class, 'show'])
+            ->where('schema', '[a-z]{2,4}')
+            ->where('view', '[A-Za-z0-9_]+');
+        Route::post('/workbook/save', [\App\Http\Controllers\Fabric\BiWorkbookController::class, 'save']);
+        Route::delete('/workbook/{id}', [\App\Http\Controllers\Fabric\BiWorkbookController::class, 'destroy']);
+
+        // Workbook Manager (Mis Excels - CRUD de workbooks multi-vista)
+        Route::get('/my-workbooks', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'index']);
+        Route::get('/my-workbook/{id}', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'show'])
+            ->where('id', '[0-9]+');
+        Route::post('/my-workbook', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'store']);
+        Route::put('/my-workbook/{id}', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'update'])
+            ->where('id', '[0-9]+');
+        Route::put('/my-workbook/{id}/state', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'saveState'])
+            ->where('id', '[0-9]+');
+        Route::delete('/my-workbook/{id}', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'destroy'])
+            ->where('id', '[0-9]+');
+
         // Vistas de Fabric que el usuario puede ver
         Route::post('/views', [FabricViewerController::class, 'views']);
 
@@ -61,6 +81,10 @@ Route::middleware(['auth:api'])->group(function () {
 
             // Export a Excel — síncrono (descarga directa, para datasets pequeños)
             Route::post('/export', [FabricViewerController::class, 'export']);
+
+            // NUEVOS ENDPOINTS: Paginación optimizada para vistas grandes
+            Route::post('/data/paginated', [FabricViewerController::class, 'dataPaginated']);
+            Route::post('/estimate-rows', [FabricViewerController::class, 'estimateRows']);
         });
 
         // Export a Excel — asíncrono (segundo plano, recomendado para producción)
