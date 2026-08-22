@@ -486,12 +486,18 @@ class FabricViewerController extends Controller
             default                       => 'application/octet-stream',
         };
 
-        // Usar response()->file() que hace STREAMING sin cargar en RAM
-        // Limpiar el archivo después de enviarlo (register_shutdown_function)
-        register_shutdown_function(function () use ($jobId) {
-            \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory("fabric_exports/{$jobId}");
-            \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobId}");
-        });
+        // Limpiar el archivo despues de 5 minutos (permite reintentos del frontend)
+        $jobIdForCleanup = $jobId;
+        \Illuminate\Support\Facades\Cache::put("fabric_export_cleanup:{$jobIdForCleanup}", true, now()->addMinutes(5));
+        
+        // Programar limpieza con un job dispatch delayed o simplemente dejar que expire
+        // El cleanup se hara via un scheduled command o la proxima request
+        dispatch(function () use ($jobIdForCleanup) {
+            sleep(300); // 5 minutos
+            \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory("fabric_exports/{$jobIdForCleanup}");
+            \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobIdForCleanup}");
+            \Illuminate\Support\Facades\Cache::forget("fabric_export_cleanup:{$jobIdForCleanup}");
+        })->afterResponse();
 
         return response()->download($absolutePath, $filename, [
             'Content-Type'   => $contentType,
@@ -589,6 +595,187 @@ class FabricViewerController extends Controller
         }
 
         return response()->json($result);
+    }
+
+    // =========================================================================
+    // PAGINACIÓN OPTIMIZADA PARA VISTAS GRANDES (EXCEL-LIKE UI)
+    // =========================================================================
+
+    /**
+     * Obtener datos paginados con cursor para vistas grandes (100K+ filas).
+     * Optimizado para interfaz Excel-like con virtual scrolling.
+     *
+     * POST /api/fabric/viewer/data/paginated
+     *
+     * Body:
+     * {
+     *   "schema_name": "dc",
+     *   "view": "VW_Censo_Eal",
+     *   "cursor": 0,          // offset
+     *   "limit": 100,         // rows per page
+     *   "filters": [          // optional
+     *     {"field": "Sede", "operator": "equals", "value": "001"},
+     *     {"field": "Edad", "operator": "gt", "value": 18}
+     *   ],
+     *   "sorts": [            // optional
+     *     {"field": "FechaNacimiento", "direction": "desc"}
+     *   ]
+     * }
+     *
+     * Response:
+     * {
+     *   "success": true,
+     *   "data": [...],           // rows for this page
+     *   "cursor": 100,           // next offset
+     *   "has_more": true,        // whether there are more rows
+     *   "total": 5432            // total row count (cached)
+     * }
+     */
+    public function dataPaginated(Request $request): JsonResponse
+    {
+        $request->validate([
+            'schema_name' => 'required|string|max:20|alpha_dash',
+            'view'        => 'required|string|max:150|regex:/^[A-Za-z0-9_]+$/',
+            'cursor'      => 'nullable|integer|min:0',
+            'limit'       => 'nullable|integer|min:1|max:1000',
+            'filters'     => 'nullable|array',
+            'filters.*.field'    => 'required_with:filters|string|max:100',
+            'filters.*.operator' => 'required_with:filters|string|in:contains,equals,notEquals,gt,gte,lt,lte,between,in',
+            'filters.*.value'    => 'required_with:filters',
+            'sorts'       => 'nullable|array',
+            'sorts.*.field'     => 'required_with:sorts|string|max:100',
+            'sorts.*.direction' => 'required_with:sorts|string|in:asc,desc',
+        ]);
+
+        $user   = auth()->user();
+        $schema = strtolower($request->schema_name);
+        $view   = $request->view;
+
+        // Validar acceso
+        if (!$this->gateway->tieneAccesoEsquema($user, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso al esquema '{$schema}'.",
+            ], 403);
+        }
+
+        if (!$this->gateway->tieneAccesoVistaPorSede($user, $view, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso a la vista '{$view}' por sede.",
+            ], 403);
+        }
+
+        $cursor = $request->input('cursor', 0);
+        $limit  = $request->input('limit', 100);
+        $filters = $request->input('filters', []);
+        $sorts  = $request->input('sorts', []);
+
+        // Llamar al gateway para obtener datos paginados
+        $result = $this->gateway->getDataPaginated($user, $schema, $view, [
+            'cursor'  => $cursor,
+            'limit'   => $limit,
+            'filters' => $filters,
+            'sorts'   => $sorts,
+        ]);
+
+        if (!$result['success']) {
+            return response()->json([
+                'success' => false,
+                'message' => $result['message'] ?? 'Error obteniendo datos paginados.',
+            ], $result['code'] ?? 500);
+        }
+
+        // Auditar acceso
+        $this->auditService->log(
+            $user,
+            $schema,
+            $view,
+            BiVistaAccessLog::ACCION_CONSULTA,
+            $request,
+            [
+                'pagination' => true,
+                'cursor'     => $cursor,
+                'limit'      => $limit,
+                'filters'    => $filters,
+                'rows_returned' => count($result['data']),
+            ]
+        );
+
+        return response()->json([
+            'success'  => true,
+            'data'     => $result['data'],
+            'cursor'   => $cursor + count($result['data']),
+            'has_more' => $result['has_more'],
+            'total'    => $result['total'],
+        ]);
+    }
+
+    /**
+     * Obtener estimación de filas de una vista (para decidir estrategia de carga).
+     *
+     * POST /api/fabric/viewer/estimate-rows
+     *
+     * Body:
+     * {
+     *   "schema_name": "dc",
+     *   "view": "VW_Censo_Eal"
+     * }
+     *
+     * Response:
+     * {
+     *   "success": true,
+     *   "count": 125430,
+     *   "strategy": "paginated"  // "in-memory" | "duckdb" | "paginated"
+     * }
+     */
+    public function estimateRows(Request $request): JsonResponse
+    {
+        $request->validate([
+            'schema_name' => 'required|string|max:20|alpha_dash',
+            'view'        => 'required|string|max:150|regex:/^[A-Za-z0-9_]+$/',
+        ]);
+
+        $user   = auth()->user();
+        $schema = strtolower($request->schema_name);
+        $view   = $request->view;
+
+        // Validar acceso
+        if (!$this->gateway->tieneAccesoEsquema($user, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso al esquema '{$schema}'.",
+            ], 403);
+        }
+
+        if (!$this->gateway->tieneAccesoVistaPorSede($user, $view, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso a la vista '{$view}' por sede.",
+            ], 403);
+        }
+
+        $result = $this->gateway->estimateRowCount($user, $schema, $view);
+
+        if (!$result['success']) {
+            return response()->json([
+                'success' => false,
+                'message' => $result['message'] ?? 'Error estimando filas.',
+            ], $result['code'] ?? 500);
+        }
+
+        $count = $result['count'];
+        $strategy = match(true) {
+            $count < 10_000   => 'in-memory',
+            $count < 100_000  => 'duckdb',
+            default           => 'paginated'
+        };
+
+        return response()->json([
+            'success'  => true,
+            'count'    => $count,
+            'strategy' => $strategy,
+        ]);
     }
 
     /**

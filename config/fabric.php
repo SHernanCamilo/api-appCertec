@@ -33,7 +33,8 @@ return [
     'max_export_rows' => (int) env('FABRIC_MAX_EXPORT_ROWS', 1000000),
 
     // Chunk size para exports paginados (filas por request)
-    'export_chunk' => (int) env('FABRIC_EXPORT_CHUNK', 50000),
+    // Graph-Fabric acepta máximo 20000 filas por request (validación FastAPI)
+    'export_chunk' => (int) env('FABRIC_EXPORT_CHUNK', 20000),
 
     // Pausa entre chunks de export (ms) — cede el worker Python
     'export_chunk_pause_ms' => (int) env('FABRIC_EXPORT_CHUNK_PAUSE_MS', 100),

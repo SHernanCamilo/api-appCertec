@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Inventory;
 
 use App\Models\Inventory\InvTrazActivo;
+use App\Models\TipoInventario;
+use App\Models\TrazabilidadActivo;
 use App\Models\User;
 use App\Services\Fabric\GraphFabricGatewayService;
 use Illuminate\Support\Collection;
@@ -46,6 +48,9 @@ class ActivoFijoService
     /**
      * Contrato estable que consume el frontend → columnas candidatas en la vista.
      *
+     * ACTUALIZADO: Ahora trae EstadoActivo, Localizacion y Responsable correctamente
+     * según los requerimientos del nuevo sistema de inventarios.
+     *
      * La vista de Indigo puede cambiar el casing o el separador de sus columnas;
      * el frontend no debería romperse por eso.
      *
@@ -53,16 +58,16 @@ class ActivoFijoService
      */
     private const MAPA_CAMPOS = [
         'placa'           => ['Placa', 'NroPlaca', 'Numero_Placa'],
-        'estado'          => ['Estado', 'EstadoActivo', 'Estado_Activo'],
+        'estado'          => ['EstadoActivo', 'Estado_Activo', 'Estado', 'EstadoBaja'],
         'articulo'        => ['Articulo', 'Articulo_Nombre', 'Descripcion', 'NombreArticulo'],
         'articulo_codigo' => ['CodigoArticulo', 'Codigo_Articulo', 'CodArticulo', 'Referencia'],
         'marca'           => ['Marca', 'NombreMarca'],
         'modelo'          => ['Modelo'],
         'serie'           => ['Serie', 'NroSerie', 'Numero_Serie'],
-        'responsable'     => ['Responsable', 'NombreResponsable'],
-        'localizacion'    => ['Localizacion', 'Localización', 'Ubicacion', 'CentroCosto'],
+        'responsable'     => ['Responsable', 'NombreResponsable', 'Empleado'],
+        'localizacion'    => ['Localizacion', 'Localización', 'Location', 'Ubicacion'],
+        'sucursal'        => ['Sucursal', 'NombreSucursal', 'Sede', 'Branch'],
         'tipo_inventario' => ['TipoInventario', 'Tipo_Inventario', 'TipoDeInventario'],
-        'sucursal'        => ['Sucursal', 'NombreSucursal', 'Sede'],
         'estado_fisico'   => ['Estado_Fisico', 'EstadoFisico', 'Estado Fisico'],
         'observacion'     => ['Observacion', 'Observación', 'Observaciones'],
     ];
@@ -205,21 +210,39 @@ class ActivoFijoService
     /**
      * Registra una novedad de toma de inventario.
      *
+     * ACTUALIZADO: Ahora requiere tipo_inventario_id y valida la periodicidad antes de guardar.
+     *
      * Guarda el snapshot del activo tal como está en Indigo en este momento,
      * para que el historial muestre "de qué a qué" cambió cada campo.
      *
      * Optimización: si el activo ya se buscó recientemente (< 10 min), se usa
      * el cache en lugar de ir de nuevo a Fabric. Esto reduce ~600ms por registro.
      *
-     * @param  array<string, mixed> $datos Novedades ya validadas por el controller
+     * @param  array<string, mixed> $datos Novedades ya validadas por el controller (debe incluir tipo_inventario_id)
      * @return array{success: bool, data?: InvTrazActivo, message?: string, code?: int}
      */
     public function registrarNovedad(User $user, array $datos): array
     {
         $placa = trim((string) ($datos['placa'] ?? ''));
+        $tipoInventarioId = (int) ($datos['tipo_inventario_id'] ?? 0);
 
         if ($placa === '') {
             return ['success' => false, 'message' => 'La placa es obligatoria.', 'code' => 422];
+        }
+
+        if ($tipoInventarioId <= 0) {
+            return ['success' => false, 'message' => 'El tipo de inventario es obligatorio.', 'code' => 422];
+        }
+
+        // Validar periodicidad ANTES de consultar Fabric
+        $validacion = $this->validarPeriodicidad($placa, $tipoInventarioId);
+        if (!$validacion['puede_registrar']) {
+            return [
+                'success' => false,
+                'message' => $validacion['mensaje'] ?? 'No se puede registrar este activo en este momento.',
+                'code' => 409, // Conflict
+                'data' => $validacion['ultimo_registro'] ?? null,
+            ];
         }
 
         // Intentar cache (la búsqueda previa del frontend guardó el activo)
@@ -250,21 +273,24 @@ class ActivoFijoService
         }
 
         try {
-            $registro = InvTrazActivo::create(array_merge($novedades, [
-                'placa'           => $placa,
-                'serie'           => $activo['serie'] ?? null,
-                'articulo_codigo' => $activo['articulo_codigo'] ?? null,
-                'articulo_nombre' => $activo['articulo'] ?? null,
-                'valores_origen'  => $activo['_raw'] ?? $activo,
-                'observacion'     => $this->limpiar($datos['observacion'] ?? null),
-                'sucursal_origen' => $activo['sucursal'] ?? null,
-                'id_empresa'      => $datos['id_empresa'] ?? null,
-                'id_sucursal'     => $datos['id_sucursal'] ?? null,
-                'registrado_por'  => $user->id,
+            $registro = TrazabilidadActivo::create(array_merge($novedades, [
+                'placa'              => $placa,
+                'tipo_inventario_id' => $tipoInventarioId,
+                'serie'              => $activo['serie'] ?? null,
+                'articulo_codigo'    => $activo['articulo_codigo'] ?? null,
+                'articulo_nombre'    => $activo['articulo'] ?? null,
+                'valores_origen'     => $activo['_raw'] ?? $activo,
+                'observacion'        => $this->limpiar($datos['observacion'] ?? null),
+                'sucursal_origen'    => $activo['sucursal'] ?? null,
+                'id_empresa'         => $datos['id_empresa'] ?? null,
+                'id_sucursal'        => $datos['id_sucursal'] ?? null,
+                'registrado_por'     => $user->id,
+                'es_externo'         => false,
             ]));
         } catch (\Throwable $e) {
             Log::error('ActivoFijoService: error registrando novedad', [
                 'placa'   => $placa,
+                'tipo_inventario_id' => $tipoInventarioId,
                 'user_id' => $user->id,
                 'error'   => $e->getMessage(),
             ]);
@@ -278,13 +304,119 @@ class ActivoFijoService
 
         Log::info('ActivoFijoService: novedad registrada', [
             'placa'    => $placa,
+            'tipo_inventario_id' => $tipoInventarioId,
             'traz_id'  => $registro->id,
             'user'     => $user->email,
-            'cambios'  => count($registro->cambios()),
+            'cambios'  => $registro->contarNovedades(),
         ]);
 
         // Retornar con el mismo formato que usa el historial/trazabilidad
-        return ['success' => true, 'data' => $this->formatearRegistro($registro->load('usuario:id,name,email'))];
+        return ['success' => true, 'data' => $this->formatearRegistroNuevo($registro->load('registrador:id,name,email', 'tipoInventario:id,nombre'))];
+    }
+
+    /**
+     * Valida si un activo puede ser registrado según el tipo de inventario y su periodicidad.
+     *
+     * NUEVO: Implementa las reglas de negocio de periodicidad:
+     * - Inventario General (anual): máximo 1 registro por activo al año
+     * - Inventario Aleatorio (mensual): máximo 1 registro por activo al mes
+     *
+     * @param  string $placa Placa del activo
+     * @param  int $tipoInventarioId ID del tipo de inventario
+     * @param  \Carbon\Carbon|null $fecha Fecha de referencia (default: hoy)
+     * @return array{puede_registrar: bool, mensaje?: string, ultimo_registro?: array}
+     */
+    public function validarPeriodicidad(string $placa, int $tipoInventarioId, ?\Carbon\Carbon $fecha = null): array
+    {
+        $fecha = $fecha ?? now();
+
+        // Buscar el tipo de inventario
+        $tipoInventario = TipoInventario::find($tipoInventarioId);
+
+        if (!$tipoInventario) {
+            return [
+                'puede_registrar' => false,
+                'mensaje' => 'Tipo de inventario no encontrado.',
+            ];
+        }
+
+        // Verificar si el tipo está activo
+        if (!$tipoInventario->activo) {
+            return [
+                'puede_registrar' => false,
+                'mensaje' => "El tipo de inventario '{$tipoInventario->nombre}' está inactivo.",
+            ];
+        }
+
+        // Si no hay restricción de periodicidad, siempre puede registrarse
+        if ($tipoInventario->periodicidad === 'ninguna') {
+            return ['puede_registrar' => true];
+        }
+
+        // Calcular el rango de fechas según la periodicidad
+        [$desde, $hasta] = $tipoInventario->calcularRangoPeriodicidad($fecha);
+
+        // Buscar si ya existe un registro en ese período
+        $registroExistente = TrazabilidadActivo::where('placa', $placa)
+            ->where('tipo_inventario_id', $tipoInventarioId)
+            ->whereBetween('created_at', [$desde, $hasta])
+            ->with('registrador:id,name')
+            ->orderByDesc('created_at')
+            ->first();
+
+        if ($registroExistente) {
+            $nombrePeriodo = match ($tipoInventario->periodicidad) {
+                'anual' => 'año ' . $fecha->year,
+                'semestral' => 'semestre ' . ceil($fecha->month / 6) . ' de ' . $fecha->year,
+                'trimestral' => 'trimestre ' . $fecha->quarter . ' de ' . $fecha->year,
+                'mensual' => $fecha->translatedFormat('F \\d\\e Y'),
+                'semanal' => 'semana del ' . $desde->format('d/m') . ' al ' . $hasta->format('d/m/Y'),
+                default => 'período actual',
+            };
+
+            return [
+                'puede_registrar' => false,
+                'mensaje' => "Este activo ya fue inventariado en el {$nombrePeriodo} con el tipo '{$tipoInventario->nombre}'.",
+                'ultimo_registro' => [
+                    'id' => $registroExistente->id,
+                    'fecha' => $registroExistente->created_at->format('d/m/Y H:i'),
+                    'registrado_por' => $registroExistente->registrador?->name ?? 'Usuario desconocido',
+                ],
+            ];
+        }
+
+        return ['puede_registrar' => true];
+    }
+
+    /**
+     * Obtiene los tipos de inventario activos disponibles.
+     * Retorna directamente el array para embeber en respuestas compuestas.
+     *
+     * @return list<array{id: int, nombre: string, periodicidad: string, periodicidad_nombre: string, descripcion: string|null, descripcion_restriccion: string}>
+     */
+    public function tiposInventarioLista(): array
+    {
+        return TipoInventario::activos()
+            ->orderBy('nombre')
+            ->get()
+            ->map(fn (TipoInventario $tipo) => [
+                'id'                      => $tipo->id,
+                'nombre'                  => $tipo->nombre,
+                'periodicidad'            => $tipo->periodicidad,
+                'periodicidad_nombre'     => $tipo->periodicidad_nombre,
+                'descripcion'             => $tipo->descripcion,
+                'descripcion_restriccion' => $tipo->descripcion_restriccion,
+                'activo'                  => $tipo->activo,
+            ])
+            ->all();
+    }
+
+    /**
+     * @deprecated Usar tiposInventarioLista() para embeber en respuestas compuestas.
+     */
+    public function tiposInventario(): array
+    {
+        return ['success' => true, 'data' => $this->tiposInventarioLista()];
     }
 
     /**
@@ -294,23 +426,25 @@ class ActivoFijoService
      */
     public function historial(string $placa, int $limit = 100): array
     {
-        return InvTrazActivo::dePlaca($placa)
-            ->with('usuario:id,name,email')
-            ->recientesPrimero()
+        return TrazabilidadActivo::porPlaca($placa)
+            ->with('registrador:id,name,email', 'tipoInventario:id,nombre')
+            ->recientes()
             ->limit($limit)
             ->get()
-            ->map(fn (InvTrazActivo $t) => $this->formatearRegistro($t))
+            ->map(fn (TrazabilidadActivo $t) => $this->formatearRegistroNuevo($t))
             ->all();
     }
 
     /**
      * Listado paginado de todas las tomas, con filtros opcionales.
      *
+     * ACTUALIZADO: Incluye filtro por tipo de inventario, quita unidad_funcional.
+     *
      * @param  array<string, mixed> $filtros
      */
     public function listar(array $filtros = [], int $porPagina = 25): array
     {
-        $query = InvTrazActivo::with('usuario:id,name,email')->recientesPrimero();
+        $query = TrazabilidadActivo::with('registrador:id,name,email', 'tipoInventario:id,nombre')->recientes();
 
         if (!empty($filtros['placa'])) {
             $query->where('placa', 'like', '%' . $filtros['placa'] . '%');
@@ -318,6 +452,10 @@ class ActivoFijoService
 
         if (!empty($filtros['estado_fisico'])) {
             $query->where('novedad_estado_fisico', $filtros['estado_fisico']);
+        }
+
+        if (!empty($filtros['tipo_inventario_id'])) {
+            $query->where('tipo_inventario_id', (int) $filtros['tipo_inventario_id']);
         }
 
         if (!empty($filtros['usuario_id'])) {
@@ -332,10 +470,6 @@ class ActivoFijoService
             $query->whereDate('created_at', '<=', $filtros['hasta']);
         }
 
-        if (!empty($filtros['unidad_funcional'])) {
-            $query->where('unidad_funcional', $filtros['unidad_funcional']);
-        }
-
         if (isset($filtros['es_externo'])) {
             $query->where('es_externo', (bool) $filtros['es_externo']);
         }
@@ -344,7 +478,7 @@ class ActivoFijoService
 
         return [
             'data' => collect($paginador->items())
-                ->map(fn (InvTrazActivo $t) => $this->formatearRegistro($t))
+                ->map(fn (TrazabilidadActivo $t) => $this->formatearRegistroNuevo($t))
                 ->all(),
             'meta' => [
                 'total'        => $paginador->total(),
@@ -359,6 +493,8 @@ class ActivoFijoService
      * Resumen para el tablero: cuántas tomas, cuántas piden baja, etc.
      * Optimizado: una sola query con aggregation condicional.
      *
+     * ACTUALIZADO: Ahora agrupa por tipo de inventario en lugar de unidad funcional.
+     *
      * @return array<string, mixed>
      */
     public function resumen(): array
@@ -368,27 +504,27 @@ class ActivoFijoService
         $resultado = DB::table('inv_traz_activo')
             ->selectRaw('COUNT(*) as total_tomas')
             ->selectRaw('COUNT(DISTINCT placa) as activos_distintos')
-            ->selectRaw("SUM(CASE WHEN novedad_estado_fisico = ? THEN 1 ELSE 0 END) as para_baja", [InvTrazActivo::ESTADO_FISICO_BAJA])
-            ->selectRaw("SUM(CASE WHEN novedad_estado_fisico = ? THEN 1 ELSE 0 END) as para_reparacion", [InvTrazActivo::ESTADO_FISICO_REPARACION])
-            ->selectRaw("SUM(CASE WHEN novedad_estado_fisico = ? THEN 1 ELSE 0 END) as en_buen_estado", [InvTrazActivo::ESTADO_FISICO_BUENO])
+            ->selectRaw("SUM(CASE WHEN novedad_estado_fisico = 'Dar de baja' THEN 1 ELSE 0 END) as para_baja")
+            ->selectRaw("SUM(CASE WHEN novedad_estado_fisico = 'Para Reparacion' THEN 1 ELSE 0 END) as para_reparacion")
+            ->selectRaw("SUM(CASE WHEN novedad_estado_fisico = 'En buen estado' THEN 1 ELSE 0 END) as en_buen_estado")
             ->selectRaw("SUM(CASE WHEN DATE(created_at) = CURDATE() THEN 1 ELSE 0 END) as tomas_hoy")
             ->selectRaw("SUM(CASE WHEN es_externo = 1 THEN 1 ELSE 0 END) as externos")
             ->first();
 
-        // Desglose por unidad funcional del mes actual
-        $porUnidad = DB::table('inv_traz_activo')
-            ->select('unidad_funcional')
+        // Desglose por tipo de inventario del mes actual
+        $porTipo = DB::table('inv_traz_activo')
+            ->join('inv_tipos_inventario', 'inv_traz_activo.tipo_inventario_id', '=', 'inv_tipos_inventario.id')
+            ->select('inv_tipos_inventario.nombre as tipo_inventario')
             ->selectRaw('COUNT(*) as tomas')
-            ->selectRaw('COUNT(DISTINCT placa) as activos')
-            ->where('created_at', '>=', $inicioMes)
-            ->whereNotNull('unidad_funcional')
-            ->groupBy('unidad_funcional')
+            ->selectRaw('COUNT(DISTINCT inv_traz_activo.placa) as activos')
+            ->where('inv_traz_activo.created_at', '>=', $inicioMes)
+            ->groupBy('inv_tipos_inventario.id', 'inv_tipos_inventario.nombre')
             ->orderByDesc('tomas')
             ->get()
             ->map(fn ($row) => [
-                'unidad_funcional' => $row->unidad_funcional,
-                'tomas'            => (int) $row->tomas,
-                'activos'          => (int) $row->activos,
+                'tipo_inventario' => $row->tipo_inventario,
+                'tomas'           => (int) $row->tomas,
+                'activos'         => (int) $row->activos,
             ])
             ->all();
 
@@ -400,7 +536,7 @@ class ActivoFijoService
             'en_buen_estado'    => (int) ($resultado->en_buen_estado ?? 0),
             'tomas_hoy'         => (int) ($resultado->tomas_hoy ?? 0),
             'externos'          => (int) ($resultado->externos ?? 0),
-            'por_unidad_funcional' => $porUnidad,
+            'por_tipo_inventario' => $porTipo,
         ];
     }
 
@@ -417,47 +553,46 @@ class ActivoFijoService
      */
     public function exportarExcel(array $filtros = []): \Symfony\Component\HttpFoundation\StreamedResponse
     {
-        $query = InvTrazActivo::with('usuario:id,name,email')->recientesPrimero();
+        $query = TrazabilidadActivo::with(['usuario:id,name,email', 'tipoInventario:id,nombre'])
+            ->orderBy('created_at', 'desc');
 
-        if (!empty($filtros['unidad_funcional'])) {
-            $query->where('unidad_funcional', $filtros['unidad_funcional']);
+        // Filtro por tipo de inventario
+        if (!empty($filtros['tipo_inventario_id'])) {
+            $query->porTipoInventario((int) $filtros['tipo_inventario_id']);
         }
 
         if (!empty($filtros['placa'])) {
-            $query->where('placa', 'like', '%' . $filtros['placa'] . '%');
+            $query->porPlaca($filtros['placa']);
         }
 
         if (!empty($filtros['estado_fisico'])) {
-            $query->where('novedad_estado_fisico', $filtros['estado_fisico']);
+            $query->porEstadoFisico($filtros['estado_fisico']);
         }
 
-        if (!empty($filtros['desde'])) {
-            $query->whereDate('created_at', '>=', $filtros['desde']);
-        }
-
-        if (!empty($filtros['hasta'])) {
-            $query->whereDate('created_at', '<=', $filtros['hasta']);
+        if (!empty($filtros['desde']) && !empty($filtros['hasta'])) {
+            $query->entreFechas($filtros['desde'], $filtros['hasta']);
         }
 
         if (isset($filtros['es_externo'])) {
-            $query->where('es_externo', (bool) $filtros['es_externo']);
+            if ((bool) $filtros['es_externo']) {
+                $query->externos();
+            } else {
+                $query->delMaestro();
+            }
         }
 
         $registros = $query->get();
-
-        $inicioMes = now()->startOfMonth();
 
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('Trazabilidad');
 
-        // Encabezados
+        // Encabezados actualizados: quitar Unidad Funcional, agregar Tipo Inventario
         $headers = [
             'Placa', 'Serie', 'Artículo Código', 'Artículo Nombre',
             'Estado Físico', 'Localización', 'Sucursal Origen',
-            'Unidad Funcional', 'Responsable', 'Observación',
-            'Es Externo', 'Inventariado Este Mes', 'Registrado Por',
-            'Fecha Registro',
+            'Tipo Inventario', 'Responsable', 'Observación',
+            'Es Externo', 'Registrado Por', 'Fecha Registro',
         ];
 
         foreach ($headers as $col => $header) {
@@ -477,8 +612,6 @@ class ActivoFijoService
         // Datos
         $row = 2;
         foreach ($registros as $registro) {
-            $inventariadoEsteMes = $registro->created_at && $registro->created_at->gte($inicioMes) ? 'Sí' : 'No';
-
             $sheet->setCellValue([1, $row], $registro->placa);
             $sheet->setCellValue([2, $row], $registro->serie);
             $sheet->setCellValue([3, $row], $registro->articulo_codigo);
@@ -486,13 +619,12 @@ class ActivoFijoService
             $sheet->setCellValue([5, $row], $registro->novedad_estado_fisico);
             $sheet->setCellValue([6, $row], $registro->novedad_localizacion);
             $sheet->setCellValue([7, $row], $registro->sucursal_origen);
-            $sheet->setCellValue([8, $row], $registro->unidad_funcional);
+            $sheet->setCellValue([8, $row], $registro->tipoInventario?->nombre ?? 'N/A');
             $sheet->setCellValue([9, $row], $registro->novedad_responsable);
             $sheet->setCellValue([10, $row], $registro->observacion);
             $sheet->setCellValue([11, $row], $registro->es_externo ? 'Sí' : 'No');
-            $sheet->setCellValue([12, $row], $inventariadoEsteMes);
-            $sheet->setCellValue([13, $row], $registro->usuario?->name ?? 'N/A');
-            $sheet->setCellValue([14, $row], $registro->created_at?->format('d/m/Y H:i'));
+            $sheet->setCellValue([12, $row], $registro->usuario?->name ?? 'N/A');
+            $sheet->setCellValue([13, $row], $registro->created_at?->format('d/m/Y H:i'));
 
             $row++;
         }
@@ -520,20 +652,39 @@ class ActivoFijoService
     /**
      * Registra un activo encontrado en campo que NO existe en el maestro de Indigo.
      *
+     * ACTUALIZADO: Ahora requiere tipo_inventario_id.
+     *
      * @param  array<string, mixed> $datos Datos ya validados por el controller
-     * @return array{success: bool, data?: InvTrazActivo, message?: string, code?: int}
+     * @return array{success: bool, data?: TrazabilidadActivo, message?: string, code?: int}
      */
     public function registrarNovedadExterna(User $user, array $datos): array
     {
         $placa = trim((string) ($datos['placa'] ?? ''));
+        $tipoInventarioId = (int) ($datos['tipo_inventario_id'] ?? 0);
 
         if ($placa === '') {
             return ['success' => false, 'message' => 'La placa es obligatoria.', 'code' => 422];
         }
 
+        if ($tipoInventarioId <= 0) {
+            return ['success' => false, 'message' => 'El tipo de inventario es obligatorio.', 'code' => 422];
+        }
+
+        // Validar periodicidad
+        $validacion = $this->validarPeriodicidad($placa, $tipoInventarioId);
+        if (!$validacion['puede_registrar']) {
+            return [
+                'success' => false,
+                'message' => $validacion['mensaje'] ?? 'No se puede registrar este activo en este momento.',
+                'code' => 409,
+                'data' => $validacion['ultimo_registro'] ?? null,
+            ];
+        }
+
         try {
-            $registro = InvTrazActivo::create([
+            $registro = TrazabilidadActivo::create([
                 'placa'                  => $placa,
+                'tipo_inventario_id'     => $tipoInventarioId,
                 'serie'                  => $this->limpiar($datos['serie'] ?? null),
                 'articulo_codigo'        => null,
                 'articulo_nombre'        => $this->limpiar($datos['articulo_nombre'] ?? null),
@@ -547,7 +698,6 @@ class ActivoFijoService
                 'observacion'            => $this->limpiar($datos['observacion'] ?? null),
                 'sucursal_origen'        => $this->limpiar($datos['sucursal'] ?? null),
                 'es_externo'             => true,
-                'unidad_funcional'       => $this->limpiar($datos['unidad_funcional'] ?? null),
                 'id_empresa'             => $datos['id_empresa'] ?? null,
                 'id_sucursal'            => $datos['id_sucursal'] ?? null,
                 'registrado_por'         => $user->id,
@@ -555,6 +705,7 @@ class ActivoFijoService
         } catch (\Throwable $e) {
             Log::error('ActivoFijoService: error registrando novedad externa', [
                 'placa'   => $placa,
+                'tipo_inventario_id' => $tipoInventarioId,
                 'user_id' => $user->id,
                 'error'   => $e->getMessage(),
             ]);
@@ -568,11 +719,12 @@ class ActivoFijoService
 
         Log::info('ActivoFijoService: novedad externa registrada', [
             'placa'    => $placa,
+            'tipo_inventario_id' => $tipoInventarioId,
             'traz_id'  => $registro->id,
             'user'     => $user->email,
         ]);
 
-        return ['success' => true, 'data' => $this->formatearRegistro($registro->load('usuario:id,name,email'))];
+        return ['success' => true, 'data' => $this->formatearRegistroNuevo($registro->load('registrador:id,name,email', 'tipoInventario:id,nombre'))];
     }
 
     // =========================================================================
@@ -920,6 +1072,39 @@ class ActivoFijoService
         }
 
         return $texto;
+    }
+
+    /**
+     * Formatea un registro de trazabilidad para el frontend (modelo NUEVO TrazabilidadActivo).
+     *
+     * @return array<string, mixed>
+     */
+    private function formatearRegistroNuevo(TrazabilidadActivo $t): array
+    {
+        return [
+            'id'               => $t->id,
+            'placa'            => $t->placa,
+            'serie'            => $t->serie,
+            'articulo_codigo'  => $t->articulo_codigo,
+            'articulo_nombre'  => $t->articulo_nombre,
+            'observacion'      => $t->observacion,
+            'sucursal_origen'  => $t->sucursal_origen,
+            'estado_fisico'    => $t->novedad_estado_fisico,
+            'es_externo'       => (bool) $t->es_externo,
+            'tipo_inventario'  => [
+                'id'     => $t->tipoInventario?->id,
+                'nombre' => $t->tipoInventario?->nombre,
+            ],
+            'novedades'        => $t->resumen_novedades,
+            'total_cambios'    => $t->contarNovedades(),
+            'registrado_por'   => [
+                'id'     => $t->registrador?->id,
+                'nombre' => $t->registrador?->name ?? 'Usuario eliminado',
+                'email'  => $t->registrador?->email,
+            ],
+            'created_at'       => $t->created_at?->toIso8601String(),
+            'created_at_human' => $t->created_at?->format('d/m/Y H:i'),
+        ];
     }
 
     /**

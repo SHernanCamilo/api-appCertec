@@ -14,7 +14,7 @@
         "laravel/tinker": "^2.8",
         "openspout/openspout": "^4.28",
         "phpoffice/phpspreadsheet": "^5.9",
-        "predis/predis": "^3.5",
+        "predis/predis": "^3.6",
         "socialiteproviders/microsoft-azure": "^5.2",
         "spatie/laravel-permission": "^6.21",
         "tymon/jwt-auth": "^2.1"
