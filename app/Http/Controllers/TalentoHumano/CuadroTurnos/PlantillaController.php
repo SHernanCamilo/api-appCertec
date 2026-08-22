@@ -31,9 +31,21 @@ class PlantillaController extends Controller
 
                 if ($accessLevel !== 'super_admin' && $accessLevel !== 'transversal') {
                     $empresasPermitidas = $accessControl->getUnidades()->pluck('id_empresa')->unique()->filter()->values()->toArray();
+                    if (empty($empresasPermitidas)) {
+                        $empresasPermitidas = config('cuadro_turnos.empresas_habilitadas', []);
+                    }
                     if (!empty($empresasPermitidas)) {
                         $query->where(function ($q) use ($empresasPermitidas) {
                             $q->whereIn('id_empresa', $empresasPermitidas)
+                              ->orWhereNull('id_empresa');
+                        });
+                    }
+                } else {
+                    // Super admin / transversal: solo mostrar de empresas habilitadas
+                    $empresasHabilitadas = config('cuadro_turnos.empresas_habilitadas', []);
+                    if (!empty($empresasHabilitadas)) {
+                        $query->where(function ($q) use ($empresasHabilitadas) {
+                            $q->whereIn('id_empresa', $empresasHabilitadas)
                               ->orWhereNull('id_empresa');
                         });
                     }

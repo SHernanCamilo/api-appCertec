@@ -2,7 +2,7 @@
 
 namespace App\Services\TalentoHumano;
 
-use App\Models\Config\ConfigMotRechazo;
+use App\Models\TalentoHumano\EventMotRechazo;
 use App\Models\Empleado;
 use App\Models\Modulo;
 use App\Models\Config\ConfigUnidadFuncional;
@@ -34,43 +34,40 @@ class EventSolicitudService
 
     public function listar(array $filters = [], ?int $userId = null)
     {
-        $query = EventHoraExtra::with([
-            'empleado:id,nombre,numero_identificacion,id_empresa',
-            'aprobador:id,nombre',
-            'empleadoCubre:id,nombre,numero_identificacion',
-            'novedad:id,codigo,descripcion',
-            'motivoRechazo:id,codigo,descriocion,id_modulo',
-        ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
-          ->select(
-              'event_horas_extra.*',
-              'uf.nombre as unidad_funcional',
-              'uf.codigo as unidad_funcional_codigo',
-              'uf.id_empresa as empresa_id'
-          );
+        $query = $this->querySolicitudesBase();
 
         if ($userId) {
             $query->where('event_horas_extra.id_user_reg', $userId);
         }
 
-        if (!empty($filters['estado'])) {
-            $query->where('event_horas_extra.estado', $filters['estado']);
-        }
+        $this->aplicarFiltrosListado($query, $filters);
 
-        if (!empty($filters['search'])) {
-            $term = $filters['search'];
-            $query->where(function ($q) use ($term) {
-                $q->whereHas('empleado', fn($sub) => $sub->where('nombre', 'like', "%{$term}%"))
-                  ->orWhere('event_horas_extra.consecutivo', 'like', "%{$term}%");
-            });
-        }
+        $perPage = min(max((int) ($filters['per_page'] ?? 10), 5), 100);
+        $page = max((int) ($filters['page'] ?? 1), 1);
 
-        return $query->orderBy('event_horas_extra.fecha_solicitud', 'desc')->paginate($filters['per_page'] ?? 10)
+        return $query->orderBy('event_horas_extra.fecha_solicitud', 'desc')
+            ->paginate($perPage, ['*'], 'page', $page)
             ->through(fn (EventHoraExtra $evento) => $this->enriquecerEventoConIntervinientes($evento));
+    }
+
+    public function obtener(int $id, int $userId): ?EventHoraExtra
+    {
+        $evento = $this->querySolicitudesBase()
+            ->where('event_horas_extra.id', $id)
+            ->where('event_horas_extra.id_user_reg', $userId)
+            ->first();
+
+        return $evento ? $this->enriquecerEventoConIntervinientes($evento) : null;
     }
 
     public function crear(array $data, int $userId): EventHoraExtra
     {
         $this->validarDuracionMinima($data['fecha_inicial'] ?? null, $data['fecha_final'] ?? null);
+        $this->validarSolapamientoEmpleado(
+            (int) $data['empleado_id'],
+            $data['fecha_inicial'] ?? null,
+            $data['fecha_final'] ?? null
+        );
 
         $empresaId = $this->resolverEmpresaId((int)$data['empleado_id']);
 
@@ -457,7 +454,7 @@ class EventSolicitudService
             'empleado:id,nombre,numero_identificacion,id_empresa',
             'novedad:id,codigo,descripcion',
             'empleadoCubre:id,nombre,numero_identificacion',
-            'motivoRechazo:id,codigo,descriocion,id_modulo',
+            'motivoRechazo:id,codigo,descriocion',
         ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
           ->select(
               'event_horas_extra.*',
@@ -534,7 +531,7 @@ class EventSolicitudService
             'empleado:id,nombre,numero_identificacion,id_empresa',
             'novedad:id,codigo,descripcion',
             'empleadoCubre:id,nombre,numero_identificacion',
-            'motivoRechazo:id,codigo,descriocion,id_modulo',
+            'motivoRechazo:id,codigo,descriocion',
         ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
           ->select(
               'event_horas_extra.*',
@@ -604,10 +601,9 @@ class EventSolicitudService
      */
     public function listarMotivosRechazo(): \Illuminate\Support\Collection
     {
-        return ConfigMotRechazo::query()
-            ->where('id_modulo', $this->resolverModuloEventosId())
+        return EventMotRechazo::query()
             ->orderBy('codigo')
-            ->get(['id', 'codigo', 'descriocion', 'id_modulo']);
+            ->get(['id', 'codigo', 'descriocion']);
     }
 
     /**
@@ -615,9 +611,8 @@ class EventSolicitudService
      */
     public function rechazar(int $id, int $userId, int $idMotivoRechazo, ?string $comentario = null): EventHoraExtra
     {
-        $motivoCatalogo = ConfigMotRechazo::query()
+        $motivoCatalogo = EventMotRechazo::query()
             ->where('id', $idMotivoRechazo)
-            ->where('id_modulo', $this->resolverModuloEventosId())
             ->first();
 
         if (!$motivoCatalogo) {
@@ -698,6 +693,15 @@ class EventSolicitudService
                 $this->validarDuracionMinima(
                     $data['fecha_inicial'] ?? $solicitud->fecha_nov_ini,
                     $data['fecha_final'] ?? $solicitud->fecha_nov_fin
+                );
+            }
+
+            if (!$anular) {
+                $this->validarSolapamientoEmpleado(
+                    (int) ($data['empleado_id'] ?? $solicitud->id_user_nov),
+                    $data['fecha_inicial'] ?? $solicitud->fecha_nov_ini,
+                    $data['fecha_final'] ?? $solicitud->fecha_nov_fin,
+                    $solicitud->id
                 );
             }
 
@@ -1029,6 +1033,97 @@ class EventSolicitudService
 
         if (($fin - $ini) < 30 * 60) {
             throw new \RuntimeException('La fecha de fin debe ser al menos 30 minutos posterior a la de inicio.');
+        }
+    }
+
+    public function buscarConflictoSolapamiento(
+        int $empleadoId,
+        mixed $fechaInicial,
+        mixed $fechaFinal,
+        ?int $excluirId = null
+    ): ?EventHoraExtra {
+        $ini = $this->aTimestamp($fechaInicial);
+        $fin = $this->aTimestamp($fechaFinal);
+        if ($ini === null || $fin === null) {
+            return null;
+        }
+
+        $query = EventHoraExtra::query()
+            ->with(['empleado:id,nombre,numero_identificacion'])
+            ->where('id_user_nov', $empleadoId)
+            ->whereNotIn('estado', [EventoEstadoMapper::RECHAZADO, EventoEstadoMapper::ANULADO])
+            ->where('fecha_nov_ini', '<', date('Y-m-d H:i:s', $fin))
+            ->where('fecha_nov_fin', '>', date('Y-m-d H:i:s', $ini));
+
+        if ($excluirId) {
+            $query->where('id', '!=', $excluirId);
+        }
+
+        return $query->orderBy('fecha_nov_ini')->first();
+    }
+
+    private function validarSolapamientoEmpleado(
+        int $empleadoId,
+        mixed $fechaInicial,
+        mixed $fechaFinal,
+        ?int $excluirId = null
+    ): void {
+        $conflicto = $this->buscarConflictoSolapamiento($empleadoId, $fechaInicial, $fechaFinal, $excluirId);
+        if (!$conflicto) {
+            return;
+        }
+
+        $nombre = $conflicto->empleado->nombre ?? "Empleado #{$empleadoId}";
+        $doc = $conflicto->empleado->numero_identificacion ?? null;
+        $quien = $doc ? "{$doc} - {$nombre}" : $nombre;
+        $iniFmt = $conflicto->fecha_nov_ini instanceof \DateTimeInterface
+            ? $conflicto->fecha_nov_ini->format('d/m/Y H:i')
+            : (string) $conflicto->fecha_nov_ini;
+        $finFmt = $conflicto->fecha_nov_fin instanceof \DateTimeInterface
+            ? $conflicto->fecha_nov_fin->format('d/m/Y H:i')
+            : (string) $conflicto->fecha_nov_fin;
+
+        throw new \RuntimeException(
+            "{$quien} ya tiene el evento {$conflicto->consecutivo} ({$iniFmt} – {$finFmt}) que se cruza con el rango seleccionado."
+        );
+    }
+
+    private function querySolicitudesBase()
+    {
+        return EventHoraExtra::with([
+            'empleado:id,nombre,numero_identificacion,id_empresa',
+            'aprobador:id,nombre',
+            'empleadoCubre:id,nombre,numero_identificacion',
+            'novedad:id,codigo,descripcion',
+            'motivoRechazo:id,codigo,descriocion',
+        ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
+          ->select(
+              'event_horas_extra.*',
+              'uf.nombre as unidad_funcional',
+              'uf.codigo as unidad_funcional_codigo',
+              'uf.id_empresa as empresa_id'
+          );
+    }
+
+    private function aplicarFiltrosListado($query, array $filters): void
+    {
+        if (!empty($filters['estado'])) {
+            $query->where('event_horas_extra.estado', $filters['estado']);
+        }
+
+        if (!empty($filters['search'])) {
+            $term = trim((string) $filters['search']);
+            if ($term !== '') {
+                $query->where(function ($q) use ($term) {
+                    $q->where('event_horas_extra.consecutivo', 'like', "%{$term}%")
+                      ->orWhere('uf.nombre', 'like', "%{$term}%")
+                      ->orWhere('uf.codigo', 'like', "%{$term}%")
+                      ->orWhereHas('empleado', function ($sub) use ($term) {
+                          $sub->where('nombre', 'like', "%{$term}%")
+                              ->orWhere('numero_identificacion', 'like', "%{$term}%");
+                      });
+                });
+            }
         }
     }
 

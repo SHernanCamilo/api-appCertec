@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\MesaServicio\GlpiPlantillaController;
+use App\Http\Controllers\MesaServicio\GlpiTicketsTicController;
 use App\Http\Controllers\MesaServicio\GlpiValidadorController;
 use Illuminate\Support\Facades\Route;
 
@@ -19,6 +20,8 @@ Route::get('/plantillas/{id}', [GlpiPlantillaController::class, 'show'])->whereN
 Route::put('/plantillas/{id}', [GlpiPlantillaController::class, 'update'])->whereNumber('id');
 Route::delete('/plantillas/{id}', [GlpiPlantillaController::class, 'destroy'])->whereNumber('id');
 Route::patch('/plantillas/{id}/toggle-estado', [GlpiPlantillaController::class, 'toggleEstado'])->whereNumber('id');
+
+Route::get('/tablero-tic', [GlpiTicketsTicController::class, 'index']);
 
 Route::get('/validador/entidades', [GlpiValidadorController::class, 'entidades']);
 Route::post('/validador/comparar', [GlpiValidadorController::class, 'comparar']);

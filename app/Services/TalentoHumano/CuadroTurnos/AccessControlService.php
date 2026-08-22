@@ -23,10 +23,12 @@ class AccessControlService
     protected $empresasAsignadas = [];
     protected $sedesAsignadas = [];
     protected $unidadesAsignadas = [];
+    protected $empresasHabilitadas = [];
 
     public function __construct(User $user)
     {
         $this->user = $user;
+        $this->empresasHabilitadas = config('cuadro_turnos.empresas_habilitadas', []);
         $this->determineAccessLevel();
     }
 
@@ -130,41 +132,60 @@ class AccessControlService
     }
 
     /**
-     * NIVEL 1: SUPER_ADMIN - Todas las unidades activas
+     * NIVEL 1: SUPER_ADMIN - Todas las unidades activas (filtradas por empresas habilitadas)
      */
     private function getUnidadesSuperAdmin(): Collection
     {
-        return ConfigUnidadFuncional::with(['empresa', 'sede'])
-            ->where('estado', true)
-            ->orderBy('nombre')
-            ->get();
+        $query = ConfigUnidadFuncional::with(['empresa', 'sede'])
+            ->where('estado', true);
+
+        if (!empty($this->empresasHabilitadas)) {
+            $query->whereIn('id_empresa', $this->empresasHabilitadas);
+        }
+
+        return $query->orderBy('nombre')->get();
     }
 
     /**
-     * NIVEL 2: TRANSVERSAL - Todas las unidades activas
+     * NIVEL 2: TRANSVERSAL - Todas las unidades activas (filtradas por empresas habilitadas)
      */
     private function getUnidadesTransversal(): Collection
     {
-        return ConfigUnidadFuncional::with(['empresa', 'sede'])
-            ->where('estado', true)
-            ->orderBy('nombre')
-            ->get();
+        $query = ConfigUnidadFuncional::with(['empresa', 'sede'])
+            ->where('estado', true);
+
+        if (!empty($this->empresasHabilitadas)) {
+            $query->whereIn('id_empresa', $this->empresasHabilitadas);
+        }
+
+        return $query->orderBy('nombre')->get();
     }
 
     /**
-     * NIVEL 3: EMPRESA_ADMIN - Solo unidades de sus empresas asignadas
+     * NIVEL 3: EMPRESA_ADMIN - Solo unidades de sus empresas asignadas (intersectadas con habilitadas)
      */
     private function getUnidadesEmpresaAdmin(): Collection
     {
+        $empresas = $this->empresasAsignadas;
+
+        // Intersectar con empresas habilitadas para el módulo
+        if (!empty($this->empresasHabilitadas)) {
+            $empresas = array_intersect($empresas, $this->empresasHabilitadas);
+        }
+
+        if (empty($empresas)) {
+            return collect();
+        }
+
         return ConfigUnidadFuncional::with(['empresa', 'sede'])
-            ->whereIn('id_empresa', $this->empresasAsignadas)
+            ->whereIn('id_empresa', $empresas)
             ->where('estado', true)
             ->orderBy('nombre')
             ->get();
     }
 
     /**
-     * NIVEL 4: USUARIO_RESPONSABLE_TURNO - Solo unidades donde es RESPONSABLE (tabla pivote config_unidades_fun_responsable)
+     * NIVEL 4: USUARIO_RESPONSABLE_TURNO - Solo unidades donde es RESPONSABLE (filtradas por empresas habilitadas)
      */
     private function getUnidadesUsuarioResponsableTurno(): Collection
     {
@@ -184,11 +205,16 @@ class AccessControlService
             return collect();
         }
 
-        $unidades = ConfigUnidadFuncional::with(['empresa', 'sede'])
+        $query = ConfigUnidadFuncional::with(['empresa', 'sede'])
             ->whereIn('id', $unidadIds)
-            ->where('estado', true)
-            ->orderBy('nombre')
-            ->get();
+            ->where('estado', true);
+
+        // Filtrar por empresas habilitadas
+        if (!empty($this->empresasHabilitadas)) {
+            $query->whereIn('id_empresa', $this->empresasHabilitadas);
+        }
+
+        $unidades = $query->orderBy('nombre')->get();
 
         \Log::info('✅ Unidades donde usuario es responsable', [
             'user_id' => $this->user->id,
@@ -256,6 +282,11 @@ class AccessControlService
      */
     public function tieneAccesoEmpresa(int $empresaId): bool
     {
+        // Si hay empresas habilitadas configuradas, verificar que la empresa esté en la lista
+        if (!empty($this->empresasHabilitadas) && !in_array($empresaId, $this->empresasHabilitadas)) {
+            return false;
+        }
+
         return match ($this->accessLevel) {
             'super_admin', 'transversal' => true,
             'empresa_admin' => in_array($empresaId, $this->empresasAsignadas),

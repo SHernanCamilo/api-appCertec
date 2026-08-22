@@ -319,34 +319,77 @@ class GlpiPlantillaController extends Controller
             return [];
         }
 
-        if ($filas->contains(fn ($item) => ! empty($item->parent_id) || (int) $item->nivel > 1 || filled($item->nombre))) {
+        $ids = $filas->map(fn ($item) => (int) ($item->id ?? 0));
+        $idsUnicos = $ids->unique()->count() === $filas->count() && $ids->every(fn ($id) => $id > 0);
+
+        if ($idsUnicos) {
             return $this->arbolDesdeParentId($filas);
         }
 
-        return $this->arbolDesdeCategoriaSubcategoria($filas);
+        return $this->arbolDesdeRutaCompleta($filas);
     }
 
     private function arbolDesdeParentId($filas): array
     {
-        $porPadre = $filas->groupBy(fn ($item) => (string) ($item->parent_id ?: 0));
+        $porPadre = $filas->groupBy(fn ($item) => (string) ((int) ($item->parent_id ?: 0)));
 
-        $armar = function ($parentId) use (&$armar, $porPadre): array {
+        $armar = function (int $parentId, array $stack = []) use (&$armar, $porPadre): array {
+            if (in_array($parentId, $stack, true)) {
+                return [];
+            }
+            $stack[] = $parentId;
             $key = (string) $parentId;
 
-            return ($porPadre[$key] ?? collect())->map(function ($item) use ($armar) {
+            return ($porPadre[$key] ?? collect())->map(function ($item) use ($armar, $stack) {
+                $id = (int) $item->id;
+
                 return [
-                    'id' => $item->id,
+                    'id' => $id,
                     'nombre' => $item->nombre ?: $item->categoria,
                     'prioridad' => $item->prioridad,
                     'ans_nombre' => $item->ans_nombre,
                     'nivel' => (int) $item->nivel,
                     'ruta_completa' => $item->ruta_completa,
-                    'hijas' => $armar($item->id),
+                    'hijas' => $id > 0 ? $armar($id, $stack) : [],
                 ];
             })->values()->all();
         };
 
         return $armar(0);
+    }
+
+    private function arbolDesdeRutaCompleta($filas): array
+    {
+        $nodos = [];
+        foreach ($filas as $fila) {
+            $ruta = trim((string) ($fila->ruta_completa ?: $fila->nombre ?: $fila->categoria));
+            if ($ruta === '') {
+                continue;
+            }
+            $nodos[$ruta] = [
+                'id' => (int) ($fila->id ?? 0),
+                'nombre' => $fila->nombre ?: $fila->categoria,
+                'prioridad' => $fila->prioridad,
+                'ans_nombre' => $fila->ans_nombre,
+                'nivel' => (int) ($fila->nivel ?: 1),
+                'ruta_completa' => $ruta,
+                'hijas' => [],
+            ];
+        }
+
+        $raices = [];
+        foreach ($nodos as $ruta => &$nodo) {
+            $pos = mb_strrpos($ruta, ' > ');
+            $rutaPadre = $pos === false ? '' : trim(mb_substr($ruta, 0, $pos));
+            if ($rutaPadre !== '' && isset($nodos[$rutaPadre])) {
+                $nodos[$rutaPadre]['hijas'][] = &$nodo;
+            } else {
+                $raices[] = &$nodo;
+            }
+        }
+        unset($nodo);
+
+        return json_decode(json_encode($raices), true) ?: [];
     }
 
     private function arbolDesdeCategoriaSubcategoria($filas): array

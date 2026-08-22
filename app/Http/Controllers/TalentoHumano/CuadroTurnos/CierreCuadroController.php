@@ -18,7 +18,7 @@ class CierreCuadroController extends Controller
         $this->service = $service;
     }
 
-    // ÔöÇÔöÇÔöÇ PAR+üMETROS DE CIERRE ÔöÇÔöÇÔöÇ
+    // ========= PARAMETROS DE CIERRE =========
 
     /**
      * GET /api/turnos/cierre-cuadro/parametros
@@ -48,14 +48,14 @@ class CierreCuadroController extends Controller
             $data
         );
 
-        return response()->json(['success' => true, 'data' => $parametro, 'message' => 'Par+ímetro guardado.']);
+        return response()->json(['success' => true, 'data' => $parametro, 'message' => 'Parametro guardado.']);
     }
 
-    // ÔöÇÔöÇÔöÇ ESTADO DE UNIDADES ÔöÇÔöÇÔöÇ
+    // ========= ESTADO DE UNIDADES =========
 
     /**
      * GET /api/turnos/cierre-cuadro/estado?anio=X&mes=Y&id_empresa=Z
-     * Lista unidades con su estado (bloqueado/abierto) para un per+¡odo.
+     * Lista unidades con su estado (bloqueado/abierto) para un periodo.
      */
     public function estado(Request $request): JsonResponse
     {
@@ -73,7 +73,7 @@ class CierreCuadroController extends Controller
         return response()->json(['success' => true, 'data' => $estado]);
     }
 
-    // ÔöÇÔöÇÔöÇ BLOQUEAR/DESBLOQUEAR ÔöÇÔöÇÔöÇ
+    // ========= BLOQUEAR/DESBLOQUEAR =========
 
     /**
      * POST /api/turnos/cierre-cuadro/bloquear
@@ -125,7 +125,7 @@ class CierreCuadroController extends Controller
         );
 
         if (!$ok) {
-            return response()->json(['success' => false, 'message' => 'No se encontr+¦ bloqueo activo para esta unidad/per+¡odo.'], 404);
+            return response()->json(['success' => false, 'message' => 'No se encontro bloqueo activo para esta unidad/periodo.'], 404);
         }
 
         return response()->json(['success' => true, 'message' => 'Unidad desbloqueada correctamente.']);
@@ -133,7 +133,7 @@ class CierreCuadroController extends Controller
 
     /**
      * POST /api/turnos/cierre-cuadro/ejecutar-automatico
-     * Ejecuta el cierre autom+ítico manualmente (para testing o cron).
+     * Ejecuta el cierre autom+ï¿½tico manualmente (para testing o cron).
      */
     public function ejecutarAutomatico(): JsonResponse
     {
@@ -163,7 +163,7 @@ class CierreCuadroController extends Controller
 
     /**
      * GET /api/turnos/cierre-cuadro/verificar?id_unidad=X&anio=Y&mes=Z
-     * Verifica si una unidad est+í bloqueada (+¦til para el frontend antes de editar).
+     * Verifica si una unidad est+ï¿½ bloqueada (+ï¿½til para el frontend antes de editar).
      */
     public function verificar(Request $request): JsonResponse
     {

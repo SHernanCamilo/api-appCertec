@@ -40,6 +40,54 @@ class EventSolicitudController extends Controller
         }
     }
 
+    public function show(int $id): JsonResponse
+    {
+        try {
+            $user = auth('api')->user();
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Usuario no autenticado',
+                ], 401);
+            }
+
+            $solicitud = $this->service->obtener($id, $user->id);
+            if (!$solicitud) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Solicitud no encontrada',
+                ], 404);
+            }
+
+            return response()->json(['success' => true, 'data' => $solicitud]);
+        } catch (\Exception $e) {
+            return $this->error('Error al consultar la solicitud', $e);
+        }
+    }
+
+    public function solapamiento(Request $request): JsonResponse
+    {
+        $request->validate([
+            'empleado_id'   => 'required|integer',
+            'fecha_inicial' => 'required',
+            'fecha_final'   => 'required',
+            'excluir_id'    => 'nullable|integer',
+        ]);
+
+        try {
+            $conflicto = $this->service->buscarConflictoSolapamiento(
+                (int) $request->empleado_id,
+                $request->fecha_inicial,
+                $request->fecha_final,
+                $request->filled('excluir_id') ? (int) $request->excluir_id : null
+            );
+
+            return response()->json(['success' => true, 'data' => $conflicto]);
+        } catch (\Exception $e) {
+            return $this->error('Error al validar el rango de fechas', $e);
+        }
+    }
+
     public function unidadesFuncionales(Request $request): JsonResponse
     {
         try {
@@ -376,7 +424,7 @@ class EventSolicitudController extends Controller
     public function rechazar(Request $request, int $id): JsonResponse
     {
         $request->validate([
-            'id_motivo_rechazo' => 'required|integer|exists:config_mot_rechazo,id',
+            'id_motivo_rechazo' => 'required|integer|exists:envet_mot_rechazo,id',
             'comentario'        => 'nullable|string|max:500',
         ]);
 

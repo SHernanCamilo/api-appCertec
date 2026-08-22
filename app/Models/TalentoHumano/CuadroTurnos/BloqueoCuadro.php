@@ -22,7 +22,7 @@ class BloqueoCuadro extends Model
 
     // Relaciones
     public function cuadro(): BelongsTo { return $this->belongsTo(CtCuadro::class, 'id_cuadro'); }
-    public function unidadFuncional(): BelongsTo { return $this->belongsTo(\App\Models\Turnos\ConfigUnidadFuncional::class, 'id_unidad_funcional'); }
+    public function unidadFuncional(): BelongsTo { return $this->belongsTo(\App\Models\Config\ConfigUnidadFuncional::class, 'id_unidad_funcional'); }
 
     // Scopes
     public function scopeBloqueados($query) { return $query->where('estado', 'bloqueado'); }
@@ -30,7 +30,7 @@ class BloqueoCuadro extends Model
     public function scopePorPeriodo($query, int $anio, int $mes) { return $query->where('anio', $anio)->where('mes', $mes); }
 
     /**
-     * Verifica si una unidad est+í bloqueada para un per+¡odo.
+     * Verifica si una unidad est+ï¿½ bloqueada para un per+ï¿½odo.
      */
     public static function estaBloqueada(int $idUnidad, int $anio, int $mes): bool
     {

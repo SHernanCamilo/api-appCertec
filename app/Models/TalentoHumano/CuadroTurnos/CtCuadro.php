@@ -106,7 +106,9 @@ class CtCuadro extends Model
 
     public function esBorrador(): bool
     {
-        return $this->estado === self::ESTADO_BORRADOR;
+        return $this->estado === self::ESTADO_BORRADOR
+            || $this->estado === ''
+            || $this->estado === null;
     }
 
     public function esPublicado(): bool

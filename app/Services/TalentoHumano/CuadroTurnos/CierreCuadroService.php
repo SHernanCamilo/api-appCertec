@@ -12,8 +12,8 @@ use Carbon\Carbon;
 class CierreCuadroService
 {
     /**
-     * Verifica si una unidad funcional est+í bloqueada para un per+¡odo.
-     * Revisa TANTO el bloqueo manual como el cierre autom+ítico por fecha.
+     * Verifica si una unidad funcional est+ï¿½ bloqueada para un per+ï¿½odo.
+     * Revisa TANTO el bloqueo manual como el cierre autom+ï¿½tico por fecha.
      */
     public function estaBloqueado(int $idUnidad, int $anio, int $mes): bool
     {
@@ -22,7 +22,7 @@ class CierreCuadroService
             return true;
         }
 
-        // 2. Cierre autom+ítico por fecha
+        // 2. Cierre autom+ï¿½tico por fecha
         $parametro = ParametroCierreCuadro::vigente();
         if (!$parametro || $parametro->tipo_bloqueo !== 'automatico') {
             return false;
@@ -45,7 +45,7 @@ class CierreCuadroService
     }
 
     /**
-     * Verifica si un cuadro espec+¡fico est+í bloqueado.
+     * Verifica si un cuadro espec+ï¿½fico est+ï¿½ bloqueado.
      */
     public function cuadroEstaBloqueado(int $idCuadro): bool
     {
@@ -70,7 +70,7 @@ class CierreCuadroService
         $yaEstaban = [];
 
         foreach ($idsUnidades as $idUnidad) {
-            // Verificar si ya est+í bloqueada
+            // Verificar si ya est+ï¿½ bloqueada
             if (BloqueoCuadro::estaBloqueada($idUnidad, $anio, $mes)) {
                 $yaEstaban[] = $idUnidad;
                 continue;
@@ -151,7 +151,7 @@ class CierreCuadroService
     }
 
     /**
-     * Ejecuta el cierre autom+ítico seg+¦n los par+ímetros configurados.
+     * Ejecuta el cierre autom+ï¿½tico seg+ï¿½n los par+ï¿½metros configurados.
      * Se llama desde un cron job / scheduler.
      */
     public function ejecutarCierreAutomatico(): array
@@ -167,15 +167,15 @@ class CierreCuadroService
             $diaCierre = $parametro->dia_cierre;
             $horaCierre = $parametro->hora_cierre;
 
-            // Determinar si ya pas+¦ la fecha/hora de cierre
+            // Determinar si ya pas+ï¿½ la fecha/hora de cierre
             $fechaCierre = Carbon::create($ahora->year, $ahora->month, min($diaCierre, $ahora->daysInMonth));
             $fechaCierre->setTimeFromTimeString($horaCierre);
 
             if ($ahora->lt($fechaCierre)) {
-                continue; // A+¦n no es hora de cerrar
+                continue; // A+ï¿½n no es hora de cerrar
             }
 
-            // Determinar qu+® mes cerrar
+            // Determinar qu+ï¿½ mes cerrar
             if ($parametro->aplica_mes_actual) {
                 $anioCierre = $ahora->year;
                 $mesCierre = $ahora->month;
@@ -185,7 +185,7 @@ class CierreCuadroService
                 $mesCierre = $mesAnterior->month;
             }
 
-            // Buscar cuadros abiertos del per+¡odo
+            // Buscar cuadros abiertos del per+ï¿½odo
             $cuadrosAbiertos = CtCuadro::where('anio', $anioCierre)
                 ->where('mes', $mesCierre)
                 ->whereNotNull('id_unidad_funcional')
@@ -196,7 +196,7 @@ class CierreCuadroService
                 ->get();
 
             foreach ($cuadrosAbiertos as $cuadro) {
-                // Verificar que no est+® ya bloqueado
+                // Verificar que no est+ï¿½ ya bloqueado
                 if (BloqueoCuadro::estaBloqueada($cuadro->id_unidad_funcional, $anioCierre, $mesCierre)) {
                     continue;
                 }
@@ -208,7 +208,7 @@ class CierreCuadroService
                     'mes'                 => $mesCierre,
                     'estado'              => 'bloqueado',
                     'bloqueado_en'        => now(),
-                    'bloqueado_por'       => null, // Autom+ítico
+                    'bloqueado_por'       => null, // Autom+ï¿½tico
                     'tipo_bloqueo'        => 'automatico',
                 ]);
 
@@ -217,13 +217,13 @@ class CierreCuadroService
             }
         }
 
-        Log::info('Cierre autom+ítico ejecutado', ['total_bloqueadas' => $totalBloqueadas]);
+        Log::info('Cierre autom+ï¿½tico ejecutado', ['total_bloqueadas' => $totalBloqueadas]);
 
         return ['bloqueadas' => $totalBloqueadas];
     }
 
     /**
-     * Obtiene el estado de todas las unidades para un per+¡odo.
+     * Obtiene el estado de todas las unidades para un per+ï¿½odo.
      */
     public function estadoUnidades(int $anio, int $mes, ?int $idEmpresa = null): array
     {
@@ -249,6 +249,12 @@ class CierreCuadroService
 
         if ($idEmpresa) {
             $query->where('u.id_empresa', $idEmpresa);
+        }
+
+        // Filtrar por empresas habilitadas para el mÃ³dulo
+        $empresasHabilitadas = config('cuadro_turnos.empresas_habilitadas', []);
+        if (!empty($empresasHabilitadas)) {
+            $query->whereIn('u.id_empresa', $empresasHabilitadas);
         }
 
         return $query->get()->toArray();

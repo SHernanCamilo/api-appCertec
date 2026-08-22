@@ -16,6 +16,7 @@ use App\Http\Controllers\TalentoHumano\CuadroTurnos\TipoRecargoController;
 use App\Http\Controllers\TalentoHumano\CuadroTurnos\ParametroJornadaController;
 use App\Http\Controllers\TalentoHumano\CuadroTurnos\HoraExtraController;
 use App\Http\Controllers\TalentoHumano\CuadroTurnos\CierreCuadroController;
+use App\Http\Controllers\TalentoHumano\CuadroTurnos\ConceptoController;
 use App\Http\Controllers\CuadroTurnoPermisoController;
 
 /**
@@ -182,4 +183,11 @@ Route::middleware(['auth:api'])->group(function () {
     Route::post('cierre-cuadro/ejecutar-automatico', [CierreCuadroController::class, 'ejecutarAutomatico']);
     Route::get('cierre-cuadro/historial', [CierreCuadroController::class, 'historial']);
     Route::get('cierre-cuadro/verificar', [CierreCuadroController::class, 'verificar']);
+
+    // =========================================================================
+    // CONCEPTOS DE CUADRO (fórmulas de cálculo)
+    // =========================================================================
+    Route::get('conceptos/variables', [ConceptoController::class, 'variables']);
+    Route::post('conceptos/probar-formula', [ConceptoController::class, 'probarFormula']);
+    Route::apiResource('conceptos', ConceptoController::class);
 });

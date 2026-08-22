@@ -117,14 +117,14 @@ class FrecuenciaController extends Controller
             $frecuencia = CtFrecuencia::findOrFail($id);
 
             if (!$frecuencia->tieneProgramacion()) {
-                return response()->json(['success' => false, 'message' => 'Esta frecuencia no tiene programaci+好 configurada.'], 422);
+                return response()->json(['success' => false, 'message' => 'Esta frecuencia no tiene programacion configurada.'], 422);
             }
 
             $resultado = $this->service->generarAsignaciones($frecuencia);
 
             return response()->json([
                 'success' => true,
-                'message' => "Generaci+好 completada: {$resultado['total_ok']} exitosas, {$resultado['total_err']} errores.",
+                'message' => "Generaci+礎n completada: {$resultado['total_ok']} exitosas, {$resultado['total_err']} errores.",
                 'data'    => [
                     'total'     => $resultado['total'],
                     'total_ok'  => $resultado['total_ok'],
@@ -150,7 +150,7 @@ class FrecuenciaController extends Controller
 
             $frecuencia = $this->service->crear($data);
 
-            \Log::info('Frecuencia creada, iniciando generaci+好', [
+            \Log::info('Frecuencia creada, iniciando generaci+礎n', [
                 'id' => $frecuencia->id,
                 'id_empleado' => $frecuencia->id_empleado,
                 'tipo' => $frecuencia->tipo_frecuencia,
@@ -160,7 +160,7 @@ class FrecuenciaController extends Controller
             ]);
 
             if (!$frecuencia->tieneProgramacion()) {
-                return response()->json(['success' => false, 'message' => 'El tipo de frecuencia seleccionado no genera programaci+好.'], 422);
+                return response()->json(['success' => false, 'message' => 'El tipo de frecuencia seleccionado no genera programacion.'], 422);
             }
 
             $resultado = $this->service->generarAsignaciones($frecuencia);
@@ -175,7 +175,7 @@ class FrecuenciaController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => "Programaci+好 creada: {$resultado['total_ok']} turnos asignados, {$resultado['total_err']} errores.",
+                'message' => "Programacion creada: {$resultado['total_ok']} turnos asignados, {$resultado['total_err']} errores.",
                 'data'    => [
                     'frecuencia' => $frecuencia->load(['empleado', 'plantilla']),
                     'total'      => $resultado['total'],
@@ -185,7 +185,7 @@ class FrecuenciaController extends Controller
                 ],
             ]);
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => 'Error al generar programaci+好: ' . $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => 'Error al generar programacion: ' . $e->getMessage()], 422);
         }
     }
 
@@ -211,7 +211,7 @@ class FrecuenciaController extends Controller
             $resultado = $this->service->generarDesdeConfiguracion($request->all());
             return response()->json(['success' => true, 'data' => $resultado]);
         } catch (\Exception $e) {
-            return response()->json(['success' => false, 'message' => 'Error en previsualizaci+好: ' . $e->getMessage()], 422);
+            return response()->json(['success' => false, 'message' => 'Error en previsualizaci+礎n: ' . $e->getMessage()], 422);
         }
     }
 
@@ -247,3 +247,4 @@ class FrecuenciaController extends Controller
         ];
     }
 }
+
