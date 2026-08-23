@@ -96,6 +96,9 @@ Route::middleware(['auth:api'])->group(function () {
         Route::get('/export/status/{jobId}', [FabricViewerController::class, 'exportStatus']);
         Route::get('/export/download/{jobId}', [FabricViewerController::class, 'exportDownload']);
 
+        // R2 Parquet status polling (frontend llama cada 5s cuando status=generating)
+        Route::get('/r2/status', [FabricViewerController::class, 'r2WarmStatus']);
+
         // SSE Stream — sin JWT, el jobId es token implícito (no pasa por auth middleware)
         // Se registra en routes/api.php fuera del grupo auth.
     });
