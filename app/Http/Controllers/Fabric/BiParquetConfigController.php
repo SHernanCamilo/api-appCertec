@@ -135,7 +135,7 @@ class BiParquetConfigController extends Controller
     public function status(): JsonResponse
     {
         $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-        $token   = config('fabric.api_key', '');
+        $token   = config('fabric.token_admin', '');
 
         try {
             $response = Http::timeout(15)->get("{$baseUrl}/api/r2/status", [
@@ -193,7 +193,7 @@ class BiParquetConfigController extends Controller
         if (!$config->enabled) return true; // No sincronizar deshabilitadas
 
         $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-        $token   = config('fabric.api_key', '');
+        $token   = config('fabric.token_admin', '');
 
         try {
             $response = Http::timeout(10)->post("{$baseUrl}/api/r2/schedule", [

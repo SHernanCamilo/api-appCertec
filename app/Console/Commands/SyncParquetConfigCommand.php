@@ -28,7 +28,7 @@ class SyncParquetConfigCommand extends Command
     public function handle(): int
     {
         $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-        $token   = config('fabric.api_key', '');
+        $token   = config('fabric.token_admin', '');
 
         if ($this->option('status')) {
             return $this->showStatus($baseUrl, $token);
