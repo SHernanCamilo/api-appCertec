@@ -95,7 +95,7 @@ class InvActivoFijoController extends Controller
     /**
      * POST /api/inventory/activos-fijos/novedad
      *
-     * Body: placa (requerido) + cualquier combinación de novedad_* + observacion
+     * Body: placa (requerido), tipo_inventario_id (requerido) + cualquier combinación de novedad_* + observacion
      */
     public function registrarNovedad(Request $request): JsonResponse
     {
@@ -104,6 +104,7 @@ class InvActivoFijoController extends Controller
 
         $validado = $request->validate([
             'placa'                   => 'required|string|max:100',
+            'tipo_inventario_id'      => 'required|integer|exists:inv_tipos_inventario,id',
 
             'novedad_placa'           => 'nullable|string|max:100',
             'novedad_estado'          => "nullable|string|in:{$estados}",
@@ -123,6 +124,8 @@ class InvActivoFijoController extends Controller
         ], [
             'novedad_estado_fisico.in' => 'El estado físico debe ser: ' . implode(', ', InvTrazActivo::ESTADOS_FISICOS) . '.',
             'novedad_estado.in'        => 'El estado debe ser Activo o Inactivo.',
+            'tipo_inventario_id.required' => 'El tipo de inventario es requerido.',
+            'tipo_inventario_id.exists' => 'El tipo de inventario seleccionado no existe.',
         ]);
 
         $resultado = $this->activos->registrarNovedad(auth()->user(), $validado);
@@ -151,18 +154,18 @@ class InvActivoFijoController extends Controller
     public function trazabilidad(Request $request): JsonResponse
     {
         $request->validate([
-            'placa'            => 'nullable|string|max:100',
-            'estado_fisico'    => 'nullable|string|in:' . implode(',', InvTrazActivo::ESTADOS_FISICOS),
-            'usuario_id'       => 'nullable|integer|exists:users,id',
-            'desde'            => 'nullable|date',
-            'hasta'            => 'nullable|date|after_or_equal:desde',
-            'unidad_funcional' => 'nullable|string|max:255',
-            'es_externo'       => 'nullable|boolean',
-            'per_page'         => 'nullable|integer|min:1|max:100',
+            'placa'               => 'nullable|string|max:100',
+            'estado_fisico'       => 'nullable|string|in:' . implode(',', InvTrazActivo::ESTADOS_FISICOS),
+            'usuario_id'          => 'nullable|integer|exists:users,id',
+            'desde'               => 'nullable|date',
+            'hasta'               => 'nullable|date|after_or_equal:desde',
+            'tipo_inventario_id'  => 'nullable|integer|exists:inv_tipos_inventario,id',
+            'es_externo'          => 'nullable|boolean',
+            'per_page'            => 'nullable|integer|min:1|max:100',
         ]);
 
         $resultado = $this->activos->listar(
-            $request->only(['placa', 'estado_fisico', 'usuario_id', 'desde', 'hasta', 'unidad_funcional', 'es_externo']),
+            $request->only(['placa', 'estado_fisico', 'usuario_id', 'desde', 'hasta', 'tipo_inventario_id', 'es_externo']),
             (int) $request->input('per_page', 25)
         );
 
@@ -192,21 +195,21 @@ class InvActivoFijoController extends Controller
      * GET /api/inventory/activos-fijos/exportar
      *
      * Exporta la trazabilidad a XLSX con clasificación inventariado/pendiente.
-     * Filtros opcionales: unidad_funcional, desde, hasta, estado_fisico, placa, es_externo.
+     * Filtros opcionales: tipo_inventario_id, desde, hasta, estado_fisico, placa, es_externo.
      */
     public function exportar(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse
     {
         $request->validate([
-            'unidad_funcional' => 'nullable|string|max:255',
-            'placa'            => 'nullable|string|max:100',
-            'estado_fisico'    => 'nullable|string|in:' . implode(',', InvTrazActivo::ESTADOS_FISICOS),
-            'desde'            => 'nullable|date',
-            'hasta'            => 'nullable|date|after_or_equal:desde',
-            'es_externo'       => 'nullable|boolean',
+            'tipo_inventario_id' => 'nullable|integer|exists:inv_tipos_inventario,id',
+            'placa'              => 'nullable|string|max:100',
+            'estado_fisico'      => 'nullable|string|in:' . implode(',', InvTrazActivo::ESTADOS_FISICOS),
+            'desde'              => 'nullable|date',
+            'hasta'              => 'nullable|date|after_or_equal:desde',
+            'es_externo'         => 'nullable|boolean',
         ]);
 
         return $this->activos->exportarExcel(
-            $request->only(['unidad_funcional', 'placa', 'estado_fisico', 'desde', 'hasta', 'es_externo'])
+            $request->only(['tipo_inventario_id', 'placa', 'estado_fisico', 'desde', 'hasta', 'es_externo'])
         );
     }
 
@@ -224,21 +227,23 @@ class InvActivoFijoController extends Controller
         $estadosFisicos = implode(',', InvTrazActivo::ESTADOS_FISICOS);
 
         $validado = $request->validate([
-            'placa'            => 'required|string|max:100',
-            'serie'            => 'nullable|string|max:150',
-            'articulo_nombre'  => 'nullable|string|max:255',
-            'marca'            => 'nullable|string|max:150',
-            'modelo'           => 'nullable|string|max:150',
-            'responsable'      => 'nullable|string|max:255',
-            'localizacion'     => 'nullable|string|max:255',
-            'sucursal'         => 'nullable|string|max:150',
-            'estado_fisico'    => "nullable|string|in:{$estadosFisicos}",
-            'observacion'      => 'nullable|string|max:2000',
-            'unidad_funcional' => 'nullable|string|max:255',
-            'id_empresa'       => 'nullable|integer|exists:ent_empresas,id',
-            'id_sucursal'      => 'nullable|integer',
+            'placa'               => 'required|string|max:100',
+            'tipo_inventario_id'  => 'required|integer|exists:inv_tipos_inventario,id',
+            'serie'               => 'nullable|string|max:150',
+            'articulo_nombre'     => 'nullable|string|max:255',
+            'marca'               => 'nullable|string|max:150',
+            'modelo'              => 'nullable|string|max:150',
+            'responsable'         => 'nullable|string|max:255',
+            'localizacion'        => 'nullable|string|max:255',
+            'sucursal'            => 'nullable|string|max:150',
+            'estado_fisico'       => "nullable|string|in:{$estadosFisicos}",
+            'observacion'         => 'nullable|string|max:2000',
+            'id_empresa'          => 'nullable|integer|exists:ent_empresas,id',
+            'id_sucursal'         => 'nullable|integer',
         ], [
             'estado_fisico.in' => 'El estado físico debe ser: ' . implode(', ', InvTrazActivo::ESTADOS_FISICOS) . '.',
+            'tipo_inventario_id.required' => 'El tipo de inventario es requerido.',
+            'tipo_inventario_id.exists' => 'El tipo de inventario seleccionado no existe.',
         ]);
 
         $resultado = $this->activos->registrarNovedadExterna(auth()->user(), $validado);
@@ -316,7 +321,7 @@ class InvActivoFijoController extends Controller
     }
 
     /**
-     * GET /api/inventory/activos-fijos/opciones
+     * GET /api/inventario/activos-fijos/opciones
      *
      * Catálogos para los selects del formulario de novedades.
      */
@@ -325,8 +330,9 @@ class InvActivoFijoController extends Controller
         return response()->json([
             'success' => true,
             'data'    => [
-                'estados'         => InvTrazActivo::ESTADOS,
-                'estados_fisicos' => InvTrazActivo::ESTADOS_FISICOS,
+                'estados'          => InvTrazActivo::ESTADOS,
+                'estados_fisicos'  => InvTrazActivo::ESTADOS_FISICOS,
+                'tipos_inventario' => $this->activos->tiposInventarioLista(),
             ],
         ]);
     }

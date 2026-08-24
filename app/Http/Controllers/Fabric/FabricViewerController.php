@@ -352,6 +352,47 @@ class FabricViewerController extends Controller
             ], 403);
         }
 
+        // ─── R2 Parquet Pre-Warming ─────────────────────────────────────────────
+        // Intentar usar el parquet pre-generado por Graph-Fabric.
+        // Si está listo (~2s), se usa export/r2.
+        // Si está generándose, el frontend hace polling.
+        // Si es demasiado grande, forzar filtros.
+        // Si R2 no está disponible, fallback al export stream clásico.
+        $r2Status = $this->tryR2Warm($schema, $viewName);
+
+        if ($r2Status !== null) {
+            $status = $r2Status['status'] ?? 'unknown';
+
+            // READY o READY_STALE → exportar inmediatamente desde parquet
+            if (in_array($status, ['ready', 'ready_stale'])) {
+                return $this->exportFromR2(
+                    $user, $schema, $viewName, $request, $r2Status
+                );
+            }
+
+            // GENERATING → decirle al frontend que haga polling
+            if ($status === 'generating') {
+                return response()->json([
+                    'success'     => true,
+                    'r2_status'   => 'generating',
+                    'message'     => $r2Status['message'] ?? 'El parquet se está generando...',
+                    'estimated_s' => $r2Status['estimated_s'] ?? 60,
+                    'row_count'   => $r2Status['row_count'] ?? null,
+                ], 202);
+            }
+
+            // TOO_BIG → requiere filtros
+            if ($status === 'too_big') {
+                return response()->json([
+                    'success'    => true,
+                    'r2_status'  => 'too_big',
+                    'message'    => 'La vista tiene más de 1M de filas. Aplique un filtro de fechas.',
+                    'row_count'  => $r2Status['row_count'] ?? null,
+                ], 200);
+            }
+        }
+
+        // ─── Fallback: Export stream clásico (si R2 no disponible) ───────────────
         $jobId = \App\Jobs\FabricStreamExportJob::dispatch_and_track(
             $user->id,
             $schema,
@@ -384,6 +425,204 @@ class FabricViewerController extends Controller
             'message'    => 'Export iniciado en segundo plano.',
             'status_url' => "/api/fabric/viewer/export/status/{$jobId}",
         ], 202);
+    }
+
+    // ─── R2 Parquet Helpers ─────────────────────────────────────────────────────
+
+    /**
+     * Llama a Graph-Fabric /api/r2/warm para verificar si el parquet está listo.
+     * Retorna null si R2 no está disponible (fallback a stream).
+     */
+    private function tryR2Warm(string $schema, string $viewName): ?array
+    {
+        try {
+            $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
+            $token   = config('fabric.api_key', '');
+
+            $response = \Illuminate\Support\Facades\Http::timeout(10)
+                ->post("{$baseUrl}/api/r2/warm", [
+                    'token'       => $token,
+                    'schema_name' => $schema,
+                    'view'        => $viewName,
+                ]);
+
+            if ($response->successful()) {
+                return $response->json();
+            }
+
+            \Illuminate\Support\Facades\Log::info('[R2Warm] Response no exitosa', [
+                'status' => $response->status(),
+                'body'   => substr($response->body(), 0, 300),
+            ]);
+            return null;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::info('[R2Warm] No disponible, fallback a stream', [
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Exporta datos directamente desde el parquet R2 (camino rápido, ~2s).
+     */
+    private function exportFromR2(
+        $user,
+        string $schema,
+        string $viewName,
+        Request $request,
+        array $r2Status,
+    ): JsonResponse {
+        $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
+        $token   = config('fabric.api_key', '');
+
+        try {
+            $response = \Illuminate\Support\Facades\Http::timeout(60)
+                ->post("{$baseUrl}/api/data/export/r2", [
+                    'token'       => $token,
+                    'schema_name' => $schema,
+                    'view'        => $viewName,
+                    'filters'     => $request->input('filters', []),
+                    'columns'     => $request->input('columns', []),
+                    'max_rows'    => (int) $request->input('max_rows', 500000),
+                    'format'      => 'gzip',
+                ]);
+
+            if (!$response->successful()) {
+                // Fallback a stream si R2 export falla
+                \Illuminate\Support\Facades\Log::warning('[R2Export] Fallo, fallback', [
+                    'status' => $response->status(),
+                ]);
+                return $this->fallbackStreamExport($user, $schema, $viewName, $request);
+            }
+
+            // Guardar el NDJSON.gz en storage temporal
+            $filename = "{$schema}_{$viewName}_" . now()->format('Ymd_His') . '.ndjson.gz';
+            $path     = "exports/{$filename}";
+            \Illuminate\Support\Facades\Storage::disk('local')->put($path, $response->body());
+
+            // Registrar en cache como job "completado" para que exportDownload lo encuentre
+            $jobId = 'r2_' . \Illuminate\Support\Str::random(12);
+            $rows  = $r2Status['row_count'] ?? 0;
+
+            \Illuminate\Support\Facades\Cache::put("fabric_export:{$jobId}", [
+                'status'    => 'completed',
+                'schema'    => $schema,
+                'view_name' => $viewName,
+                'rows'      => $rows,
+                'path'      => $path,
+                'filename'  => $filename,
+                'format'    => 'ndjson.gz',
+                'file_path' => $path,
+                'size'      => strlen($response->body()),
+            ], now()->addMinutes(15));
+
+            $this->auditService->log(
+                $user,
+                $schema,
+                $viewName,
+                BiVistaAccessLog::ACCION_EXPORT_INICIO,
+                $request,
+                [
+                    'filters'  => $request->input('filters', []),
+                    'metadata' => ['job_id' => $jobId, 'source' => 'r2_parquet', 'rows' => $rows],
+                ]
+            );
+
+            return response()->json([
+                'success'    => true,
+                'job_id'     => $jobId,
+                'r2_status'  => 'ready',
+                'message'    => "Datos listos desde parquet ({$rows} filas).",
+                'rows'       => $rows,
+                'status_url' => "/api/fabric/viewer/export/status/{$jobId}",
+            ]);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('[R2Export] Exception', ['error' => $e->getMessage()]);
+            return $this->fallbackStreamExport($user, $schema, $viewName, $request);
+        }
+    }
+
+    /**
+     * Fallback: lanza el export stream clásico cuando R2 falla.
+     */
+    private function fallbackStreamExport($user, string $schema, string $viewName, Request $request): JsonResponse
+    {
+        $jobId = \App\Jobs\FabricStreamExportJob::dispatch_and_track(
+            $user->id,
+            $schema,
+            $viewName,
+            [
+                'columns'  => $request->input('columns', []),
+                'filters'  => $request->input('filters', []),
+                'sort_col' => $request->input('sort_col', ''),
+                'sort_dir' => $request->input('sort_dir', 'asc'),
+                'max_rows' => (int) $request->input('max_rows', 500000),
+                'format'   => $request->input('format', 'xlsx'),
+            ]
+        );
+
+        $this->auditService->log(
+            $user,
+            $schema,
+            $viewName,
+            BiVistaAccessLog::ACCION_EXPORT_INICIO,
+            $request,
+            [
+                'filters'  => $request->input('filters', []),
+                'metadata' => ['job_id' => $jobId, 'source' => 'stream_fallback'],
+            ]
+        );
+
+        return response()->json([
+            'success'    => true,
+            'job_id'     => $jobId,
+            'message'    => 'Export iniciado en segundo plano (stream).',
+            'status_url' => "/api/fabric/viewer/export/status/{$jobId}",
+        ], 202);
+    }
+
+    /**
+     * Polling del estado de R2 warm para el frontend.
+     *
+     * GET /api/fabric/viewer/r2/status?schema=dc&view=VW_Censo_Eal
+     *
+     * El frontend llama cada 5 segundos cuando exportStart devuelve r2_status=generating.
+     * Cuando devuelve ready, el frontend llama exportStart de nuevo y ya sale por el fast path.
+     */
+    public function r2WarmStatus(Request $request): JsonResponse
+    {
+        $schema = $request->query('schema', '');
+        $view   = $request->query('view', '');
+
+        if (!$schema || !$view) {
+            return response()->json(['success' => false, 'message' => 'schema y view requeridos'], 422);
+        }
+
+        $user = auth()->user();
+        if (!$this->gateway->tieneAccesoEsquema($user, $schema)) {
+            return response()->json(['success' => false, 'message' => 'Sin acceso'], 403);
+        }
+
+        $result = $this->tryR2Warm($schema, $view);
+
+        if ($result === null) {
+            return response()->json([
+                'success'   => true,
+                'r2_status' => 'unavailable',
+                'message'   => 'R2 no disponible, use export stream.',
+            ]);
+        }
+
+        return response()->json([
+            'success'     => true,
+            'r2_status'   => $result['status'] ?? 'unknown',
+            'message'     => $result['message'] ?? '',
+            'estimated_s' => $result['estimated_s'] ?? null,
+            'row_count'   => $result['row_count'] ?? null,
+            'age_hours'   => $result['age_hours'] ?? null,
+            'size_mb'     => $result['size_mb'] ?? null,
+        ]);
     }
 
     /**
@@ -486,12 +725,18 @@ class FabricViewerController extends Controller
             default                       => 'application/octet-stream',
         };
 
-        // Usar response()->file() que hace STREAMING sin cargar en RAM
-        // Limpiar el archivo después de enviarlo (register_shutdown_function)
-        register_shutdown_function(function () use ($jobId) {
-            \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory("fabric_exports/{$jobId}");
-            \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobId}");
-        });
+        // Limpiar el archivo despues de 5 minutos (permite reintentos del frontend)
+        $jobIdForCleanup = $jobId;
+        \Illuminate\Support\Facades\Cache::put("fabric_export_cleanup:{$jobIdForCleanup}", true, now()->addMinutes(5));
+        
+        // Programar limpieza con un job dispatch delayed o simplemente dejar que expire
+        // El cleanup se hara via un scheduled command o la proxima request
+        dispatch(function () use ($jobIdForCleanup) {
+            sleep(300); // 5 minutos
+            \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory("fabric_exports/{$jobIdForCleanup}");
+            \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobIdForCleanup}");
+            \Illuminate\Support\Facades\Cache::forget("fabric_export_cleanup:{$jobIdForCleanup}");
+        })->afterResponse();
 
         return response()->download($absolutePath, $filename, [
             'Content-Type'   => $contentType,
@@ -589,6 +834,187 @@ class FabricViewerController extends Controller
         }
 
         return response()->json($result);
+    }
+
+    // =========================================================================
+    // PAGINACIÓN OPTIMIZADA PARA VISTAS GRANDES (EXCEL-LIKE UI)
+    // =========================================================================
+
+    /**
+     * Obtener datos paginados con cursor para vistas grandes (100K+ filas).
+     * Optimizado para interfaz Excel-like con virtual scrolling.
+     *
+     * POST /api/fabric/viewer/data/paginated
+     *
+     * Body:
+     * {
+     *   "schema_name": "dc",
+     *   "view": "VW_Censo_Eal",
+     *   "cursor": 0,          // offset
+     *   "limit": 100,         // rows per page
+     *   "filters": [          // optional
+     *     {"field": "Sede", "operator": "equals", "value": "001"},
+     *     {"field": "Edad", "operator": "gt", "value": 18}
+     *   ],
+     *   "sorts": [            // optional
+     *     {"field": "FechaNacimiento", "direction": "desc"}
+     *   ]
+     * }
+     *
+     * Response:
+     * {
+     *   "success": true,
+     *   "data": [...],           // rows for this page
+     *   "cursor": 100,           // next offset
+     *   "has_more": true,        // whether there are more rows
+     *   "total": 5432            // total row count (cached)
+     * }
+     */
+    public function dataPaginated(Request $request): JsonResponse
+    {
+        $request->validate([
+            'schema_name' => 'required|string|max:20|alpha_dash',
+            'view'        => 'required|string|max:150|regex:/^[A-Za-z0-9_]+$/',
+            'cursor'      => 'nullable|integer|min:0',
+            'limit'       => 'nullable|integer|min:1|max:1000',
+            'filters'     => 'nullable|array',
+            'filters.*.field'    => 'required_with:filters|string|max:100',
+            'filters.*.operator' => 'required_with:filters|string|in:contains,equals,notEquals,gt,gte,lt,lte,between,in',
+            'filters.*.value'    => 'required_with:filters',
+            'sorts'       => 'nullable|array',
+            'sorts.*.field'     => 'required_with:sorts|string|max:100',
+            'sorts.*.direction' => 'required_with:sorts|string|in:asc,desc',
+        ]);
+
+        $user   = auth()->user();
+        $schema = strtolower($request->schema_name);
+        $view   = $request->view;
+
+        // Validar acceso
+        if (!$this->gateway->tieneAccesoEsquema($user, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso al esquema '{$schema}'.",
+            ], 403);
+        }
+
+        if (!$this->gateway->tieneAccesoVistaPorSede($user, $view, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso a la vista '{$view}' por sede.",
+            ], 403);
+        }
+
+        $cursor = $request->input('cursor', 0);
+        $limit  = $request->input('limit', 100);
+        $filters = $request->input('filters', []);
+        $sorts  = $request->input('sorts', []);
+
+        // Llamar al gateway para obtener datos paginados
+        $result = $this->gateway->getDataPaginated($user, $schema, $view, [
+            'cursor'  => $cursor,
+            'limit'   => $limit,
+            'filters' => $filters,
+            'sorts'   => $sorts,
+        ]);
+
+        if (!$result['success']) {
+            return response()->json([
+                'success' => false,
+                'message' => $result['message'] ?? 'Error obteniendo datos paginados.',
+            ], $result['code'] ?? 500);
+        }
+
+        // Auditar acceso
+        $this->auditService->log(
+            $user,
+            $schema,
+            $view,
+            BiVistaAccessLog::ACCION_CONSULTA,
+            $request,
+            [
+                'pagination' => true,
+                'cursor'     => $cursor,
+                'limit'      => $limit,
+                'filters'    => $filters,
+                'rows_returned' => count($result['data']),
+            ]
+        );
+
+        return response()->json([
+            'success'  => true,
+            'data'     => $result['data'],
+            'cursor'   => $cursor + count($result['data']),
+            'has_more' => $result['has_more'],
+            'total'    => $result['total'],
+        ]);
+    }
+
+    /**
+     * Obtener estimación de filas de una vista (para decidir estrategia de carga).
+     *
+     * POST /api/fabric/viewer/estimate-rows
+     *
+     * Body:
+     * {
+     *   "schema_name": "dc",
+     *   "view": "VW_Censo_Eal"
+     * }
+     *
+     * Response:
+     * {
+     *   "success": true,
+     *   "count": 125430,
+     *   "strategy": "paginated"  // "in-memory" | "duckdb" | "paginated"
+     * }
+     */
+    public function estimateRows(Request $request): JsonResponse
+    {
+        $request->validate([
+            'schema_name' => 'required|string|max:20|alpha_dash',
+            'view'        => 'required|string|max:150|regex:/^[A-Za-z0-9_]+$/',
+        ]);
+
+        $user   = auth()->user();
+        $schema = strtolower($request->schema_name);
+        $view   = $request->view;
+
+        // Validar acceso
+        if (!$this->gateway->tieneAccesoEsquema($user, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso al esquema '{$schema}'.",
+            ], 403);
+        }
+
+        if (!$this->gateway->tieneAccesoVistaPorSede($user, $view, $schema)) {
+            return response()->json([
+                'success' => false,
+                'message' => "Sin acceso a la vista '{$view}' por sede.",
+            ], 403);
+        }
+
+        $result = $this->gateway->estimateRowCount($user, $schema, $view);
+
+        if (!$result['success']) {
+            return response()->json([
+                'success' => false,
+                'message' => $result['message'] ?? 'Error estimando filas.',
+            ], $result['code'] ?? 500);
+        }
+
+        $count = $result['count'];
+        $strategy = match(true) {
+            $count < 10_000   => 'in-memory',
+            $count < 100_000  => 'duckdb',
+            default           => 'paginated'
+        };
+
+        return response()->json([
+            'success'  => true,
+            'count'    => $count,
+            'strategy' => $strategy,
+        ]);
     }
 
     /**

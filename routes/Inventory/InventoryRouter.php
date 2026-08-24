@@ -55,6 +55,19 @@ Route::prefix('activos-fijos')->group(function () {
 });
 
 // =========================================================================
+// TIPOS DE INVENTARIO — Parametrización
+// =========================================================================
+Route::prefix('tipos-inventario')->group(function () {
+    $controller = App\Http\Controllers\Inventory\TiposInventarioController::class;
+
+    Route::get('/', [$controller, 'index']);
+    Route::post('/', [$controller, 'store']);
+    Route::put('{id}', [$controller, 'update']);
+    Route::delete('{id}', [$controller, 'destroy']);
+    Route::patch('{id}/estado', [$controller, 'toggleEstado']);
+});
+
+// =========================================================================
 // INVIMA (datos.gov.co)
 // =========================================================================
 Route::prefix('invima')->group(function () {

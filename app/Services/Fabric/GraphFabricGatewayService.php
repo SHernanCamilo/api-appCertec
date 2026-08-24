@@ -2310,4 +2310,310 @@ class GraphFabricGatewayService
         $limit = max(180, $httpTimeoutSeconds + 10);
         @set_time_limit($limit);
     }
+
+    // =========================================================================
+    // PAGINACIÓN OPTIMIZADA PARA VISTAS GRANDES
+    // =========================================================================
+
+    /**
+     * Obtener datos paginados con cursor para interfaz Excel-like.
+     * Optimizado para vistas grandes (100K+ filas) con virtual scrolling.
+     *
+     * @param User $user
+     * @param string $schema
+     * @param string $view
+     * @param array $options [cursor, limit, filters, sorts]
+     * @return array{success: bool, data: array, has_more: bool, total: int, message: ?string, code?: int}
+     */
+    public function getDataPaginated(User $user, string $schema, string $view, array $options = []): array
+    {
+        if (!$this->tieneAccesoEsquema($user, $schema)) {
+            return [
+                'success'  => false,
+                'data'     => [],
+                'has_more' => false,
+                'total'    => 0,
+                'message'  => "Sin acceso al esquema '{$schema}'.",
+                'code'     => 403,
+            ];
+        }
+
+        if (!$this->tieneAccesoVistaPorSede($user, $view, $schema)) {
+            return [
+                'success'  => false,
+                'data'     => [],
+                'has_more' => false,
+                'total'    => 0,
+                'message'  => "Sin acceso a la vista '{$view}' por sede.",
+                'code'     => 403,
+            ];
+        }
+
+        $cursor  = $options['cursor'] ?? 0;
+        $limit   = min((int)($options['limit'] ?? 100), 1000);
+        $filters = $options['filters'] ?? [];
+        $sorts   = $options['sorts'] ?? [];
+
+        // Construir filtros para la API Python
+        $fabricFilters = $this->buildFabricFilters($filters);
+        $fabricSorts   = $this->buildFabricSorts($sorts);
+
+        $userContext = $this->userContextPayload($user, $view);
+        $payload = array_merge(
+            [
+                'token'        => $this->tokenAdmin,
+                'user_context' => $userContext,
+            ],
+            $userContext,
+            [
+                'schema_name' => $schema,
+                'view'        => $view,
+                'offset'      => $cursor,
+                'limit'       => $limit,
+                'filters'     => $fabricFilters,
+                'sorts'       => $fabricSorts,
+            ]
+        );
+
+        try {
+            $timeout = max($this->timeout, 60);
+            $this->ensurePhpTimeLimit($timeout);
+            $apiKey = config('fabric.api_key', '');
+            $req    = Http::timeout($timeout)
+                         ->connectTimeout(10)
+                         ->acceptJson();
+
+            if ($apiKey !== '') {
+                $req = $req->withHeaders(['X-API-Key' => $apiKey]);
+            }
+
+            $response = $req->post($this->baseUrl . '/api/data/paginated', $payload);
+
+            if ($response->failed()) {
+                Log::error('GraphFabricGateway getDataPaginated error', [
+                    'status' => $response->status(),
+                    'schema' => $schema,
+                    'view'   => $view,
+                    'cursor' => $cursor,
+                    'limit'  => $limit,
+                ]);
+
+                return [
+                    'success'  => false,
+                    'data'     => [],
+                    'has_more' => false,
+                    'total'    => 0,
+                    'message'  => "Error obteniendo datos paginados: HTTP {$response->status()}",
+                    'code'     => $response->status(),
+                ];
+            }
+
+            $result = $response->json();
+
+            return [
+                'success'  => true,
+                'data'     => $result['data'] ?? [],
+                'has_more' => $result['has_more'] ?? false,
+                'total'    => $result['total'] ?? 0,
+                'message'  => null,
+            ];
+        } catch (\Exception $e) {
+            Log::error('GraphFabricGateway getDataPaginated exception', [
+                'error'  => $e->getMessage(),
+                'schema' => $schema,
+                'view'   => $view,
+            ]);
+
+            return [
+                'success'  => false,
+                'data'     => [],
+                'has_more' => false,
+                'total'    => 0,
+                'message'  => 'Error obteniendo datos paginados: ' . $e->getMessage(),
+                'code'     => 500,
+            ];
+        }
+    }
+
+    /**
+     * Estimar el número de filas en una vista (para decidir estrategia de carga).
+     *
+     * @param User $user
+     * @param string $schema
+     * @param string $view
+     * @return array{success: bool, count: int, message: ?string, code?: int}
+     */
+    public function estimateRowCount(User $user, string $schema, string $view): array
+    {
+        if (!$this->tieneAccesoEsquema($user, $schema)) {
+            return [
+                'success' => false,
+                'count'   => 0,
+                'message' => "Sin acceso al esquema '{$schema}'.",
+                'code'    => 403,
+            ];
+        }
+
+        if (!$this->tieneAccesoVistaPorSede($user, $view, $schema)) {
+            return [
+                'success' => false,
+                'count'   => 0,
+                'message' => "Sin acceso a la vista '{$view}' por sede.",
+                'code'    => 403,
+            ];
+        }
+
+        // Cache por 15 minutos
+        $cacheKey = "vista_row_count_{$schema}_{$view}";
+        $cached = Cache::get($cacheKey);
+
+        if ($cached !== null) {
+            return [
+                'success' => true,
+                'count'   => $cached,
+                'message' => null,
+            ];
+        }
+
+        $userContext = $this->userContextPayload($user, $view);
+        $payload = array_merge(
+            [
+                'token'        => $this->tokenAdmin,
+                'user_context' => $userContext,
+            ],
+            $userContext,
+            [
+                'schema_name' => $schema,
+                'view'        => $view,
+            ]
+        );
+
+        try {
+            $apiKey = config('fabric.api_key', '');
+            $req    = Http::timeout(30)
+                         ->connectTimeout(10)
+                         ->acceptJson();
+
+            if ($apiKey !== '') {
+                $req = $req->withHeaders(['X-API-Key' => $apiKey]);
+            }
+
+            $response = $req->post($this->baseUrl . '/api/data/estimate-rows', $payload);
+
+            if ($response->failed()) {
+                Log::error('GraphFabricGateway estimateRowCount error', [
+                    'status' => $response->status(),
+                    'schema' => $schema,
+                    'view'   => $view,
+                ]);
+
+                return [
+                    'success' => false,
+                    'count'   => 0,
+                    'message' => "Error estimando filas: HTTP {$response->status()}",
+                    'code'    => $response->status(),
+                ];
+            }
+
+            $result = $response->json();
+            $count  = $result['count'] ?? 0;
+
+            // Cache por 15 minutos
+            Cache::put($cacheKey, $count, now()->addMinutes(15));
+
+            return [
+                'success' => true,
+                'count'   => $count,
+                'message' => null,
+            ];
+        } catch (\Exception $e) {
+            Log::error('GraphFabricGateway estimateRowCount exception', [
+                'error'  => $e->getMessage(),
+                'schema' => $schema,
+                'view'   => $view,
+            ]);
+
+            return [
+                'success' => false,
+                'count'   => 0,
+                'message' => 'Error estimando filas: ' . $e->getMessage(),
+                'code'    => 500,
+            ];
+        }
+    }
+
+    /**
+     * Construir filtros en formato esperado por la API Python.
+     *
+     * @param array $filters [['field' => 'Edad', 'operator' => 'gt', 'value' => 18], ...]
+     * @return array Filtros normalizados
+     */
+    private function buildFabricFilters(array $filters): array
+    {
+        $fabricFilters = [];
+
+        foreach ($filters as $filter) {
+            $field    = $filter['field'] ?? null;
+            $operator = $filter['operator'] ?? 'equals';
+            $value    = $filter['value'] ?? null;
+
+            if (!$field || $value === null) {
+                continue;
+            }
+
+            // Normalizar valor (fechas, etc.)
+            $normalizedValue = $this->normalizeFilterValue($value);
+
+            // Mapear operador a formato SQL
+            $sqlOperator = match($operator) {
+                'contains'   => 'LIKE',
+                'equals'     => '=',
+                'notEquals'  => '!=',
+                'gt'         => '>',
+                'gte'        => '>=',
+                'lt'         => '<',
+                'lte'        => '<=',
+                'between'    => 'BETWEEN',
+                'in'         => 'IN',
+                default      => '='
+            };
+
+            // Construir filtro según operador
+            if ($operator === 'contains' && is_string($normalizedValue)) {
+                $fabricFilters[$field] = "%{$normalizedValue}%";
+            } elseif ($operator === 'between' && is_array($normalizedValue) && count($normalizedValue) === 2) {
+                $fabricFilters[$field] = ['BETWEEN', $normalizedValue[0], $normalizedValue[1]];
+            } elseif ($operator === 'in' && is_array($normalizedValue)) {
+                $fabricFilters[$field] = ['IN', $normalizedValue];
+            } else {
+                $fabricFilters[$field] = $normalizedValue;
+            }
+        }
+
+        return $fabricFilters;
+    }
+
+    /**
+     * Construir ordenamientos en formato esperado por la API Python.
+     *
+     * @param array $sorts [['field' => 'FechaNacimiento', 'direction' => 'desc'], ...]
+     * @return array [[field, direction], ...]
+     */
+    private function buildFabricSorts(array $sorts): array
+    {
+        $fabricSorts = [];
+
+        foreach ($sorts as $sort) {
+            $field     = $sort['field'] ?? null;
+            $direction = strtoupper($sort['direction'] ?? 'ASC');
+
+            if (!$field || !in_array($direction, ['ASC', 'DESC'])) {
+                continue;
+            }
+
+            $fabricSorts[] = [$field, $direction];
+        }
+
+        return $fabricSorts;
+    }
 }
