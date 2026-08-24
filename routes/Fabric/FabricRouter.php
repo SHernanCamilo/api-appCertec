@@ -20,6 +20,20 @@ Route::middleware(['auth:api'])->group(function () {
     require __DIR__ . '/BiGruposRouter.php';
 
     // =========================================================================
+    // Traslado asistencial — bi_from_tras_asistencial
+    // =========================================================================
+    Route::prefix('traslado-asistencial')->group(function () {
+        Route::get('/', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'index']);
+        Route::post('/', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'store']);
+        Route::get('/{id}', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'show'])
+            ->whereNumber('id');
+        Route::put('/{id}', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'update'])
+            ->whereNumber('id');
+        Route::post('/{id}/confirmar', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'confirmar'])
+            ->whereNumber('id');
+    });
+
+    // =========================================================================
     // HC Report Viewer — [DT].[VW_HC_ReportViewer]
     // =========================================================================
     Route::get('/hc-report-viewer/columnas', [HcReportViewerController::class, 'columnas']);
