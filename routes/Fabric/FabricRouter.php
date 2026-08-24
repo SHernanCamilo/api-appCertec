@@ -113,6 +113,14 @@ Route::middleware(['auth:api'])->group(function () {
         // R2 Parquet status polling (frontend llama cada 5s cuando status=generating)
         Route::get('/r2/status', [FabricViewerController::class, 'r2WarmStatus']);
 
+        // Parquet Config (parametrizacion de intervalos de refresh)
+        Route::get('/parquet-config', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'index']);
+        Route::post('/parquet-config', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'store']);
+        Route::delete('/parquet-config/{id}', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'destroy'])
+            ->where('id', '[0-9]+');
+        Route::post('/parquet-config/sync', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'syncAll']);
+        Route::get('/parquet-config/status', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'status']);
+
         // SSE Stream — sin JWT, el jobId es token implícito (no pasa por auth middleware)
         // Se registra en routes/api.php fuera del grupo auth.
     });
