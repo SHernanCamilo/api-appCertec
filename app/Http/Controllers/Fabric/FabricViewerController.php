@@ -358,7 +358,8 @@ class FabricViewerController extends Controller
         // Si está generándose, el frontend hace polling.
         // Si es demasiado grande, forzar filtros.
         // Si R2 no está disponible, fallback al export stream clásico.
-        $r2Status = $this->tryR2Warm($schema, $viewName);
+        $forceRefresh = (bool) $request->input('force_refresh', false);
+        $r2Status = $this->tryR2Warm($schema, $viewName, $forceRefresh);
 
         if ($r2Status !== null) {
             $status = $r2Status['status'] ?? 'unknown';
@@ -433,18 +434,23 @@ class FabricViewerController extends Controller
      * Llama a Graph-Fabric /api/r2/warm para verificar si el parquet está listo.
      * Retorna null si R2 no está disponible (fallback a stream).
      */
-    private function tryR2Warm(string $schema, string $viewName): ?array
+    private function tryR2Warm(string $schema, string $viewName, bool $forceRefresh = false): ?array
     {
         try {
             $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
             $token   = config('fabric.api_key', '');
 
+            $body = [
+                'token'       => $token,
+                'schema_name' => $schema,
+                'view'        => $viewName,
+            ];
+            if ($forceRefresh) {
+                $body['force'] = true; // Graph-Fabric regenera el parquet desde cero
+            }
+
             $response = \Illuminate\Support\Facades\Http::timeout(10)
-                ->post("{$baseUrl}/api/r2/warm", [
-                    'token'       => $token,
-                    'schema_name' => $schema,
-                    'view'        => $viewName,
-                ]);
+                ->post("{$baseUrl}/api/r2/warm", $body);
 
             if ($response->successful()) {
                 return $response->json();
