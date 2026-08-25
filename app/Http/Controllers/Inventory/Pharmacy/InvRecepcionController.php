@@ -52,42 +52,21 @@ class InvRecepcionController extends Controller
     public function show(string $id): JsonResponse
     {
         try {
-            // Primero intentar como recepcion ID
             $recepcion = $this->service->getById((int) $id);
 
             if ($recepcion) {
                 return response()->json([
                     'success' => true,
-                    'data'    => $recepcion->detalles ?? $recepcion,
+                    'orden_numero' => $recepcion->numero_orden_compra,
+                    'proveedor' => $recepcion->compra?->proveedor_nombre,
+                    'data' => $recepcion->detalles ?? $recepcion,
                 ], 200);
             }
 
-            // Si no existe como recepción, intentar como compra_id (para recepcionar)
-            $compra = \App\Models\Inventory\InvOrdenCompra::with('detalles')->find((int) $id);
-            if ($compra) {
-                // Retornar los detalles de la OC formateados para el formulario de recepción
-                $data = $compra->detalles->map(function ($d) {
-                    return [
-                        'pedido_detalle_id' => $d->pedido_detalle_id,
-                        'codigo_producto' => $d->codigo_producto_indigo,
-                        'producto_nombre' => $d->producto_nombre,
-                        'cantidad_solicitada_compra' => $d->cantidad_solicitada_compra,
-                        'precio_unitario_compra' => $d->precio_unitario_compra,
-                        'proveedor' => $d->proveedor,
-                        'estado' => $d->estado,
-                    ];
-                });
+            $result = $this->service->getItemsForReception((int) $id);
+            $status = ($result['success'] ?? false) ? 200 : 404;
 
-                return response()->json([
-                    'success' => true,
-                    'data'    => $data,
-                ], 200);
-            }
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Recepción u orden no encontrada',
-            ], 404);
+            return response()->json($result, $status);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,

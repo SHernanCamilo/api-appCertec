@@ -5,8 +5,9 @@ namespace App\Models\Inventory;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Productos excluidos del muestreo de recepción técnica.
- * Ej: agua destilada, guantes, insumos que no requieren inspección farmacéutica.
+ * Productos excluidos del muestreo estadístico ISO 2859-1 (tabla militar).
+ * En recepción técnica implica inspección al 100% del lote (ej. Control Especial, Alto Costo).
+ * Origen legacy: formula_magistral_muestra_exclusion
  */
 class InvMuestreoExclusion extends Model
 {

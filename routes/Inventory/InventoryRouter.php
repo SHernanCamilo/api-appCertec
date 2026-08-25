@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Route;
 // PRODUCTOS (Farmacia)
 // =========================================================================
 Route::post('productos/bulk-validate', [App\Http\Controllers\Inventory\Pharmacy\InvProductoController::class, 'validateBulkProducts']);
+Route::get('productos/cum/validar', [App\Http\Controllers\Inventory\Pharmacy\InvProductoController::class, 'validateCum']);
 Route::apiResource('productos', App\Http\Controllers\Inventory\Pharmacy\InvProductoController::class);
 
 // Dashboard
@@ -43,6 +44,9 @@ Route::prefix('activos-fijos')->group(function () {
     Route::get('trazabilidad', [$controller, 'trazabilidad']);
 
     Route::get('exportar', [$controller, 'exportar']);
+    Route::get('localizaciones', [$controller, 'localizaciones']);
+    Route::get('responsables', [$controller, 'responsables']);
+    Route::get('validar-periodicidad', [$controller, 'validarPeriodicidad']);
     Route::get('unidades-funcionales', [$controller, 'unidadesFuncionales']);
     Route::get('empleados', [$controller, 'empleados']);
     Route::get('centros-costo', [$controller, 'centrosCosto']);

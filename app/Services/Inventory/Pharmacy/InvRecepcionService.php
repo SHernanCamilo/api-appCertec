@@ -5,18 +5,19 @@ namespace App\Services\Inventory\Pharmacy;
 use App\Models\Inventory\InvOrdenCompra;
 use App\Models\Inventory\InvRecepcion;
 use App\Models\Inventory\InvRecepcionDetalle;
+use App\Models\Inventory\InvPedidoDetalle;
+use App\Services\Inventory\FabricInventoryService;
 use App\Services\Inventory\Pharmacy\InvSequenceService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class InvRecepcionService
 {
-    protected InvSequenceService $sequenceService;
-
-    public function __construct(InvSequenceService $sequenceService)
-    {
-        $this->sequenceService = $sequenceService;
-    }
+    public function __construct(
+        protected InvSequenceService $sequenceService,
+        protected PharmacyService $pharmacyService,
+        protected FabricInventoryService $fabricService,
+    ) {}
     /**
      * Obtener historial de recepciones o compras pendientes de recepción.
      * Si se envía status con estados de OC (confirmado, en_sitio, parcial),
@@ -146,6 +147,212 @@ class InvRecepcionService
     }
 
     /**
+     * Ítems de una OC listos para recepción técnica (vista_inv_compras_recepcion + muestreo).
+     * Equivalente a digipharma.vista_compras_recepcion + cálculo formula_magistral_muestra.
+     */
+    public function getItemsForReception(int $compraId): array
+    {
+        $compra = InvOrdenCompra::find($compraId);
+        if (!$compra) {
+            return ['success' => false, 'message' => 'Orden de compra no encontrada'];
+        }
+
+        $rows = $this->queryComprasRecepcionView($compraId);
+
+        $items = collect($rows)->map(function ($row) {
+            return $this->mapRowToRecepcionItem($row);
+        })->values()->all();
+
+        $items = $this->enrichWithExternalProductData($items);
+
+        return [
+            'success' => true,
+            'orden_numero' => $compra->numero_orden_compra,
+            'proveedor' => $compra->proveedor_nombre,
+            'oc_indigo' => $compra->oc_indigo,
+            'estado_compra' => $compra->estado,
+            'data' => $items,
+        ];
+    }
+
+    /**
+     * Consulta la vista SQL o fallback con JOINs equivalentes.
+     */
+    private function queryComprasRecepcionView(int $compraId): array
+    {
+        try {
+            return DB::table('vista_inv_compras_recepcion')
+                ->where('compra_id', $compraId)
+                ->orderBy('detalle_id')
+                ->get()
+                ->all();
+        } catch (\Throwable $e) {
+            Log::warning('[INV-RECEPCION] Vista no disponible, usando JOIN directo: ' . $e->getMessage());
+
+            return DB::table('inv_orden_compra_detalles as cd')
+                ->join('inv_ordenes_compra as c', 'c.id', '=', 'cd.compra_id')
+                ->leftJoin('inv_pedido_detalles as pd', 'pd.id', '=', 'cd.pedido_detalle_id')
+                ->leftJoin('inv_pedidos as p', 'p.id', '=', 'pd.pedido_id')
+                ->where('cd.compra_id', $compraId)
+                ->orderBy('cd.id')
+                ->select([
+                    'cd.id as detalle_id',
+                    'cd.compra_id',
+                    'cd.pedido_detalle_id',
+                    'c.numero_orden_compra',
+                    'c.oc_indigo',
+                    'c.fecha_orden',
+                    'c.estado as estado_compra',
+                    'c.proveedor_nombre',
+                    'pd.pedido_id',
+                    'p.numero_pedido',
+                    'p.estado as estado_pedido',
+                    DB::raw('COALESCE(pd.codigo_producto, cd.codigo_producto_indigo) as codigo_producto'),
+                    DB::raw('COALESCE(pd.producto_nombre, cd.producto_nombre) as producto_nombre'),
+                    'pd.producto_tipo',
+                    DB::raw('pd.producto_marca as marca'),
+                    'cd.cantidad_solicitada_compra',
+                    DB::raw('pd.cantidad_solicitada as cantidad_solicitada_pedido'),
+                    'pd.cantidad_recibida',
+                    DB::raw('COALESCE(cd.proveedor, c.proveedor_nombre) as proveedor'),
+                    'cd.clasificacion_vie',
+                    'cd.clasificacion_venta',
+                    'cd.precio_unitario_compra',
+                    'cd.fecha_entrega_estimada',
+                    DB::raw('cd.observaciones as observaciones_compra'),
+                    DB::raw('cd.estado as estado_detalle_compra'),
+                    'pd.numero_lote',
+                    'pd.fecha_vencimiento',
+                    'pd.cum_recibido',
+                    'pd.codigo_sanitario',
+                    'pd.aspecto_cumple',
+                    'pd.embalaje_cumple',
+                    'pd.contenido_cumple',
+                    'pd.cadena_frio_temperatura',
+                    'pd.concepto_recepcion',
+                    DB::raw('pd.observaciones as observaciones_pedido'),
+                    DB::raw('pd.estado as estado_detalle_pedido'),
+                ])
+                ->get()
+                ->all();
+        }
+    }
+
+    private function mapRowToRecepcionItem(object $row): array
+    {
+        $cantidad = (int) round((float) ($row->cantidad_solicitada_compra ?? 0));
+        $codigo = (string) ($row->codigo_producto ?? '');
+        $muestra = $this->pharmacyService->calcularMuestra($cantidad, $codigo);
+        $clasificacion = strtoupper((string) ($row->clasificacion_vie ?? ''));
+
+        return [
+            'detalle_id' => $row->detalle_id,
+            'pedido_detalle_id' => $row->pedido_detalle_id,
+            'numero_pedido' => $row->numero_pedido ?? null,
+            'codigo_producto' => $codigo,
+            'producto_nombre' => $row->producto_nombre ?? '',
+            'marca' => $row->marca ?? '',
+            'tipo_producto' => $row->producto_tipo ?? 'Medicamento',
+            'forma_farmaceutica' => '',
+            'concentracion' => '',
+            'unidad_empaque' => '',
+            'cum_recibido' => $row->cum_recibido ?? '',
+            'cantidad_solicitada_compra' => $row->cantidad_solicitada_compra,
+            'cantidad_solicitada' => $cantidad,
+            'cantidad_recibida' => $row->cantidad_recibida ?? 0,
+            'precio_unitario_compra' => $row->precio_unitario_compra,
+            'proveedor' => $row->proveedor ?? null,
+            'clasificacion_vie' => $row->clasificacion_vie ?? null,
+            'estado' => $row->estado_detalle_compra ?? null,
+            'numero_lote' => $row->numero_lote ?? '',
+            'fecha_vencimiento' => $row->fecha_vencimiento ?? '',
+            'codigo_sanitario' => $row->codigo_sanitario ?? '',
+            'es_medicamento_vital' => str_contains($clasificacion, 'VITAL'),
+            'muestra_poblacion' => $muestra['tamano_muestra'],
+            'muestra_exclusion' => !empty($muestra['inspeccion_total']) ? 1 : 0,
+            'muestra_info' => $muestra,
+        ];
+    }
+
+    /**
+     * Enriquecer ítems con catálogo Fabric (in.Inventory_Productos).
+     * Equivalente a legacy ReceptionService::enrichWithExternalProductData().
+     */
+    private function enrichWithExternalProductData(array $items): array
+    {
+        if (empty($items)) {
+            return $items;
+        }
+
+        $codes = array_unique(array_filter(array_column($items, 'codigo_producto')));
+        if (empty($codes)) {
+            return $items;
+        }
+
+        try {
+            $externalMap = $this->fabricService->findByCodes($codes);
+        } catch (\Throwable $e) {
+            Log::warning('[INV-RECEPCION] Error enriqueciendo productos Fabric: ' . $e->getMessage());
+            return $items;
+        }
+
+        foreach ($items as &$item) {
+            $code = $item['codigo_producto'] ?? '';
+            $ext = $externalMap[$code] ?? null;
+            if (!$ext) {
+                continue;
+            }
+            $item = $this->applyExternalProductFields($item, $ext);
+        }
+        unset($item);
+
+        return $items;
+    }
+
+    private function applyExternalProductFields(array $item, array $ext): array
+    {
+        $tipo = strtolower((string) ($item['tipo_producto'] ?? ''));
+        $isDispositivo = str_contains($tipo, 'dispositivo') || str_contains($tipo, 'device');
+
+        if ($isDispositivo) {
+            $serie = trim((string) ($ext['serie'] ?? ''));
+            $noManeja = $serie === ''
+                || str_contains(strtolower($serie), 'no')
+                || str_contains(strtolower($serie), 'no maneja');
+            $item['forma_farmaceutica'] = $noManeja
+                ? ($ext['descripcion'] ?? '')
+                : $serie;
+            $item['concentracion'] = $ext['risk_type'] ?? '';
+        } else {
+            $item['forma_farmaceutica'] = $ext['presentation'] ?? '';
+            $item['concentracion'] = $ext['concentracion'] ?? '';
+        }
+
+        $item['unidad_empaque'] = $ext['unidad_empaque'] ?? '';
+        if (empty($item['marca']) && !empty($ext['marca'])) {
+            $item['marca'] = $ext['marca'];
+        }
+
+        return $item;
+    }
+
+    private function resolveMuestraPoblacion(array $item): ?int
+    {
+        if (isset($item['muestra_poblacion']) && $item['muestra_poblacion'] !== '') {
+            return (int) $item['muestra_poblacion'];
+        }
+
+        $cantidad = (int) round((float) ($item['cantidad_recibida'] ?? $item['cantidad_solicitada'] ?? 0));
+        $codigo = (string) ($item['codigo_producto'] ?? '');
+
+        if ($cantidad <= 0 || $codigo === '') {
+            return null;
+        }
+
+        return $this->pharmacyService->calcularMuestra($cantidad, $codigo)['tamano_muestra'];
+    }
+
+    /**
      * Listar compras que están listas para recepción (estados confirmado o en_sitio)
      */
     public function getPurchasesForReception(): array
@@ -194,8 +401,10 @@ class InvRecepcionService
             $numeroRecepcion = $this->sequenceService->generateSequence('INVENTARIO', $userId, 'RECEPCION');
 
             // Calcular items totales a recepcionar
-            $itemsToReceive = array_filter($data['items'] ?? [], function($item) {
-                return isset($item['recibido']) && $item['recibido'] == 1;
+            $itemsToReceive = array_filter($data['items'] ?? [], function ($item) {
+                $recibido = $item['recibido'] ?? false;
+                $cantidad = (float) ($item['cantidad_recibida'] ?? 0);
+                return ($recibido === true || $recibido === 1 || $recibido === '1') && $cantidad > 0;
             });
 
             // Crear la cabecera
@@ -233,7 +442,7 @@ class InvRecepcionService
                     'unidad_empaque'             => $item['unidad_empaque'] ?? null,
                     'cantidad_solicitada'        => $item['cantidad_solicitada'] ?? 0,
                     'cantidad_recibida'          => $item['cantidad_recibida'] ?? 0,
-                    'muestra_poblacion'          => $item['muestra_poblacion'] ?? null,
+                    'muestra_poblacion'          => $this->resolveMuestraPoblacion($item),
                     'numero_lote'                => $item['numero_lote'] ?? null,
                     'fecha_vencimiento'          => $item['fecha_vencimiento'] ?? null,
                     
@@ -242,6 +451,7 @@ class InvRecepcionService
                     'fabricante'                 => $item['fabricante'] ?? null,
                     'vida_util'                  => $item['vida_util'] ?? null,
                     'estado_invima'              => $item['estado_invima'] ?? null,
+                    'invima_override_manual'     => !empty($item['invima_override_manual']) ? 1 : 0,
                     'aspecto_cumple'             => $item['aspecto_cumple'] ?? null,
                     'embalaje_cumple'            => $item['embalaje_cumple'] ?? null,
                     'contenido_cumple'           => $item['contenido_cumple'] ?? null,
@@ -259,6 +469,20 @@ class InvRecepcionService
                     
                     'observaciones_recepcion'    => $item['observaciones_recepcion'] ?? null
                 ]);
+
+                if (!empty($item['pedido_detalle_id'])) {
+                    $pedidoUpdates = array_filter([
+                        'cum_recibido' => $item['cum_recibido'] ?? null,
+                        'codigo_sanitario' => $item['codigo_sanitario'] ?? null,
+                        'cantidad_recibida' => $item['cantidad_recibida'] ?? null,
+                        'numero_lote' => $item['numero_lote'] ?? null,
+                        'fecha_vencimiento' => $item['fecha_vencimiento'] ?? null,
+                    ], fn ($v) => $v !== null && $v !== '');
+
+                    if (!empty($pedidoUpdates)) {
+                        InvPedidoDetalle::where('id', $item['pedido_detalle_id'])->update($pedidoUpdates);
+                    }
+                }
             }
 
             // Cambiar estado de la compra temporalmente, 

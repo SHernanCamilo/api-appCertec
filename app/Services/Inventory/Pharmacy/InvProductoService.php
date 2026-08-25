@@ -150,4 +150,30 @@ class InvProductoService
     {
         return $this->invimaService->searchMvd($ium);
     }
+
+    /**
+     * Validar código CUM contra catálogo Fabric (in.Inventory_Productos).
+     */
+    public function validateCum(string $cumCode): array
+    {
+        $cumCode = trim($cumCode);
+        if ($cumCode === '') {
+            return ['success' => false, 'message' => 'Código CUM requerido'];
+        }
+
+        $product = $this->fabricService->findByCum($cumCode);
+        if (!$product) {
+            return [
+                'success' => true,
+                'exists'  => false,
+                'message' => 'CUM no encontrado en la vista de productos',
+            ];
+        }
+
+        return [
+            'success' => true,
+            'exists'  => true,
+            'data'    => $product,
+        ];
+    }
 }
