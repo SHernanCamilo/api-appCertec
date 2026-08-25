@@ -432,25 +432,36 @@ class FabricViewerController extends Controller
 
     /**
      * Llama a Graph-Fabric /api/r2/warm para verificar si el parquet está listo.
+     * - POST con body para warm inicial (con force)
+     * - GET con query params para polling
      * Retorna null si R2 no está disponible (fallback a stream).
      */
     private function tryR2Warm(string $schema, string $viewName, bool $forceRefresh = false): ?array
     {
         try {
             $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-            $token   = config('fabric.api_key', '');
+            $token   = config('fabric.token_admin', '');
 
-            $body = [
-                'token'       => $token,
-                'schema_name' => $schema,
-                'view'        => $viewName,
-            ];
             if ($forceRefresh) {
-                $body['force'] = true; // Graph-Fabric regenera el parquet desde cero
-            }
+                // POST para warm inicial / force refresh
+                $body = [
+                    'token'       => $token,
+                    'schema_name' => $schema,
+                    'view'        => $viewName,
+                    'force'       => true,
+                ];
 
-            $response = \Illuminate\Support\Facades\Http::timeout(10)
-                ->post("{$baseUrl}/api/r2/warm", $body);
+                $response = \Illuminate\Support\Facades\Http::timeout(10)
+                    ->post("{$baseUrl}/api/r2/warm", $body);
+            } else {
+                // GET para polling de estado (más ligero)
+                $response = \Illuminate\Support\Facades\Http::timeout(10)
+                    ->get("{$baseUrl}/api/r2/warm", [
+                        'token'  => $token,
+                        'schema' => $schema,
+                        'view'   => $viewName,
+                    ]);
+            }
 
             if ($response->successful()) {
                 return $response->json();
@@ -480,10 +491,10 @@ class FabricViewerController extends Controller
         array $r2Status,
     ): JsonResponse {
         $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-        $token   = config('fabric.api_key', '');
+        $token   = config('fabric.token_admin', '');
 
         try {
-            $response = \Illuminate\Support\Facades\Http::timeout(60)
+            $response = \Illuminate\Support\Facades\Http::timeout(300)
                 ->post("{$baseUrl}/api/data/export/r2", [
                     'token'       => $token,
                     'schema_name' => $schema,

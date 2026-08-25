@@ -119,6 +119,8 @@ Route::middleware(['auth:api'])->group(function () {
         Route::delete('/parquet-config/{id}', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'destroy'])
             ->where('id', '[0-9]+');
         Route::post('/parquet-config/sync', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'syncAll']);
+        Route::post('/parquet-config/import-from-graph', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'importFromGraph']);
+        Route::post('/parquet-config/run-cron', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'runCron']);
         Route::get('/parquet-config/status', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'status']);
 
         // SSE Stream — sin JWT, el jobId es token implícito (no pasa por auth middleware)
