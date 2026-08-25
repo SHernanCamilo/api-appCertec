@@ -45,9 +45,16 @@ class SidebarService
         $user->loadMissing(['rolesCustom.perfiles.modulo', 'rolesCustom.perfiles.permisos']);
 
         // Obtener todos los módulos activos con sus hijos en una sola query
+        // Carga recursiva: hijos → nietos → bisnietos (3 niveles de profundidad)
         $modulos = Modulo::activos()
             ->with(['hijos' => function ($query) {
-                $query->activos()->orderBy('orden');
+                $query->activos()->orderBy('orden')
+                    ->with(['hijos' => function ($q2) {
+                        $q2->activos()->orderBy('orden')
+                            ->with(['hijos' => function ($q3) {
+                                $q3->activos()->orderBy('orden');
+                            }]);
+                    }]);
             }])
             ->raiz()
             ->orderBy('orden')
