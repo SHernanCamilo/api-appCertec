@@ -207,6 +207,9 @@ class BiParquetConfigController extends Controller
                         'is_stale'             => $cfg->isStale($ageMinutes),
                     ];
                 }
+
+                // Pasar avg_generation_s para que el frontend muestre el carril
+                // (viene del schedule de Graph-Fabric, no del status)
             }
 
             return response()->json([
