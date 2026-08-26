@@ -200,7 +200,7 @@ final class FabricStreamExportJob implements ShouldQueue
                     'columns'      => $this->options['columns'] ?? [],
                     'max_rows'     => $maxRows,
                     'format'       => 'csv',
-                    'ensure_fresh' => false,
+                    'ensure_fresh' => true,
                 ]);
 
             if ($response->status() !== 200) {

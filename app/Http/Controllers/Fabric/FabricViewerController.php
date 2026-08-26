@@ -503,6 +503,7 @@ class FabricViewerController extends Controller
                     'columns'     => $request->input('columns', []),
                     'max_rows'    => (int) $request->input('max_rows', 500000),
                     'format'      => 'gzip',
+                    'ensure_fresh' => true,
                 ]);
 
             if (!$response->successful()) {
