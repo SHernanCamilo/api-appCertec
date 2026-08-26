@@ -105,26 +105,58 @@ class BiParquetConfigController extends Controller
      * Util para: despues de restaurar backup, primer deploy, o si Graph-Fabric
      * se reinicio y perdio su schedule.db.
      */
-    public function syncAll(): JsonResponse
+    public function syncAll(Request $request): JsonResponse
     {
-        $configs = BiParquetConfig::enabled()->get();
+        // Limite por batch para no exceder timeout HTTP (max 100 por request)
+        $limit = min((int) $request->input('limit', 100), 200);
+
+        // Priorizar las que nunca se sincronizaron
+        $configs = BiParquetConfig::enabled()
+            ->orderByRaw('last_synced_at IS NOT NULL, last_synced_at ASC')
+            ->limit($limit)
+            ->get();
+
         $synced  = 0;
         $failed  = 0;
+        $errors  = [];
 
         foreach ($configs as $config) {
             if ($this->syncSingle($config)) {
                 $synced++;
             } else {
                 $failed++;
+                if ($failed <= 5) {
+                    $errors[] = $config->qualifiedName();
+                }
             }
         }
 
+        $totalPending = BiParquetConfig::enabled()->whereNull('last_synced_at')->count();
+
+        $message = "Sincronizadas {$synced}/{$configs->count()} configuraciones.";
+        if ($failed > 0) {
+            $message .= " Fallaron {$failed}.";
+        }
+        if ($totalPending > 0) {
+            $message .= " Quedan {$totalPending} pendientes (click de nuevo para continuar).";
+        }
+
+        Log::info('[ParquetConfig] syncAll resultado', [
+            'synced' => $synced,
+            'failed' => $failed,
+            'total'  => $configs->count(),
+            'pending' => $totalPending,
+            'sample_errors' => $errors,
+        ]);
+
         return response()->json([
-            'success' => true,
+            'success' => $failed === 0,
             'synced'  => $synced,
             'failed'  => $failed,
             'total'   => $configs->count(),
-            'message' => "Sincronizadas {$synced}/{$configs->count()} configuraciones.",
+            'pending' => $totalPending,
+            'errors'  => $errors,
+            'message' => $message,
         ]);
     }
 
