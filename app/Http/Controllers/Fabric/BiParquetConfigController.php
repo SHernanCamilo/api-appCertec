@@ -57,7 +57,7 @@ class BiParquetConfigController extends Controller
             'schema_name'          => 'required|string|max:20',
             'view_name'            => 'required|string|max:150',
             'refresh_interval_min' => 'required|integer|min:1|max:1440',
-            'priority'             => 'required|in:realtime,high,medium,low,manual',
+            'priority'             => 'required|in:realtime,high,medium,low,manual,operativo,analitico',
             'group_name'           => 'nullable|string|max:50',
             'enabled'              => 'sometimes|boolean',
         ]);
@@ -381,7 +381,7 @@ class BiParquetConfigController extends Controller
                     'schema_name'          => $config->schema_name,
                     'view'                 => $config->view_name,
                     'refresh_interval_min' => $config->refresh_interval_min,
-                    'priority'             => $config->priority,
+                    'priority'             => $this->mapPriorityForGraph($config->priority),
                     'group_name'           => $config->group_name,
                 ]);
             }
@@ -494,6 +494,22 @@ class BiParquetConfigController extends Controller
         if ($avg <= 180) return 'standard';
         if ($avg <= 900) return 'heavy';
         return 'marathon';
+    }
+
+    /**
+     * Mapea la prioridad de Laravel a la que acepta Graph-Fabric.
+     * Graph solo acepta: realtime, operativo, analitico.
+     */
+    private function mapPriorityForGraph(string $priority): string
+    {
+        return match ($priority) {
+            'realtime'          => 'realtime',
+            'high', 'operativo' => 'operativo',
+            'medium'            => 'operativo',
+            'low', 'analitico'  => 'analitico',
+            'manual'            => 'analitico',
+            default             => 'operativo',
+        };
     }
 
     /**

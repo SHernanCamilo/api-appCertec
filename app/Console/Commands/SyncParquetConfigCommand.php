@@ -48,12 +48,18 @@ class SyncParquetConfigCommand extends Command
 
         foreach ($configs as $config) {
             try {
+                $priorityMap = [
+                    'realtime' => 'realtime', 'high' => 'operativo', 'medium' => 'operativo',
+                    'low' => 'analitico', 'manual' => 'analitico',
+                    'operativo' => 'operativo', 'analitico' => 'analitico',
+                ];
+
                 $response = Http::timeout(10)->post("{$baseUrl}/api/r2/schedule", [
                     'token'                => $token,
                     'schema_name'          => $config->schema_name,
                     'view'                 => $config->view_name,
                     'refresh_interval_min' => $config->refresh_interval_min,
-                    'priority'             => $config->priority,
+                    'priority'             => $priorityMap[$config->priority] ?? 'operativo',
                     'group_name'           => $config->group_name,
                 ]);
 
