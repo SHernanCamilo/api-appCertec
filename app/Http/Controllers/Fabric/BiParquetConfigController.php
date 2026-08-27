@@ -513,6 +513,39 @@ class BiParquetConfigController extends Controller
     }
 
     /**
+     * POST /api/fabric/viewer/parquet-config/rebalance
+     * Ejecuta el rebalanceo inteligente del scheduler (desactiva pequeñas,
+     * sube intervalos de históricas) y sincroniza con Graph-Fabric.
+     */
+    public function rebalance(Request $request): JsonResponse
+    {
+        $dryRun = $request->boolean('dry_run', false);
+
+        try {
+            $exitCode = \Illuminate\Support\Facades\Artisan::call('fabric:rebalance-scheduler', array_filter([
+                '--dry-run' => $dryRun,
+                '--sync'    => !$dryRun,
+            ]));
+
+            $output = \Illuminate\Support\Facades\Artisan::output();
+
+            return response()->json([
+                'success' => $exitCode === 0,
+                'dry_run' => $dryRun,
+                'output'  => $output,
+                'message' => $dryRun
+                    ? 'Simulacion de rebalanceo completada (no se aplicaron cambios).'
+                    : 'Rebalanceo aplicado y sincronizado con Graph-Fabric.',
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al rebalancear: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * POST /api/fabric/viewer/parquet-config/run-cron
      * Ejecuta manualmente el cron de Graph-Fabric (regenera parquets pendientes).
      */

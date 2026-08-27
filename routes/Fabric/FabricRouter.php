@@ -124,6 +124,7 @@ Route::middleware(['auth:api'])->group(function () {
         Route::post('/parquet-config/sync', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'syncAll']);
         Route::post('/parquet-config/import-from-graph', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'importFromGraph']);
         Route::post('/parquet-config/run-cron', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'runCron']);
+        Route::post('/parquet-config/rebalance', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'rebalance']);
         Route::get('/parquet-config/dashboard', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'dashboard']);
         Route::get('/parquet-config/{schema}/{view}/history', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'history'])
             ->where('schema', '[a-z]+')->where('view', '[A-Za-z0-9_]+');

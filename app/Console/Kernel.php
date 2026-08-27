@@ -95,6 +95,16 @@ class Kernel extends ConsoleKernel
             ->withoutOverlapping()
             ->runInBackground()
             ->appendOutputTo(storage_path('logs/parquet-snapshot.log'));
+
+        // ── Parquet: rebalanceo automático del scheduler ─────────────────
+        // Semanal (domingo 03:00): reajusta intervalos según el tamaño real de
+        // cada vista y desactiva las pequeñas del scheduler (se exportan al vuelo).
+        // Los tamaños de vista cambian lento, por eso semanal es suficiente.
+        $schedule->command('fabric:rebalance-scheduler --sync')
+            ->weeklyOn(0, '03:00')
+            ->withoutOverlapping()
+            ->runInBackground()
+            ->appendOutputTo(storage_path('logs/parquet-rebalance.log'));
     }
 
     /**
