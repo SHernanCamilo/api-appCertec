@@ -175,11 +175,19 @@ final class FabricStreamExportJob implements ShouldQueue
         try {
             $maxRows = min((int)($this->options['max_rows'] ?? 500000), self::MAX_EXPORTABLE_ROWS);
 
-            // Timeout alineado al del job: Graph-Fabric asigna la vista a un
-            // carril según su tamaño y las pesadas pueden tardar varios minutos.
+            // Preparar directorio temporal para sink()
+            $dir = storage_path("app/fabric_exports/{$this->jobId}");
+            if (!is_dir($dir)) { mkdir($dir, 0775, true); }
+            $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
+
+            // R2 responde con gzip. Descargar directamente a disco con sink()
+            // para no cargar todo el body en RAM (puede ser >80 MB).
+            $gzFile = "{$dir}/{$baseName}_raw.gz";
+
             $response = Http::timeout((int) config('fabric.export_timeout', 600))
                 ->connectTimeout(10)
                 ->withHeaders(['X-API-Key' => config('fabric.api_key', '')])
+                ->sink($gzFile)
                 ->post($url . '/api/data/export/r2', [
                     'token'        => $token,
                     'user_email'   => $user->email,
@@ -192,11 +200,12 @@ final class FabricStreamExportJob implements ShouldQueue
                     'columns'      => $this->options['columns'] ?? [],
                     'max_rows'     => $maxRows,
                     'format'       => 'csv',
-                    'ensure_fresh' => false,
+                    'ensure_fresh' => true,
                 ]);
 
             if ($response->status() !== 200) {
-                Log::info('FabricStreamExportJob: R2 no disponible', [
+                @unlink($gzFile);
+                Log::info('FabricStreamExportJob: R2 no disponible (sink)', [
                     'job_id' => $this->jobId, 'status' => $response->status(),
                 ]);
                 return false;
@@ -205,9 +214,8 @@ final class FabricStreamExportJob implements ShouldQueue
             $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
 
             // Guarda de tamaño: por encima de 1M filas el archivo es inmanejable
-            // (Excel corta en 1.048.576) y el proceso monopoliza un carril de
-            // Python varios minutos. Se pide filtrar en vez de fallar por timeout.
             if ($totalRows > self::MAX_EXPORTABLE_ROWS) {
+                @unlink($gzFile);
                 unset($response);
                 $this->updateStatus(self::STATUS_FAILED, sprintf(
                     'La vista tiene %s registros y excede el máximo exportable (%s). Aplique filtros para reducir los datos.',
@@ -231,17 +239,10 @@ final class FabricStreamExportJob implements ShouldQueue
                 'source' => $response->header('X-Source'),
             ]);
 
-            $dir = storage_path("app/fabric_exports/{$this->jobId}");
-            if (!is_dir($dir)) { mkdir($dir, 0775, true); }
+            $csvFile = "{$dir}/{$baseName}_raw.csv";
 
-            $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
-            $csvFile  = "{$dir}/{$baseName}_raw.csv";
-
-            // R2 responde con gzip. Decodificar por STREAMING a disco
-            // para no cargar 459 MB en RAM de golpe.
-            $gzFile = "{$dir}/{$baseName}_raw.gz";
-            file_put_contents($gzFile, $response->body());
-            unset($response); // Liberar RAM del response (~68 MB)
+            // El archivo .gz ya está en disco gracias a sink() (0 RAM usada)
+            unset($response); // Liberar el objeto Http response
 
             $gz = gzopen($gzFile, 'rb');
             $csv = fopen($csvFile, 'w');

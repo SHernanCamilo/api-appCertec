@@ -16,7 +16,7 @@ class InvRecepcionDetalle extends Model
         'marca', 'tipo_producto', 'forma_farmaceutica', 'concentracion', 'unidad_empaque',
         'cantidad_solicitada', 'cantidad_recibida', 'muestra_poblacion',
         'numero_lote', 'fecha_vencimiento',
-        'codigo_sanitario', 'fabricante', 'vida_util', 'estado_invima',
+        'codigo_sanitario', 'fabricante', 'vida_util', 'estado_invima', 'invima_override_manual',
         'aspecto_cumple', 'embalaje_cumple', 'contenido_cumple',
         'cadena_frio_temperatura', 'concepto_recepcion', 'es_medicamento_vital',
         'mvd_ium', 'mvd_solicitante', 'mvd_principio_activo', 'mvd_forma_farmaceutica',

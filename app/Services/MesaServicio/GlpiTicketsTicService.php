@@ -7,6 +7,7 @@ namespace App\Services\MesaServicio;
 use App\Services\GLPI\GLPIService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
@@ -51,7 +52,7 @@ class GlpiTicketsTicService
         $grupoId = max(1, (int) config('glpi.tic_tablero.grupo_id', 29));
         $alertaHoras = max(1, (int) config('glpi.tic_tablero.alerta_horas', 2));
         $ttl = max(15, (int) config('glpi.tic_tablero.cache_segundos', 60));
-        $cacheKey = "mesa_glpi_tablero_tic_v2_{$grupoId}_{$alertaHoras}";
+        $cacheKey = "mesa_glpi_tablero_tic_v3_{$grupoId}_{$alertaHoras}";
 
         if ($forzar) {
             Cache::forget($cacheKey);
@@ -113,8 +114,27 @@ class GlpiTicketsTicService
             'sin_ans' => 0,
         ];
 
+        $ids = [];
+        $gruposPorTicket = [];
         foreach ($filas as $fila) {
-            $ticket = $this->mapearTicket($fila, $ahora, $limite, $alertaHoras);
+            $id = (int) ($fila['id'] ?? 0);
+            if ($id < 1) {
+                continue;
+            }
+            $ids[] = $id;
+            $gruposPorTicket[$id] = $this->listaNombres($fila['grupo'] ?? null);
+        }
+        $ultimoGrupoPorTicket = $this->consultarUltimoGrupoHistorico($ids, $gruposPorTicket);
+
+        foreach ($filas as $fila) {
+            $id = (int) ($fila['id'] ?? 0);
+            $ticket = $this->mapearTicket(
+                $fila,
+                $ahora,
+                $limite,
+                $alertaHoras,
+                $ultimoGrupoPorTicket[$id] ?? null
+            );
             $tickets[] = $ticket;
             $resumen['abiertos']++;
             $claveResumen = $ticket['alerta'] === 'vencido' ? 'vencidos' : $ticket['alerta'];
@@ -208,9 +228,10 @@ class GlpiTicketsTicService
 
     /**
      * @param  array<string, mixed>  $fila
+     * @param  array{nombre: string, nivel: int}|null  $grupoHistorico
      * @return array<string, mixed>
      */
-    private function mapearTicket(array $fila, Carbon $ahora, Carbon $limite, int $alertaHoras): array
+    private function mapearTicket(array $fila, Carbon $ahora, Carbon $limite, int $alertaHoras, ?array $grupoHistorico = null): array
     {
         $prioridadId = $this->entero($fila['prioridad'] ?? null);
         $estadoId = $this->entero($fila['estado'] ?? null);
@@ -238,7 +259,7 @@ class GlpiTicketsTicService
 
         $id = (int) ($fila['id'] ?? 0);
         $grupos = $this->listaNombres($fila['grupo'] ?? null);
-        $grupoActual = $this->resolverGrupoActual($grupos);
+        $grupoActual = $grupoHistorico ?? $this->resolverGrupoActual($grupos);
 
         return [
             'id' => $id,
@@ -268,7 +289,171 @@ class GlpiTicketsTicService
     }
 
     /**
-     * El caso nace en Nivel 1 y se eleva a N2 o N3. El grupo actual es el de mayor nivel.
+     * Último grupo técnico aún asignado, según el histórico (mayor id en glpi_groups_tickets).
+     * No usa N1/N2/N3: un caso puede volver a N2 después de haber pasado por N3.
+     *
+     * @param  list<int>  $ticketIds
+     * @param  array<int, list<string>>  $gruposTecnicosPorTicket
+     * @return array<int, array{nombre: string, nivel: int}>
+     */
+    private function consultarUltimoGrupoHistorico(array $ticketIds, array $gruposTecnicosPorTicket): array
+    {
+        $ticketIds = array_values(array_unique(array_filter($ticketIds)));
+        if ($ticketIds === []) {
+            return [];
+        }
+
+        try {
+            $relaciones = [];
+            foreach (array_chunk($ticketIds, 40) as $chunk) {
+                $criteria = [];
+                foreach ($chunk as $i => $ticketId) {
+                    $criterio = [
+                        'field' => 3,
+                        'searchtype' => 'equals',
+                        'value' => $ticketId,
+                    ];
+                    if ($i > 0) {
+                        $criterio['link'] = 'OR';
+                    }
+                    $criteria[] = $criterio;
+                }
+
+                $filas = $this->glpi->searchAllItems(
+                    'Group_Ticket',
+                    [2, 3, 4],
+                    [
+                        2 => 'id',
+                        3 => 'ticket_id',
+                        4 => 'group_id',
+                    ],
+                    400,
+                    $criteria
+                );
+
+                foreach ($filas as $fila) {
+                    $ticketId = (int) ($fila['ticket_id'] ?? 0);
+                    $groupId = (int) ($fila['group_id'] ?? 0);
+                    $relId = (int) ($fila['id'] ?? 0);
+                    if ($ticketId < 1 || $groupId < 1 || $relId < 1) {
+                        continue;
+                    }
+                    $relaciones[$ticketId][] = [
+                        'id' => $relId,
+                        'group_id' => $groupId,
+                    ];
+                }
+            }
+
+            $groupIds = [];
+            foreach ($relaciones as $rels) {
+                foreach ($rels as $rel) {
+                    $groupIds[] = $rel['group_id'];
+                }
+            }
+            $nombresGrupos = $this->resolverNombresGrupos($groupIds);
+
+            $resultado = [];
+            foreach ($relaciones as $ticketId => $rels) {
+                $tecnicos = $gruposTecnicosPorTicket[$ticketId] ?? [];
+                $elegido = null;
+                foreach ($rels as $rel) {
+                    $nombre = $nombresGrupos[$rel['group_id']] ?? null;
+                    if ($nombre === null || $nombre === '') {
+                        continue;
+                    }
+                    if ($tecnicos !== [] && ! $this->coincideGrupo($nombre, $tecnicos)) {
+                        continue;
+                    }
+                    if ($elegido === null || $rel['id'] > $elegido['id']) {
+                        $elegido = [
+                            'id' => $rel['id'],
+                            'nombre' => $nombre,
+                        ];
+                    }
+                }
+                if ($elegido === null) {
+                    continue;
+                }
+                $resultado[$ticketId] = [
+                    'nombre' => $elegido['nombre'],
+                    'nivel' => $this->nivelDesdeNombre($elegido['nombre']),
+                ];
+            }
+
+            return $resultado;
+        } catch (Throwable $e) {
+            Log::warning('Tablero TIC: no se pudo leer el histórico de grupos técnicos: '.$e->getMessage());
+
+            return [];
+        }
+    }
+
+    /**
+     * @param  list<int>  $groupIds
+     * @return array<int, string>
+     */
+    private function resolverNombresGrupos(array $groupIds): array
+    {
+        $groupIds = array_values(array_unique(array_filter($groupIds)));
+        if ($groupIds === []) {
+            return [];
+        }
+
+        $nombres = [];
+        try {
+            $params = ['get_hateoas' => false];
+            foreach ($groupIds as $i => $id) {
+                $params['items['.$i.'][itemtype]'] = 'Group';
+                $params['items['.$i.'][items_id]'] = $id;
+            }
+            $items = $this->glpi->normalizeCollection($this->glpi->get('/getMultipleItems', $params));
+            foreach ($items as $item) {
+                $id = (int) ($item['id'] ?? 0);
+                $nombre = trim((string) ($item['completename'] ?? $item['name'] ?? ''));
+                if ($id > 0 && $nombre !== '') {
+                    $nombres[$id] = $nombre;
+                }
+            }
+        } catch (Throwable $e) {
+            Log::warning('Tablero TIC: no se pudieron resolver grupos en lote: '.$e->getMessage());
+        }
+
+        foreach ($groupIds as $id) {
+            if (isset($nombres[$id])) {
+                continue;
+            }
+            try {
+                $grupo = $this->glpi->getItem('Group', $id);
+                $nombre = trim((string) ($grupo['completename'] ?? $grupo['name'] ?? ''));
+                if ($nombre !== '') {
+                    $nombres[$id] = $nombre;
+                }
+            } catch (Throwable $e) {
+                // El tablero sigue con el resto de grupos.
+            }
+        }
+
+        return $nombres;
+    }
+
+    /**
+     * @param  list<string>  $lista
+     */
+    private function coincideGrupo(string $nombre, array $lista): bool
+    {
+        $objetivo = mb_strtolower(trim($nombre));
+        foreach ($lista as $item) {
+            if (mb_strtolower(trim((string) $item)) === $objetivo) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Fallback si no llega el histórico: el de mayor nivel entre los grupos actuales.
      *
      * @param  list<string>  $grupos
      * @return array{nombre: string, nivel: int}

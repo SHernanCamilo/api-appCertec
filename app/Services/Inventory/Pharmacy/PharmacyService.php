@@ -54,17 +54,28 @@ class PharmacyService
      */
     public function calcularMuestra(int $cantidadLote, string $codigoProducto): array
     {
-        // Verificar si el producto está excluido de muestreo
-        $excluido = InvMuestreoExclusion::where('codigo_producto', $codigoProducto)
-            ->where('activo', true)
-            ->exists();
-
-        if ($excluido) {
+        if ($cantidadLote <= 0) {
             return [
                 'requiere_muestreo' => false,
                 'tamano_muestra' => 0,
                 'letra_codigo' => '-',
-                'motivo' => 'Producto excluido de muestreo (Control Especial / Alto Costo)',
+                'inspeccion_total' => false,
+                'motivo' => 'Sin cantidad en lote',
+            ];
+        }
+
+        // Productos en tabla de exclusión ISO: no usan muestreo estadístico → inspección 100%
+        $exclusion = InvMuestreoExclusion::where('codigo_producto', $codigoProducto)
+            ->where('activo', true)
+            ->first();
+
+        if ($exclusion) {
+            return [
+                'requiere_muestreo' => true,
+                'tamano_muestra' => $cantidadLote,
+                'letra_codigo' => '100%',
+                'inspeccion_total' => true,
+                'motivo' => 'Inspección total del lote (' . ($exclusion->motivo ?? 'Control Especial / Alto Costo') . ')',
             ];
         }
 
@@ -79,14 +90,16 @@ class PharmacyService
                 'requiere_muestreo' => true,
                 'tamano_muestra' => max(2, (int) ceil($cantidadLote * 0.1)),
                 'letra_codigo' => '?',
+                'inspeccion_total' => false,
                 'motivo' => 'Sin nivel de inspección definido, se aplica 10%',
             ];
         }
 
         return [
             'requiere_muestreo' => true,
-            'tamano_muestra' => $nivel->tamano_muestra,
+            'tamano_muestra' => (int) $nivel->tamano_muestra,
             'letra_codigo' => $nivel->letra_codigo,
+            'inspeccion_total' => false,
             'motivo' => "Nivel {$nivel->nivel_inspeccion}, Letra {$nivel->letra_codigo}",
         ];
     }

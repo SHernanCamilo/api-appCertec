@@ -369,4 +369,30 @@ class InvProductoController extends Controller
             'warnings' => $warnings
         ], 200);
     }
+
+    /**
+     * Validar código CUM contra catálogo Fabric.
+     * GET /api/inventario/productos/cum/validar?cum=...
+     */
+    public function validateCum(Request $request): JsonResponse
+    {
+        $cum = trim((string) $request->query('cum', ''));
+        if ($cum === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Código CUM requerido',
+            ], 422);
+        }
+
+        try {
+            $result = $this->service->validateCum($cum);
+            return response()->json($result, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al validar CUM',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
 }

@@ -82,25 +82,125 @@ class FabricInventoryService
     }
 
     /**
-     * Buscar productos por múltiples códigos.
+     * Buscar productos por múltiples códigos (normalizados para recepción).
      */
     public function findByCodes(array $codes): array
     {
-        if (empty($codes)) return [];
+        if (empty($codes)) {
+            return [];
+        }
 
         $results = [];
-        // Fabric no soporta IN(), hacemos batches con filtro LIKE por cada código
-        // Para optimizar, podemos hacer una sola query con filtro especial o usar el endpoint aggregate
-        foreach (array_chunk($codes, 50) as $batch) {
-            foreach ($batch as $code) {
-                $product = $this->findByCode($code);
-                if ($product) {
-                    $results[$code] = $product;
-                }
+        foreach (array_unique(array_filter(array_map('trim', $codes))) as $code) {
+            $product = $this->findByCode($code);
+            if ($product) {
+                $results[$code] = $this->normalizeProductRow($product);
             }
         }
 
         return $results;
+    }
+
+    /**
+     * Buscar producto por código CUM en la vista Fabric Inventory_Productos.
+     * Equivalente a legacy Product::findExternalByCum().
+     */
+    public function findByCum(string $cumCode): ?array
+    {
+        $cumCode = trim($cumCode);
+        if ($cumCode === '') {
+            return null;
+        }
+
+        $byCode = $this->findByCode($cumCode);
+        if ($byCode) {
+            return $this->formatCumProduct($this->normalizeProductRow($byCode), $cumCode);
+        }
+
+        foreach (['CodigoCUM', 'Codigo_CUM', 'CUM', 'CodCUM', 'Codigo CUM', 'codigo_cum'] as $cumField) {
+            $result = $this->gateway->queryAsSystem(self::SCHEMA, self::VIEW_PRODUCTOS, [
+                'filters' => [$cumField => $cumCode],
+                'limit'   => 1,
+            ]);
+
+            if ($result['success'] && !empty($result['data'][0])) {
+                return $this->formatCumProduct($this->normalizeProductRow($result['data'][0]), $cumCode);
+            }
+        }
+
+        $local = \App\Models\Inventory\InvProducto::where('codigo', $cumCode)->where('activo', true)->first();
+        if ($local) {
+            return [
+                'codigo'           => $local->codigo,
+                'nombre'           => $local->nombre,
+                'product_name'     => $local->nombre,
+                'producto_nombre'  => $local->nombre,
+                'product_type'     => $local->tipo_producto ?? '',
+                'cum_code'         => $cumCode,
+                'manufacturer'     => $local->fabricante ?? '',
+                'presentation'     => $local->presentacion ?? '',
+                'unit_measure'     => $local->unidad_empaque ?? 'UND',
+                'risk_type'        => $local->tipo_riesgo ?? '',
+                'concentracion'    => $local->concentracion ?? '',
+                'unidad_empaque'   => $local->unidad_empaque ?? '',
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Normaliza filas de in.Inventory_Productos a claves estándar del módulo.
+     */
+    public function normalizeProductRow(array $row): array
+    {
+        return [
+            'codigo'         => $this->pickField($row, ['CodProducto', 'Codigo', 'codigo', 'code', 'product_code']),
+            'nombre'         => $this->pickField($row, ['Producto', 'Nombre', 'nombre', 'name', 'product_name']),
+            'product_type'   => $this->pickField($row, ['TipoProducto', 'Tipo', 'tipo_producto', 'product_type']),
+            'cum_code'       => $this->pickField($row, ['CodigoCUM', 'Codigo_CUM', 'CUM', 'CodCUM', 'codigo_cum']),
+            'presentation'   => $this->pickField($row, ['Presentacion', 'Presentación', 'presentacion', 'presentation']),
+            'concentracion'  => $this->pickField($row, ['Concentracion', 'Concentración', 'concentracion', 'concentration', 'PrincipioActivo', 'principio_activo']),
+            'unidad_empaque' => $this->pickField($row, ['UnidadEmpaque', 'Unidad de Empaque', 'unidad_empaque', 'unidadempaque', 'empaque']),
+            'risk_type'      => $this->pickField($row, ['TipoRiesgo', 'Tipo_Riesgo', 'tipo_riesgo', 'risk_type', 'Tiporiesgo']),
+            'serie'          => $this->pickField($row, ['Serial', 'Serie', 'serie', 'NumeroSerie', 'manejaSerial']),
+            'descripcion'    => $this->pickField($row, ['Descripcion', 'Descripción', 'descripcion', 'description']),
+            'marca'          => $this->pickField($row, ['Marca', 'marca', 'brand', 'Fabricante', 'fabricante']),
+        ];
+    }
+
+    private function formatCumProduct(array $normalized, string $cumCode): array
+    {
+        return array_merge($normalized, [
+            'product_name'    => $normalized['nombre'],
+            'producto_nombre' => $normalized['nombre'],
+            'cum_code'        => $cumCode,
+            'manufacturer'    => $normalized['marca'],
+            'unit_measure'    => $normalized['unidad_empaque'] ?: 'UND',
+        ]);
+    }
+
+    private function pickField(array $row, array $candidates): string
+    {
+        foreach ($candidates as $key) {
+            if (array_key_exists($key, $row) && $row[$key] !== null && $row[$key] !== '') {
+                return trim((string) $row[$key]);
+            }
+        }
+
+        $lower = [];
+        foreach ($row as $k => $v) {
+            $lower[strtolower((string) $k)] = $v;
+        }
+
+        foreach ($candidates as $key) {
+            $lk = strtolower($key);
+            if (array_key_exists($lk, $lower) && $lower[$lk] !== null && $lower[$lk] !== '') {
+                return trim((string) $lower[$lk]);
+            }
+        }
+
+        return '';
     }
 
     /**

@@ -77,6 +77,24 @@ class Kernel extends ConsoleKernel
             ->hourly()
             ->withoutOverlapping()
             ->runInBackground();
+
+        // ── Parquet: sincronizar config con Graph-Fabric ─────────────────
+        // Reenvía la config de bi_parquet_config a Graph-Fabric cada 30 min
+        // (por si Graph se reinició y perdió su schedule).
+        $schedule->command('fabric:sync-parquet-config')
+            ->everyThirtyMinutes()
+            ->withoutOverlapping()
+            ->runInBackground()
+            ->appendOutputTo(storage_path('logs/parquet-sync.log'));
+
+        // ── Parquet: snapshot de estado (trazabilidad) ───────────────────
+        // Guarda en bi_parquet_history el estado de cada parquet cada 15 min.
+        // Permite ver qué vistas nunca se regeneran, qué carril se represa, etc.
+        $schedule->command('fabric:snapshot-parquet-status --prune=7')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping()
+            ->runInBackground()
+            ->appendOutputTo(storage_path('logs/parquet-snapshot.log'));
     }
 
     /**

@@ -358,7 +358,8 @@ class FabricViewerController extends Controller
         // Si está generándose, el frontend hace polling.
         // Si es demasiado grande, forzar filtros.
         // Si R2 no está disponible, fallback al export stream clásico.
-        $r2Status = $this->tryR2Warm($user, $schema, $viewName);
+        $forceRefresh = (bool) $request->input('force_refresh', false);
+        $r2Status = $this->tryR2Warm($user, $schema, $viewName, $forceRefresh);
 
         if ($r2Status !== null) {
             $status = $r2Status['status'] ?? 'unknown';
@@ -431,26 +432,40 @@ class FabricViewerController extends Controller
 
     /**
      * Llama a Graph-Fabric /api/r2/warm para verificar si el parquet está listo.
+     * - POST con body para warm inicial (con force)
+     * - GET con query params para polling
      * Retorna null si R2 no está disponible (fallback a stream).
      *
      * Graph-Fabric exige TOKEN_ADMIN + user_context (grupos/departamento).
      * GRAPHQL_API_KEY es el header X-API-Key, no el token de usuario.
      */
-    private function tryR2Warm($user, string $schema, string $viewName): ?array
+    private function tryR2Warm($user, string $schema, string $viewName, bool $forceRefresh = false): ?array
     {
         try {
             $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-            $payload = array_merge(
-                $this->gateway->userContextPayload($user, $viewName),
-                [
-                    'token'       => (string) (config('fabric.token_admin') ?: config('fabric.api_key', '')),
-                    'schema_name' => $schema,
-                    'view'        => $viewName,
-                ]
-            );
+            $token   = (string) (config('fabric.token_admin') ?: config('fabric.api_key', ''));
 
-            $response = \Illuminate\Support\Facades\Http::timeout(10)
-                ->post("{$baseUrl}/api/r2/warm", $payload);
+            if ($forceRefresh) {
+                // POST: warm inicial / invalidar parquet. Graph-Fabric pide token + user_context.
+                $response = \Illuminate\Support\Facades\Http::timeout(10)
+                    ->post("{$baseUrl}/api/r2/warm", array_merge(
+                        $this->gateway->userContextPayload($user, $viewName),
+                        [
+                            'token'       => $token,
+                            'schema_name' => $schema,
+                            'view'        => $viewName,
+                            'force'       => true,
+                        ]
+                    ));
+            } else {
+                // GET: solo estado. No lanza otra generación.
+                $response = \Illuminate\Support\Facades\Http::timeout(10)
+                    ->get("{$baseUrl}/api/r2/warm", [
+                        'token'  => $token,
+                        'schema' => $schema,
+                        'view'   => $viewName,
+                    ]);
+            }
 
             if ($response->successful() || $response->status() === 202) {
                 \Illuminate\Support\Facades\Log::info('[R2Warm] ok', [
@@ -531,17 +546,18 @@ class FabricViewerController extends Controller
 
         try {
             // filters [] (lista PHP) → 422 en FastAPI; hace falta dict {}
-            $response = \Illuminate\Support\Facades\Http::timeout(60)
+            $response = \Illuminate\Support\Facades\Http::timeout(300)
                 ->post("{$baseUrl}/api/data/export/r2", array_merge($ctx, [
-                    'token'       => (string) (config('fabric.token_admin') ?: config('fabric.api_key', '')),
-                    'schema_name' => $schema,
-                    'view'        => $viewName,
-                    'filters'     => $this->gateway->normalizeFiltersPublic(
+                    'token'        => (string) (config('fabric.token_admin') ?: config('fabric.api_key', '')),
+                    'schema_name'  => $schema,
+                    'view'         => $viewName,
+                    'filters'      => $this->gateway->normalizeFiltersPublic(
                         $request->input('filters', [])
                     ),
-                    'columns'     => $request->input('columns', []),
-                    'max_rows'    => (int) $request->input('max_rows', 500000),
-                    'format'      => 'gzip',
+                    'columns'      => $request->input('columns', []),
+                    'max_rows'     => (int) $request->input('max_rows', 500000),
+                    'format'       => 'gzip',
+                    'ensure_fresh' => true,
                 ]));
 
             if (!$response->successful()) {

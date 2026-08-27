@@ -116,6 +116,19 @@ Route::middleware(['auth:api'])->group(function () {
         // Arranque JadeOne Desktop: ticket opaco (el JWT no viaja en el protocolo)
         Route::post('/desktop/launch', [\App\Http\Controllers\Fabric\FabricDesktopController::class, 'launch']);
 
+        // Parquet Config (parametrizacion de intervalos de refresh)
+        Route::get('/parquet-config', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'index']);
+        Route::post('/parquet-config', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'store']);
+        Route::delete('/parquet-config/{id}', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'destroy'])
+            ->where('id', '[0-9]+');
+        Route::post('/parquet-config/sync', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'syncAll']);
+        Route::post('/parquet-config/import-from-graph', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'importFromGraph']);
+        Route::post('/parquet-config/run-cron', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'runCron']);
+        Route::get('/parquet-config/dashboard', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'dashboard']);
+        Route::get('/parquet-config/{schema}/{view}/history', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'history'])
+            ->where('schema', '[a-z]+')->where('view', '[A-Za-z0-9_]+');
+        Route::get('/parquet-config/status', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'status']);
+
         // SSE Stream — sin JWT, el jobId es token implícito (no pasa por auth middleware)
         // Se registra en routes/api.php fuera del grupo auth.
     });
