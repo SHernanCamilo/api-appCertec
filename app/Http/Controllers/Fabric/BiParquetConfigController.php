@@ -405,6 +405,98 @@ class BiParquetConfigController extends Controller
     }
 
     /**
+     * GET /api/fabric/viewer/parquet-config/dashboard
+     * Resumen del estado de generación: por carril, por estado, represamiento.
+     * Combina el schedule de Graph-Fabric con el historial de Laravel.
+     */
+    public function dashboard(): JsonResponse
+    {
+        $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
+        $token   = config('fabric.token_admin', '');
+
+        try {
+            $response = Http::timeout(15)->get("{$baseUrl}/api/r2/schedule", [
+                'token' => $token,
+            ]);
+
+            if (!$response->successful()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Graph-Fabric no respondio: ' . $response->status(),
+                ], 502);
+            }
+
+            $data  = $response->json();
+            $views = $data['views'] ?? [];
+
+            // Agrupar por carril
+            $lanes = ['sprint' => 0, 'standard' => 0, 'heavy' => 0, 'marathon' => 0, 'nueva' => 0];
+            $laneStale = ['sprint' => 0, 'standard' => 0, 'heavy' => 0, 'marathon' => 0, 'nueva' => 0];
+
+            foreach ($views as $v) {
+                $avg  = $v['avg_generation_s'] ?? null;
+                $lane = $this->laneFromAvg($avg);
+                $lanes[$lane] = ($lanes[$lane] ?? 0) + 1;
+
+                if (($v['status'] ?? '') === 'stale' || ($v['status'] ?? '') === 'pending') {
+                    $laneStale[$lane] = ($laneStale[$lane] ?? 0) + 1;
+                }
+            }
+
+            // Ultimas 5 capturas del historial para tendencia
+            $history = \App\Models\BiParquetHistory::selectRaw('captured_at, status, count(*) as total')
+                ->where('captured_at', '>=', now()->subHours(6))
+                ->groupBy('captured_at', 'status')
+                ->orderBy('captured_at', 'desc')
+                ->limit(60)
+                ->get();
+
+            return response()->json([
+                'success'    => true,
+                'stats'      => $data['stats'] ?? [],
+                'due_count'  => $data['due_count'] ?? 0,
+                'lanes'      => $lanes,
+                'lane_stale' => $laneStale,
+                'history'    => $history,
+                'generated_at' => $data['generated_at'] ?? now()->toIso8601String(),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error: ' . $e->getMessage(),
+            ], 503);
+        }
+    }
+
+    /**
+     * GET /api/fabric/viewer/parquet-config/{schema}/{view}/history
+     * Historial de un parquet especifico (trazabilidad).
+     */
+    public function history(string $schema, string $view): JsonResponse
+    {
+        $history = \App\Models\BiParquetHistory::forView($schema, $view)
+            ->orderBy('captured_at', 'desc')
+            ->limit(50)
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'schema'  => $schema,
+            'view'    => $view,
+            'history' => $history,
+        ]);
+    }
+
+    private function laneFromAvg(?float $avg): string
+    {
+        if ($avg === null) return 'nueva';
+        if ($avg <= 30)  return 'sprint';
+        if ($avg <= 180) return 'standard';
+        if ($avg <= 900) return 'heavy';
+        return 'marathon';
+    }
+
+    /**
      * POST /api/fabric/viewer/parquet-config/run-cron
      * Ejecuta manualmente el cron de Graph-Fabric (regenera parquets pendientes).
      */
