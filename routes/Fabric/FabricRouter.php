@@ -113,6 +113,9 @@ Route::middleware(['auth:api'])->group(function () {
         // R2 Parquet status polling (frontend llama cada 5s cuando status=generating)
         Route::get('/r2/status', [FabricViewerController::class, 'r2WarmStatus']);
 
+        // Arranque JadeOne Desktop: ticket opaco (el JWT no viaja en el protocolo)
+        Route::post('/desktop/launch', [\App\Http\Controllers\Fabric\FabricDesktopController::class, 'launch']);
+
         // SSE Stream — sin JWT, el jobId es token implícito (no pasa por auth middleware)
         // Se registra en routes/api.php fuera del grupo auth.
     });

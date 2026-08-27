@@ -358,7 +358,7 @@ class FabricViewerController extends Controller
         // Si está generándose, el frontend hace polling.
         // Si es demasiado grande, forzar filtros.
         // Si R2 no está disponible, fallback al export stream clásico.
-        $r2Status = $this->tryR2Warm($schema, $viewName);
+        $r2Status = $this->tryR2Warm($user, $schema, $viewName);
 
         if ($r2Status !== null) {
             $status = $r2Status['status'] ?? 'unknown';
@@ -432,21 +432,33 @@ class FabricViewerController extends Controller
     /**
      * Llama a Graph-Fabric /api/r2/warm para verificar si el parquet está listo.
      * Retorna null si R2 no está disponible (fallback a stream).
+     *
+     * Graph-Fabric exige TOKEN_ADMIN + user_context (grupos/departamento).
+     * GRAPHQL_API_KEY es el header X-API-Key, no el token de usuario.
      */
-    private function tryR2Warm(string $schema, string $viewName): ?array
+    private function tryR2Warm($user, string $schema, string $viewName): ?array
     {
         try {
             $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-            $token   = config('fabric.api_key', '');
-
-            $response = \Illuminate\Support\Facades\Http::timeout(10)
-                ->post("{$baseUrl}/api/r2/warm", [
-                    'token'       => $token,
+            $payload = array_merge(
+                $this->gateway->userContextPayload($user, $viewName),
+                [
+                    'token'       => (string) (config('fabric.token_admin') ?: config('fabric.api_key', '')),
                     'schema_name' => $schema,
                     'view'        => $viewName,
-                ]);
+                ]
+            );
 
-            if ($response->successful()) {
+            $response = \Illuminate\Support\Facades\Http::timeout(10)
+                ->post("{$baseUrl}/api/r2/warm", $payload);
+
+            if ($response->successful() || $response->status() === 202) {
+                \Illuminate\Support\Facades\Log::info('[R2Warm] ok', [
+                    'r2_status' => $response->json('status'),
+                    'schema'    => $schema,
+                    'view'      => $viewName,
+                    'http'      => $response->status(),
+                ]);
                 return $response->json();
             }
 
@@ -464,6 +476,47 @@ class FabricViewerController extends Controller
     }
 
     /**
+     * Solo consulta el estado del parquet. NO lanza otra generación.
+     * El polling cada 5s debe usar esto; POST /r2/warm solo al inicio.
+     */
+    private function tryR2Status(string $schema, string $viewName): ?array
+    {
+        try {
+            $baseUrl = rtrim((string) config('fabric.url', 'http://127.0.0.1:8001'), '/');
+            $token   = (string) (config('fabric.token_admin') ?: config('fabric.api_key', ''));
+
+            $response = \Illuminate\Support\Facades\Http::timeout(10)
+                ->get("{$baseUrl}/api/r2/warm", [
+                    'schema' => $schema,
+                    'view'   => $viewName,
+                    'token'  => $token,
+                ]);
+
+            if ($response->successful() || $response->status() === 202) {
+                $json = $response->json();
+                $status = $json['status'] ?? 'unknown';
+                if ($status !== 'generating') {
+                    \Illuminate\Support\Facades\Log::info('[R2Status]', [
+                        'r2_status' => $status,
+                        'schema'    => $schema,
+                        'view'      => $viewName,
+                    ]);
+                }
+                return $json;
+            }
+
+            \Illuminate\Support\Facades\Log::info('[R2Status] no exitoso', [
+                'status' => $response->status(),
+                'body'   => substr($response->body(), 0, 300),
+            ]);
+            return null;
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::info('[R2Status] error', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
      * Exporta datos directamente desde el parquet R2 (camino rápido, ~2s).
      */
     private function exportFromR2(
@@ -474,24 +527,28 @@ class FabricViewerController extends Controller
         array $r2Status,
     ): JsonResponse {
         $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-        $token   = config('fabric.api_key', '');
+        $ctx     = $this->gateway->userContextPayload($user, $viewName);
 
         try {
+            // filters [] (lista PHP) → 422 en FastAPI; hace falta dict {}
             $response = \Illuminate\Support\Facades\Http::timeout(60)
-                ->post("{$baseUrl}/api/data/export/r2", [
-                    'token'       => $token,
+                ->post("{$baseUrl}/api/data/export/r2", array_merge($ctx, [
+                    'token'       => (string) (config('fabric.token_admin') ?: config('fabric.api_key', '')),
                     'schema_name' => $schema,
                     'view'        => $viewName,
-                    'filters'     => $request->input('filters', []),
+                    'filters'     => $this->gateway->normalizeFiltersPublic(
+                        $request->input('filters', [])
+                    ),
                     'columns'     => $request->input('columns', []),
                     'max_rows'    => (int) $request->input('max_rows', 500000),
                     'format'      => 'gzip',
-                ]);
+                ]));
 
             if (!$response->successful()) {
                 // Fallback a stream si R2 export falla
                 \Illuminate\Support\Facades\Log::warning('[R2Export] Fallo, fallback', [
                     'status' => $response->status(),
+                    'body'   => substr($response->body(), 0, 500),
                 ]);
                 return $this->fallbackStreamExport($user, $schema, $viewName, $request);
             }
@@ -604,7 +661,7 @@ class FabricViewerController extends Controller
             return response()->json(['success' => false, 'message' => 'Sin acceso'], 403);
         }
 
-        $result = $this->tryR2Warm($schema, $view);
+        $result = $this->tryR2Status($schema, $view);
 
         if ($result === null) {
             return response()->json([
@@ -725,18 +782,10 @@ class FabricViewerController extends Controller
             default                       => 'application/octet-stream',
         };
 
-        // Limpiar el archivo despues de 5 minutos (permite reintentos del frontend)
-        $jobIdForCleanup = $jobId;
-        \Illuminate\Support\Facades\Cache::put("fabric_export_cleanup:{$jobIdForCleanup}", true, now()->addMinutes(5));
-        
-        // Programar limpieza con un job dispatch delayed o simplemente dejar que expire
-        // El cleanup se hara via un scheduled command o la proxima request
-        dispatch(function () use ($jobIdForCleanup) {
-            sleep(300); // 5 minutos
-            \Illuminate\Support\Facades\Storage::disk('local')->deleteDirectory("fabric_exports/{$jobIdForCleanup}");
-            \Illuminate\Support\Facades\Cache::forget("fabric_export:{$jobIdForCleanup}");
-            \Illuminate\Support\Facades\Cache::forget("fabric_export_cleanup:{$jobIdForCleanup}");
-        })->afterResponse();
+        // No programar sleep() aquí: con php artisan serve / QUEUE sync
+        // bloquea toda la API. El cache de fabric_export ya expira (15 min)
+        // y exports:cleanup borra archivos viejos.
+        $this->cleanupStaleExportFiles();
 
         return response()->download($absolutePath, $filename, [
             'Content-Type'   => $contentType,
@@ -1048,5 +1097,38 @@ class FabricViewerController extends Controller
             'catalogo'                => array_values($this->gateway->getCatalogoGrupos()),
             'tipo'                    => $tipo,
         ]);
+    }
+
+    /**
+     * Borra gz/xlsx temporales de más de 30 min. Rápido: no sleep, no cola.
+     */
+    private function cleanupStaleExportFiles(): void
+    {
+        try {
+            $cutoff = time() - 1800;
+            foreach (['exports', 'fabric_exports'] as $dir) {
+                $base = storage_path('app/' . $dir);
+                if (!is_dir($base)) {
+                    continue;
+                }
+                foreach (scandir($base) ?: [] as $name) {
+                    if ($name === '.' || $name === '..') {
+                        continue;
+                    }
+                    $full = $base . DIRECTORY_SEPARATOR . $name;
+                    $mtime = @filemtime($full);
+                    if ($mtime === false || $mtime > $cutoff) {
+                        continue;
+                    }
+                    if (is_dir($full)) {
+                        \Illuminate\Support\Facades\File::deleteDirectory($full);
+                    } else {
+                        @unlink($full);
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // non-critical
+        }
     }
 }
