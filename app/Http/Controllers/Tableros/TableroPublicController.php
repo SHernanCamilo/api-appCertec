@@ -102,36 +102,72 @@ final class TableroPublicController extends Controller
      */
     public function reconnect(Request $request): JsonResponse
     {
-        $deviceId = (string) $request->input('device_id', '');
-        $ip       = $request->ip() ?? '0.0.0.0';
+        $deviceId    = (string) $request->input('device_id', '');
+        $fingerprint = (string) $request->input('fingerprint', '');
+        $ip          = $request->ip() ?? '0.0.0.0';
 
-        if (strlen($deviceId) < 10) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Device ID no proporcionado.',
-            ], 400);
+        $device = null;
+        $via    = '';
+
+        // ── Estrategia 1: por device_id (UUID en localStorage/IndexedDB/cookie) ──
+        if (strlen($deviceId) >= 10) {
+            $device = TableroDevice::where('device_id', $deviceId)
+                ->where('paired', true)
+                ->where('active', true)
+                ->first();
+            if ($device) $via = 'device_id';
         }
 
-        $device = TableroDevice::where('device_id', $deviceId)
-            ->where('paired', true)
-            ->where('active', true)
-            ->first();
+        // ── Estrategia 2: por fingerprint + IP (si perdió el device_id) ──
+        // Robusto para TVs que limpiaron TODO el storage pero siguen en la
+        // misma red/equipo. El fingerprint viene del navegador (UA + pantalla).
+        if ($device === null && strlen($fingerprint) >= 3) {
+            $device = TableroDevice::findByFingerprint($fingerprint, $ip);
+            if ($device) $via = 'fingerprint+ip';
+        }
+
+        // ── Estrategia 3: última TV activa en esta IP (último recurso) ──
+        // Si solo hay UNA TV emparejada en esta IP, la reconectamos. Si hay
+        // varias (misma sala comparte IP), NO adivinar: pedir código.
+        if ($device === null) {
+            $candidates = TableroDevice::where('last_ip', $ip)
+                ->where('paired', true)
+                ->where('active', true)
+                ->get();
+            if ($candidates->count() === 1) {
+                $device = $candidates->first();
+                $via    = 'unica_ip';
+            }
+        }
 
         if ($device === null) {
+            Log::info('TableroPublic: reconexión fallida', [
+                'ip'          => $ip,
+                'device_uuid' => substr($deviceId, 0, 12),
+                'fingerprint' => substr($fingerprint, 0, 12),
+            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Dispositivo no reconocido. Ingrese el código de activación.',
             ], 404);
         }
 
-        // Registrar actividad de reconexión
+        // Guardar/actualizar el device_id y fingerprint para futuras reconexiones
+        $updates = ['last_seen_at' => now(), 'last_ip' => $ip];
+        if ($deviceId !== '' && $device->device_id !== $deviceId) {
+            $updates['device_id'] = $deviceId;
+        }
+        if ($fingerprint !== '' && $device->fingerprint !== $fingerprint) {
+            $updates['fingerprint'] = $fingerprint;
+        }
+        $device->update($updates);
         $device->recordActivity($ip);
 
-        Log::info('TableroPublic: reconexión automática por deviceId', [
-            'device_id'   => $device->id,
-            'name'        => $device->name,
-            'ip'          => $ip,
-            'device_uuid' => $deviceId,
+        Log::info('TableroPublic: reconexión automática', [
+            'device_id' => $device->id,
+            'name'      => $device->name,
+            'ip'        => $ip,
+            'via'       => $via,
         ]);
 
         return response()->json([
@@ -139,6 +175,7 @@ final class TableroPublicController extends Controller
             'device_secret' => $device->device_secret,
             'name'          => $device->name,
             'sede'          => $device->sede_filter,
+            'via'           => $via,
             'message'       => 'Reconectado automáticamente.',
         ]);
     }
