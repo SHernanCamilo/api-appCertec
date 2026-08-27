@@ -231,6 +231,10 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obs-activos
     // Exportaciones
     Route::get('/exportar', [App\Http\Controllers\MatrizObsActivoController::class, 'exportarActivos']);
     Route::get('/exportar-estadisticas', [App\Http\Controllers\MatrizObsActivoController::class, 'exportarEstadisticas']);
+
+    // Comparador Excel vs BD (rutas específicas ANTES de /{id})
+    Route::get('/comparador/plantilla', [App\Http\Controllers\MatrizObsActivoController::class, 'plantillaComparador']);
+    Route::post('/comparador/excel', [App\Http\Controllers\MatrizObsActivoController::class, 'compararExcel']);
     
     // CRUD básico
     Route::get('/', [App\Http\Controllers\MatrizObsActivoController::class, 'index']);
@@ -306,6 +310,12 @@ Route::middleware(['auth:api'])->prefix('system/performance')->group(function ()
 // EventSource no soporta headers Authorization → ruta sin auth middleware.
 Route::get('/fabric/viewer/export/stream/{jobId}', [\App\Http\Controllers\Fabric\FabricViewerController::class, 'exportStream'])
     ->where('jobId', '[a-zA-Z0-9\-_]{10,80}');
+
+// ── JadeOne Desktop — claim y descarga del .exe (sin JWT; el ticket es de un uso)
+Route::post('/fabric/viewer/desktop/claim', [\App\Http\Controllers\Fabric\FabricDesktopController::class, 'claim'])
+    ->middleware('throttle:20,1');
+Route::get('/fabric/viewer/desktop/download', [\App\Http\Controllers\Fabric\FabricDesktopController::class, 'download'])
+    ->middleware('throttle:10,1');
 
 // ── OData Endpoint PÚBLICO — sin auth:api (tiene su propia autenticación por token/Azure AD)
 // Excel/Power Query se conecta directamente a esta URL.

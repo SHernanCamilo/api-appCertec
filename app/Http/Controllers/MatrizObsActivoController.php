@@ -4,10 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Models\MatrizObsActivoC;
 use App\Models\MatrizObsActivoD;
+use App\Services\Inventory\MatrizObsComparadorService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class MatrizObsActivoController extends Controller
 {
@@ -609,6 +612,90 @@ class MatrizObsActivoController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Comparar un Excel de inventario contra los activos en BD (por placa/serial).
+     * Soporta más de 1.000 filas: el cruce se hace en servidor.
+     */
+    public function compararExcel(Request $request, MatrizObsComparadorService $comparador): JsonResponse
+    {
+        $request->validate([
+            'archivo' => [
+                'required',
+                'file',
+                'max:10240',
+                function (string $attribute, $file, $fail): void {
+                    $ext = strtolower((string) $file->getClientOriginalExtension());
+                    if (! in_array($ext, ['xlsx', 'xls'], true)) {
+                        $fail('El archivo debe ser Excel (.xlsx o .xls).');
+                    }
+                },
+            ],
+        ]);
+
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Usuario no autenticado',
+            ], 401);
+        }
+
+        @set_time_limit(180);
+        @ini_set('memory_limit', '512M');
+
+        $user->load('empresas');
+        $query = MatrizObsActivoC::query();
+        $this->aplicarFiltrosPermisos($query, $user);
+        $this->aplicarFiltrosRequest($query, $request);
+
+        $archivo = $request->file('archivo');
+        $ruta = $archivo?->getRealPath();
+        $temporal = null;
+
+        if (!$ruta || !is_readable($ruta)) {
+            $temporal = $archivo->store('temp/comparador');
+            $ruta = storage_path('app/' . $temporal);
+        }
+
+        try {
+            $resultado = $comparador->comparar($ruta, $query);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Comparación completada',
+                'data' => $resultado,
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage() ?: 'Error al comparar el archivo',
+            ], 422);
+        } finally {
+            if ($temporal) {
+                \Illuminate\Support\Facades\Storage::delete($temporal);
+            }
+        }
+    }
+
+    /**
+     * Plantilla Excel con las columnas esperadas por el comparador.
+     */
+    public function plantillaComparador(MatrizObsComparadorService $comparador): StreamedResponse
+    {
+        $spreadsheet = $comparador->generarPlantilla();
+        $filename = 'plantilla_comparador_matriz_obsolescencia.xlsx';
+
+        return new StreamedResponse(function () use ($spreadsheet) {
+            $writer = new Xlsx($spreadsheet);
+            $writer->save('php://output');
+            $spreadsheet->disconnectWorksheets();
+        }, 200, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+            'Cache-Control' => 'max-age=0',
+        ]);
     }
 
     /**

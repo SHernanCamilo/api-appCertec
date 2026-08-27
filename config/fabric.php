@@ -14,9 +14,13 @@ return [
 
     'url' => env('GRAPHQL_URL', 'http://127.0.0.1:8001'),
 
-    'token_admin' => env('TOKEN_ADMIN', ''),
+    // Campo `token` del body hacia Graph-Fabric. El código nuevo lee token_admin;
+    // si TOKEN_ADMIN no está, reutiliza GRAPHQL_API_KEY (código viejo).
+    'token_admin' => env('TOKEN_ADMIN') ?: env('GRAPHQL_API_KEY', ''),
 
-    'api_key' => env('GRAPHQL_API_KEY', ''),
+    // Header X-API-Key, y campo `token` en el código viejo de export R2.
+    // Si GRAPHQL_API_KEY no está, reutiliza TOKEN_ADMIN para no romper el pull.
+    'api_key' => env('GRAPHQL_API_KEY') ?: env('TOKEN_ADMIN', ''),
 
     // Timeout general para consultas de datos (segundos)
     'timeout' => (int) env('GRAPHQL_TIMEOUT', 185),

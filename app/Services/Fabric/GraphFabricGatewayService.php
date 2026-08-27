@@ -40,7 +40,7 @@ class GraphFabricGatewayService
     public function __construct()
     {
         $this->baseUrl            = rtrim(config('fabric.url', 'http://127.0.0.1:8001'), '/');
-        $this->tokenAdmin         = config('fabric.token_admin', '');
+        $this->tokenAdmin         = (string) (config('fabric.token_admin') ?: config('fabric.api_key', ''));
         $this->timeout            = (int) config('fabric.timeout', 185);
         $this->catalogTimeout     = (int) config('fabric.catalog_timeout', 30);
         $this->circuitBreaker     = new FabricCircuitBreaker();
