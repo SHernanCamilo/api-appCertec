@@ -561,7 +561,7 @@ class FabricViewerController extends Controller
                 ]));
 
             if (!$response->successful()) {
-                // Fallback a stream si R2 export falla
+                // Fallback a stream si R2 export falla (404 no_cache, 500, etc.)
                 \Illuminate\Support\Facades\Log::warning('[R2Export] Fallo, fallback', [
                     'status' => $response->status(),
                     'body'   => substr($response->body(), 0, 500),
@@ -569,14 +569,34 @@ class FabricViewerController extends Controller
                 return $this->fallbackStreamExport($user, $schema, $viewName, $request);
             }
 
+            $body       = $response->body();
+            $totalRows  = (int) ($response->header('X-Total-Rows') ?? 0);
+            $source     = $response->header('X-Source') ?? 'unknown';
+
+            // GUARDA CRÍTICA: si el body viene vacío o sin filas, NO guardar un
+            // archivo de 0 KB. Esto pasaba con vistas desactivadas del scheduler:
+            // Graph respondía 200 pero sin datos → Excel salía vacío.
+            // En ese caso, generar al vuelo desde Fabric (fallback stream).
+            if ($body === '' || strlen($body) < 20 || $totalRows === 0) {
+                \Illuminate\Support\Facades\Log::warning('[R2Export] Body vacio, fallback a stream (export al vuelo)', [
+                    'schema'      => $schema,
+                    'view'        => $viewName,
+                    'body_bytes'  => strlen($body),
+                    'total_rows'  => $totalRows,
+                    'source'      => $source,
+                ]);
+                return $this->fallbackStreamExport($user, $schema, $viewName, $request);
+            }
+
             // Guardar el NDJSON.gz en storage temporal
             $filename = "{$schema}_{$viewName}_" . now()->format('Ymd_His') . '.ndjson.gz';
             $path     = "exports/{$filename}";
-            \Illuminate\Support\Facades\Storage::disk('local')->put($path, $response->body());
+            \Illuminate\Support\Facades\Storage::disk('local')->put($path, $body);
 
-            // Registrar en cache como job "completado" para que exportDownload lo encuentre
+            // Registrar en cache como job "completado" para que exportDownload lo encuentre.
+            // Usar X-Total-Rows real de Graph (más preciso que el row_count del warm que puede ser stale).
             $jobId = 'r2_' . \Illuminate\Support\Str::random(12);
-            $rows  = $r2Status['row_count'] ?? 0;
+            $rows  = $totalRows > 0 ? $totalRows : ($r2Status['row_count'] ?? 0);
 
             \Illuminate\Support\Facades\Cache::put("fabric_export:{$jobId}", [
                 'status'    => 'completed',
@@ -789,6 +809,17 @@ class FabricViewerController extends Controller
 
         // Ruta absoluta del archivo en disco
         $absolutePath = storage_path('app/' . $path);
+
+        // GUARDA: no entregar un archivo vacío (0 bytes). Evita el "Excel en blanco".
+        if (@filesize($absolutePath) === 0) {
+            \Illuminate\Support\Facades\Log::warning('[ExportDownload] Archivo vacio, rechazado', [
+                'job_id' => $jobId, 'path' => $path,
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'El archivo generado esta vacio. La vista no devolvio datos. Reintente con "Actualizar todo".',
+            ], 422);
+        }
 
         $contentType = match (true) {
             $format === 'csv'             => 'text/csv; charset=utf-8',
