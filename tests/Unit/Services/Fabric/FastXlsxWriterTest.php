@@ -1,0 +1,390 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Unit\Services\Fabric;
+
+use App\Services\Fabric\Export\ExportValueFormatter;
+use App\Services\Fabric\Export\FastXlsxWriter;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * Fija el comportamiento del escritor rápido de xlsx.
+ *
+ * FastXlsxWriter arma el XML de la hoja a mano, así que hay dos riesgos que
+ * estos tests cubren de forma explícita:
+ *
+ *   1. Un XML mal formado hace que Excel declare el archivo dañado. Cada test
+ *      abre el resultado con el lector de OpenSpout, que valida la estructura.
+ *   2. Los seriales de fecha se calculan con aritmética de calendario en vez de
+ *      DateTime (por velocidad). Se comparan contra la implementación con
+ *      DateTime para que no se desvíen ni un segundo.
+ */
+final class FastXlsxWriterTest extends TestCase
+{
+    private string $tmpDir;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->tmpDir = sys_get_temp_dir() . '/fast_xlsx_test_' . uniqid();
+        mkdir($this->tmpDir, 0775, true);
+    }
+
+    protected function tearDown(): void
+    {
+        foreach (glob($this->tmpDir . '/*') ?: [] as $file) {
+            @unlink($file);
+        }
+        @rmdir($this->tmpDir);
+        parent::tearDown();
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     */
+    private function writeNdjsonGz(array $rows): string
+    {
+        $path = $this->tmpDir . '/data.ndjson.gz';
+        $gz   = gzopen($path, 'wb1');
+
+        foreach ($rows as $row) {
+            gzwrite($gz, json_encode($row, JSON_UNESCAPED_UNICODE) . "\n");
+        }
+
+        gzclose($gz);
+
+        return $path;
+    }
+
+    /**
+     * @return list<list<mixed>>
+     */
+    private function readRows(string $xlsxPath): array
+    {
+        $reader = new \OpenSpout\Reader\XLSX\Reader();
+        $reader->open($xlsxPath);
+
+        $rows = [];
+        foreach ($reader->getSheetIterator() as $sheet) {
+            foreach ($sheet->getRowIterator() as $row) {
+                $rows[] = $row->toArray();
+            }
+            break;
+        }
+        $reader->close();
+
+        return $rows;
+    }
+
+    // =========================================================================
+    // Estructura del archivo
+    // =========================================================================
+
+    public function test_genera_un_xlsx_valido_con_cabecera_y_datos(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['Sede' => 'Neiva', 'Valor' => 100],
+            ['Sede' => 'Bogota', 'Valor' => 200],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+
+        $this->assertNotNull($result);
+        $this->assertSame('xlsx', $result->format);
+        $this->assertSame(2, $result->rows);
+        $this->assertFileExists($result->path);
+
+        $rows = $this->readRows($result->path);
+
+        $this->assertCount(3, $rows, 'Cabecera + 2 filas');
+        $this->assertSame(['Sede', 'Valor'], $rows[0]);
+        $this->assertSame('Neiva', $rows[1][0]);
+        $this->assertSame(100.0, (float) $rows[1][1]);
+    }
+
+    public function test_el_xlsx_es_un_zip_con_las_partes_ooxml_obligatorias(): void
+    {
+        $gz     = $this->writeNdjsonGz([['A' => 1]]);
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+
+        $this->assertNotNull($result);
+
+        $zip = new \ZipArchive();
+        $this->assertTrue($zip->open($result->path) === true);
+
+        foreach ([
+            '[Content_Types].xml',
+            '_rels/.rels',
+            'xl/workbook.xml',
+            'xl/_rels/workbook.xml.rels',
+            'xl/styles.xml',
+            'xl/worksheets/sheet1.xml',
+        ] as $part) {
+            $this->assertNotFalse($zip->locateName($part), "Falta la parte {$part}");
+        }
+
+        $zip->close();
+    }
+
+    public function test_no_deja_el_xml_temporal_de_la_hoja(): void
+    {
+        $gz     = $this->writeNdjsonGz([['A' => 1]]);
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+
+        $this->assertNotNull($result);
+        $this->assertSame([], glob($this->tmpDir . '/*.sheet.xml') ?: []);
+    }
+
+    public function test_devuelve_null_si_el_archivo_no_tiene_filas(): void
+    {
+        $gz = $this->writeNdjsonGz([]);
+
+        $this->assertNull(FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test'));
+    }
+
+    public function test_devuelve_null_si_el_gz_no_existe(): void
+    {
+        $this->assertNull(
+            FastXlsxWriter::fromNdjsonGz($this->tmpDir . '/no_existe.gz', $this->tmpDir, 'export', 'VW')
+        );
+    }
+
+    // =========================================================================
+    // Tipos de celda
+    // =========================================================================
+
+    public function test_conserva_los_ceros_iniciales_de_nit_y_documentos(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['Documento' => '036004835', 'Cantidad' => 15],
+            ['Documento' => '007112233', 'Cantidad' => 20],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+        $this->assertNotNull($result);
+
+        $rows = $this->readRows($result->path);
+
+        $this->assertSame('036004835', (string) $rows[1][0]);
+        $this->assertSame('007112233', (string) $rows[2][0]);
+    }
+
+    public function test_los_numeros_salen_como_numero_para_poder_sumarlos(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['Valor' => 1500.75],
+            ['Valor' => 2300],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+        $this->assertNotNull($result);
+
+        $rows = $this->readRows($result->path);
+
+        $this->assertIsNumeric($rows[1][0]);
+        $this->assertSame(1500.75, (float) $rows[1][0]);
+        $this->assertSame(2300.0, (float) $rows[2][0]);
+    }
+
+    /**
+     * Una llave compuesta de 37 dígitos no cabe en un double: salía como
+     * 6,00621E+36 o directamente como INF.
+     */
+    public function test_las_llaves_muy_largas_van_como_texto(): void
+    {
+        $llave = '6006205000000000000000000000000000001';
+        $gz    = $this->writeNdjsonGz([['Llave' => $llave], ['Llave' => $llave]]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+        $this->assertNotNull($result);
+
+        $this->assertSame($llave, (string) $this->readRows($result->path)[1][0]);
+    }
+
+    public function test_las_fechas_salen_como_fecha_real_de_excel(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['FechaIngreso' => '2026-08-28T14:35:09', 'FechaCorte' => '2026-08-28'],
+            ['FechaIngreso' => '2026-01-15T08:00:00', 'FechaCorte' => '2026-01-15'],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+        $this->assertNotNull($result);
+
+        $rows = $this->readRows($result->path);
+
+        // OpenSpout devuelve DateTime cuando la celda tiene formato de fecha:
+        // eso confirma que se escribió el serial + el estilo, no un string.
+        $this->assertInstanceOf(\DateTimeInterface::class, $rows[1][0]);
+        $this->assertSame('2026-08-28 14:35:09', $rows[1][0]->format('Y-m-d H:i:s'));
+
+        $this->assertInstanceOf(\DateTimeInterface::class, $rows[1][1]);
+        $this->assertSame('2026-08-28', $rows[1][1]->format('Y-m-d'));
+    }
+
+    /**
+     * El cálculo rápido de seriales reemplaza a DateTime por aritmética de
+     * calendario. Si se desvía, las fechas del Excel quedan corridas.
+     */
+    public function test_el_serial_rapido_coincide_con_el_calculado_con_datetime(): void
+    {
+        $fechas = [
+            '2026-08-28',
+            '2026-08-28 14:35:09',
+            '2026-08-28T14:35:09',
+            '1900-03-01',
+            '2000-02-29',
+            '2024-12-31 23:59:59',
+            '1999-01-01 00:00:00',
+        ];
+
+        $method = new \ReflectionMethod(FastXlsxWriter::class, 'excelSerial');
+        $method->setAccessible(true);
+        $cache = [];
+
+        foreach ($fechas as $fecha) {
+            $rapido = $method->invokeArgs(null, [$fecha, &$cache]);
+            $lento  = ExportValueFormatter::toExcelSerial($fecha);
+
+            $this->assertNotNull($lento, "toExcelSerial no reconoció {$fecha}");
+            $this->assertNotNull($rapido, "excelSerial no reconoció {$fecha}");
+            $this->assertEqualsWithDelta(
+                $lento,
+                (float) $rapido,
+                0.0000012, // menos de un segundo
+                "El serial de {$fecha} no coincide"
+            );
+        }
+    }
+
+    public function test_ignora_fechas_anteriores_a_1900_que_excel_no_representa(): void
+    {
+        $method = new \ReflectionMethod(FastXlsxWriter::class, 'excelSerial');
+        $method->setAccessible(true);
+        $cache = [];
+
+        $this->assertNull($method->invokeArgs(null, ['1899-12-31', &$cache]));
+        $this->assertNull($method->invokeArgs(null, ['no-es-fecha', &$cache]));
+    }
+
+    // =========================================================================
+    // Robustez del XML
+    // =========================================================================
+
+    public function test_escapa_los_caracteres_que_romperian_el_xml(): void
+    {
+        $texto = 'Nota <urgente> & "revisada" con \'comillas\'';
+        $gz    = $this->writeNdjsonGz([['Observacion' => $texto], ['Observacion' => $texto]]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+        $this->assertNotNull($result);
+
+        $this->assertSame($texto, (string) $this->readRows($result->path)[1][0]);
+    }
+
+    /**
+     * Un \x00 dentro del texto hace que Excel rechace el archivo completo.
+     * Viene de campos varbinary mal casteados en SQL Server.
+     */
+    public function test_elimina_los_caracteres_de_control_prohibidos(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['Observacion' => "ANTES\x00DESPUES"],
+            ['Observacion' => "ANTES\x00DESPUES"],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+        $this->assertNotNull($result);
+
+        $this->assertSame('ANTESDESPUES', (string) $this->readRows($result->path)[1][0]);
+    }
+
+    public function test_tolera_filas_con_las_claves_en_otro_orden(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['A' => 'a1', 'B' => 'b1'],
+            ['B' => 'b2', 'A' => 'a2'],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+        $this->assertNotNull($result);
+
+        $rows = $this->readRows($result->path);
+
+        $this->assertSame(['A', 'B'], $rows[0]);
+        $this->assertSame(['a2', 'b2'], $rows[2], 'El orden lo manda la cabecera, no la fila');
+    }
+
+    public function test_tolera_columnas_ausentes_sin_desplazar_los_valores(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['A' => 'a1', 'B' => 'b1', 'C' => 'c1'],
+            ['A' => 'a2', 'C' => 'c2'],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Test');
+        $this->assertNotNull($result);
+
+        $rows = $this->readRows($result->path);
+
+        $this->assertSame('a2', (string) $rows[2][0]);
+        $this->assertSame('', (string) $rows[2][1], 'B ausente queda vacía');
+        $this->assertSame('c2', (string) $rows[2][2], 'C no debe correrse a la columna de B');
+    }
+
+    public function test_soporta_columnas_con_nombre_numerico_de_las_vistas_pivot(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['315' => 1, '051' => 54, 'Producto' => 'ALOPURINOL'],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Pivot');
+        $this->assertNotNull($result);
+
+        $this->assertSame(
+            ['315', '051', 'Producto'],
+            array_map('strval', $this->readRows($result->path)[0])
+        );
+    }
+
+    public function test_recorta_el_nombre_de_hoja_al_limite_de_excel(): void
+    {
+        $gz = $this->writeNdjsonGz([['A' => 1]]);
+
+        $result = FastXlsxWriter::fromNdjsonGz(
+            $gz,
+            $this->tmpDir,
+            'export',
+            'VW_Nombre_De_Vista_Extremadamente_Largo_Que_Excel_No_Acepta'
+        );
+
+        $this->assertNotNull($result);
+
+        $reader = new \OpenSpout\Reader\XLSX\Reader();
+        $reader->open($result->path);
+        foreach ($reader->getSheetIterator() as $sheet) {
+            $this->assertLessThanOrEqual(31, mb_strlen($sheet->getName()));
+            break;
+        }
+        $reader->close();
+    }
+
+    public function test_maneja_mas_columnas_que_la_z(): void
+    {
+        $row = [];
+        for ($i = 0; $i < 60; $i++) {
+            $row["Col{$i}"] = "v{$i}";
+        }
+
+        $gz     = $this->writeNdjsonGz([$row, $row]);
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Ancha');
+
+        $this->assertNotNull($result);
+
+        $rows = $this->readRows($result->path);
+
+        $this->assertCount(60, $rows[0], 'Las 60 columnas deben llegar completas');
+        $this->assertSame('v59', (string) $rows[1][59], 'La columna BH no debe perderse');
+    }
+}

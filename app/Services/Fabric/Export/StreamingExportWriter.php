@@ -47,6 +47,23 @@ final class StreamingExportWriter
      *  Solo por encima del límite de Excel (1,048,576) se cae a CSV. */
     private const XLSX_THRESHOLD = 50000;
 
+    /**
+     * Máximo de CELDAS (filas × columnas) que se envían al camino de
+     * PhpSpreadsheet, el que agrega portada, zebra y autofit.
+     *
+     * El límite es por celdas y no por filas porque el costo de PhpSpreadsheet
+     * depende del total de celdas, y crece peor que lineal. Medido en local
+     * (PHP 8.2, 57 columnas):
+     *
+     *      5.000 filas →   285K celdas →  28 s · 272 MB de RAM
+     *     20.000 filas → 1.140K celdas → 272 s · 960 MB de RAM   ← OOM con 512M
+     *
+     * Con FastXlsxWriter esos mismos 20.000 × 57 tardan 1.4 s y 12 MB. Por eso
+     * el camino rico queda reservado a exports realmente chicos, donde su costo
+     * es de un segundo y el formato extra sí se aprecia.
+     */
+    private const RICH_MAX_CELLS = 40000;
+
     /** Cada cuántas filas se invoca el callback de progreso. */
     private const PROGRESS_EVERY = 50000;
 
@@ -508,11 +525,25 @@ final class StreamingExportWriter
      * Construye el .xlsx a partir de un archivo NDJSON gzipeado (formato que
      * devuelve el export async de Graph-Fabric).
      *
-     * Lee el .gz linea por linea con gzgets() — NUNCA carga el archivo completo
-     * en RAM. Cada linea es un objeto JSON que se pasa a writeRow(). El writer
-     * decide xlsx (streaming OpenSpout) o csv segun el tamaño. Esto permite
-     * exportar 500K+ filas / 160+ MB sin agotar memoria, cosa que el navegador
-     * NO puede hacer.
+     * Hay dos caminos y el tamaño estimado en celdas decide cuál:
+     *
+     *   grande  → FastXlsxWriter: escribe el XML de la hoja directamente. Es
+     *             ~20x más rápido porque no crea un objeto Cell por celda
+     *             (567K × 57 = 32 millones de objetos). Conserva encabezado
+     *             azul, autofiltro, anchos, fechas y números.
+     *
+     *   chico   → camino clásico con PhpSpreadsheet, que agrega portada, zebra
+     *             y autofit. Solo por debajo de RICH_MAX_CELLS, donde ese
+     *             formato extra cuesta ~1 s en vez de minutos.
+     *
+     * El tamaño sale de $rowHint (el total que reporta Graph en X-Total-Rows)
+     * multiplicado por las columnas de la primera fila. Si no se sabe el total
+     * se asume grande: equivocarse hacia el camino rápido cuesta un poco de
+     * formato; hacia el lento cuesta minutos y puede agotar la memoria.
+     *
+     * En ambos casos se lee el .gz línea por línea con gzgets() — nunca se carga
+     * el archivo completo en RAM. Así se exportan 500K+ filas / 160+ MB sin
+     * agotar memoria, cosa que el navegador no puede hacer.
      */
     public static function fromNdjsonGzFile(
         string $gzPath,
@@ -520,11 +551,24 @@ final class StreamingExportWriter
         string $baseName,
         string $schema,
         string $view,
+        int $rowHint = 0,
     ): ExportResult {
         if (!is_file($gzPath)) {
             return new ExportResult('', '', 'xlsx', 0, 0);
         }
 
+        if (!self::qualifiesForRichFormat($gzPath, $rowHint)) {
+            $fast = FastXlsxWriter::fromNdjsonGz($gzPath, $targetDir, $baseName, $view);
+
+            if ($fast !== null) {
+                return $fast;
+            }
+
+            // Null = no apto para xlsx (supera el límite de filas de Excel).
+            // Se continúa por el camino clásico, que entrega CSV en ese caso.
+        }
+
+        // Export chico: PhpSpreadsheet con formato corporativo completo
         $gz = gzopen($gzPath, 'rb');
         if ($gz === false) {
             return new ExportResult('', '', 'xlsx', 0, 0);
@@ -550,6 +594,47 @@ final class StreamingExportWriter
         }
 
         return $writer->finish();
+    }
+
+    /**
+     * ¿El export es lo bastante chico para el formato rico de PhpSpreadsheet?
+     *
+     * Cuenta las columnas leyendo solo la primera línea del .gz (una llamada a
+     * gzgets, sin costo apreciable) y las multiplica por el total de filas.
+     */
+    private static function qualifiesForRichFormat(string $gzPath, int $rowHint): bool
+    {
+        if ($rowHint <= 0) {
+            return false; // total desconocido → se asume grande
+        }
+
+        $gz = gzopen($gzPath, 'rb');
+        if ($gz === false) {
+            return false;
+        }
+
+        $columns = 0;
+
+        while (($line = gzgets($gz)) !== false) {
+            if (trim($line) === '') {
+                continue;
+            }
+
+            $row = json_decode($line, true);
+            if (is_array($row) && $row !== []) {
+                $columns = count($row);
+            }
+
+            break;
+        }
+
+        gzclose($gz);
+
+        if ($columns === 0) {
+            return false;
+        }
+
+        return $rowHint * $columns <= self::RICH_MAX_CELLS;
     }
 
     public static function fromCsvFile(
@@ -743,6 +828,18 @@ final class StreamingExportWriter
             foreach ($fields as $index => $value) {
                 $value = trim((string) $value);
 
+                // El CSV intermedio protege los ceros iniciales con la fórmula
+                // ="036004835", que es lo que entiende Excel al abrir un CSV.
+                // En un xlsx esa fórmula no aplica: la celda mostraría el texto
+                // literal ="036004835". Se desenvuelve y se marca como texto.
+                $wasQuotedFormula = strlen($value) > 3
+                    && str_starts_with($value, '="')
+                    && str_ends_with($value, '"');
+
+                if ($wasQuotedFormula) {
+                    $value = substr($value, 2, -1);
+                }
+
                 if ($dataRows < $widthSampleLimit) {
                     $len = mb_strlen($value);
                     if (!isset($colWidths[$index]) || $len > $colWidths[$index]) {
@@ -751,7 +848,7 @@ final class StreamingExportWriter
                 }
 
                 // Columnas de texto: forzar como string (preserva ceros iniciales)
-                if (isset($textColumns[$index])) {
+                if ($wasQuotedFormula || isset($textColumns[$index])) {
                     $cells[] = \OpenSpout\Common\Entity\Cell\StringCell::fromValue($value);
                     continue;
                 }

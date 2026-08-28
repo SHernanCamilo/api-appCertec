@@ -57,9 +57,12 @@ final class ConvertGraphExportToXlsxJob implements ShouldQueue
             'message' => 'Generando Excel...',
         ], 1800);
 
+        $startedAt = microtime(true);
+
         try {
             // 1. Bajar el NDJSON.gz de Graph (localhost, rápido)
             $download = $exportService->download($this->jobId);
+            $downloadedAt = microtime(true);
 
             if (($download['success'] ?? false) !== true) {
                 $this->fail($cacheKey, $download['message'] ?? 'No se pudo obtener los datos del export.');
@@ -70,8 +73,18 @@ final class ConvertGraphExportToXlsxJob implements ShouldQueue
             $dir    = dirname($gzPath);
             $base   = "{$this->schema}_{$this->view}_" . now()->format('Ymd_His');
 
-            // 2. Convertir a xlsx en streaming (línea por línea, sin cargar en RAM)
-            $result = StreamingExportWriter::fromNdjsonGzFile($gzPath, $dir, $base, $this->schema, $this->view);
+            // 2. Convertir a xlsx en streaming (línea por línea, sin cargar en RAM).
+            //    El conteo de filas que reporta Graph (X-Total-Rows) decide el camino:
+            //    pocas filas → formato corporativo completo; muchas → camino rápido
+            //    de una sola pasada.
+            $result = StreamingExportWriter::fromNdjsonGzFile(
+                $gzPath,
+                $dir,
+                $base,
+                $this->schema,
+                $this->view,
+                (int) ($download['rows'] ?? 0),
+            );
 
             @unlink($gzPath); // el .gz ya no se necesita
 
@@ -92,13 +105,21 @@ final class ConvertGraphExportToXlsxJob implements ShouldQueue
                 'message'         => number_format($result->rows) . ' filas listas para descargar.',
             ], 1800);
 
+            $now = microtime(true);
+
             Log::info('[ConvertGraphExport] xlsx generado', [
-                'job_id'   => $this->jobId,
-                'view'     => "{$this->schema}.{$this->view}",
-                'rows'     => $result->rows,
-                'bytes'    => $result->bytes,
-                'format'   => $result->format,
-                'filename' => $result->filename,
+                'job_id'      => $this->jobId,
+                'view'        => "{$this->schema}.{$this->view}",
+                'rows'        => $result->rows,
+                'bytes'       => $result->bytes,
+                'format'      => $result->format,
+                'filename'    => $result->filename,
+                'download_s'  => round($downloadedAt - $startedAt, 2),
+                'convert_s'   => round($now - $downloadedAt, 2),
+                'total_s'     => round($now - $startedAt, 2),
+                'rows_per_s'  => $now > $downloadedAt
+                    ? (int) round($result->rows / max(0.001, $now - $downloadedAt))
+                    : 0,
             ]);
         } catch (\Throwable $e) {
             Log::error('[ConvertGraphExport] error', [

@@ -13,9 +13,9 @@ use Tests\TestCase;
  * Verifica el escritor de una sola pasada.
  *
  * Lo importante que se fija aquí:
- *   - Datasets pequeños producen xlsx; grandes producen CSV
+ *   - Siempre se entrega xlsx, con o sin buffer en memoria
  *   - NO se crea ningún archivo intermedio (el bug de rendimiento original)
- *   - Los ceros iniciales sobreviven al CSV
+ *   - Los ceros iniciales sobreviven al volcado interno a CSV
  *   - Las columnas con nombre numérico no rompen la escritura
  *   - El conteo de filas es exacto
  *
@@ -57,8 +57,11 @@ final class StreamingExportWriterTest extends TestCase
             ->getConstant('XLSX_THRESHOLD');
     }
 
-    /** Cantidad mínima de filas que fuerza la salida en CSV. */
-    private function rowsForCsv(int $extra = 1): int
+    /**
+     * Cantidad de filas que fuerza el modo streaming (volcado a CSV interno y
+     * ensamblado final con OpenSpout). El usuario igual recibe un xlsx.
+     */
+    private function rowsAboveThreshold(int $extra = 1): int
     {
         return $this->threshold() + $extra;
     }
@@ -82,21 +85,28 @@ final class StreamingExportWriterTest extends TestCase
         $this->assertStringEndsWith('.xlsx', $result->filename);
     }
 
-    public function test_dataset_grande_genera_csv(): void
+    /**
+     * Superar el umbral cambia la mecánica interna (se vuelca a CSV y se escribe
+     * en streaming), pero lo que recibe el usuario sigue siendo un xlsx: el CSV
+     * suelto confundía a quien abría el archivo con comas dentro de las notas
+     * médicas.
+     */
+    public function test_dataset_grande_tambien_entrega_xlsx(): void
     {
         $writer = $this->makeWriter();
 
-        // 20.001 filas: una más que el umbral
-        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
+        for ($i = 0, $n = $this->rowsAboveThreshold(); $i < $n; $i++) {
             $writer->writeRow(['Id' => $i, 'Nombre' => "Fila {$i}"]);
         }
 
         $result = $writer->finish();
 
-        $this->assertSame('csv', $result->format);
-        $this->assertSame($this->rowsForCsv(), $result->rows);
+        $this->assertSame('xlsx', $result->format);
+        $this->assertSame($this->rowsAboveThreshold(), $result->rows);
         $this->assertFileExists($result->path);
-        $this->assertStringEndsWith('.csv', $result->filename);
+        $this->assertStringEndsWith('.xlsx', $result->filename);
+
+        $this->limpiarTempOpenSpout();
     }
 
     public function test_en_el_umbral_exacto_sigue_siendo_xlsx(): void
@@ -138,68 +148,57 @@ final class StreamingExportWriterTest extends TestCase
     // Integridad de los datos
     // =========================================================================
 
-    public function test_csv_conserva_ceros_iniciales(): void
+    public function test_conserva_ceros_iniciales_en_datasets_grandes(): void
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
+        for ($i = 0, $n = $this->rowsAboveThreshold(); $i < $n; $i++) {
             $writer->writeRow(['Nro_Cuenta' => '036004835', 'Valor' => 100]);
         }
 
-        $result   = $writer->finish();
-        $contenido = (string) file_get_contents($result->path);
-
-        $this->assertStringContainsString('="036004835"', $contenido);
-        $this->assertStringNotContainsString(';36004835;', $contenido);
-    }
-
-    public function test_csv_incluye_bom_y_separador(): void
-    {
-        $writer = $this->makeWriter();
-
-        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
-            $writer->writeRow(['A' => 1]);
-        }
-
         $result = $writer->finish();
-        $inicio = (string) file_get_contents($result->path, false, null, 0, 20);
+        $fila   = $this->primeraFilaDatosXlsx($result->path);
 
-        $this->assertStringStartsWith("\xEF\xBB\xBF", $inicio, 'Falta el BOM UTF-8');
+        $this->assertSame('036004835', (string) $fila[0], 'El cero inicial no debe perderse');
+        $this->assertSame(100.0, (float) $fila[1], 'Los números normales siguen siendo números');
+
+        $this->limpiarTempOpenSpout();
     }
 
-    public function test_csv_escribe_la_cabecera_una_sola_vez(): void
+    public function test_la_cabecera_se_escribe_una_sola_vez(): void
     {
         $writer = $this->makeWriter();
-
-        $total = $this->rowsForCsv(5);
+        $total  = $this->rowsAboveThreshold(5);
 
         for ($i = 0; $i < $total; $i++) {
             $writer->writeRow(['Codigo' => "C{$i}", 'Cantidad' => $i]);
         }
 
         $result = $writer->finish();
-        $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        // 1 cabecera + $total datos (ya no hay línea sep=)
-        $this->assertCount($total + 1, $lineas);
-        $this->assertSame(1, substr_count(implode("\n", $lineas), 'Cantidad'));
+        // Al volcar el búfer a CSV se reescribía la cabecera: quedaba repetida
+        // en medio de los datos.
+        $this->assertSame($total + 1, $this->contarFilasXlsx($result->path));
+        $this->assertSame(['Codigo', 'Cantidad'], $this->primerasFilasXlsx($result->path, 1)[0]);
+
+        $this->limpiarTempOpenSpout();
     }
 
     public function test_no_pierde_filas_al_cruzar_el_umbral(): void
     {
         $writer = $this->makeWriter();
-        $total  = $this->rowsForCsv(50);
+        $total  = $this->rowsAboveThreshold(50);
 
         for ($i = 0; $i < $total; $i++) {
             $writer->writeRow(['Id' => $i]);
         }
 
         $result = $writer->finish();
-        $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        // Restamos cabecera
-        $this->assertCount($total, array_slice($lineas, 1));
         $this->assertSame($total, $result->rows);
+        $this->assertSame($total + 1, $this->contarFilasXlsx($result->path), 'Filas de datos + cabecera');
+
+        $this->limpiarTempOpenSpout();
     }
 
     public function test_respeta_el_orden_de_las_columnas_en_filas_desalineadas(): void
@@ -207,46 +206,64 @@ final class StreamingExportWriterTest extends TestCase
         $writer = $this->makeWriter();
 
         // Fabric puede devolver las claves en otro orden en filas posteriores
-        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
+        for ($i = 0, $n = $this->rowsAboveThreshold(); $i < $n; $i++) {
             $writer->writeRow($i === 0
                 ? ['A' => 'a1', 'B' => 'b1']
                 : ['B' => "b{$i}", 'A' => "a{$i}"]);
         }
 
         $result = $writer->finish();
-        $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        $filas  = $this->primerasFilasXlsx($result->path, 4);
 
-        // La columna A siempre va primero, según la cabecera
-        $this->assertSame('a1,b1', $lineas[1]);
-        $this->assertSame('a2,b2', $lineas[3]);
+        // La columna A siempre va primero, según la cabecera, aunque la fila
+        // haya llegado con las claves invertidas.
+        $this->assertSame(['A', 'B'], $filas[0], 'Cabecera');
+        $this->assertSame(['a1', 'b1'], $filas[1], 'Fila i=0, en orden original');
+        $this->assertSame(['a1', 'b1'], $filas[2], 'Fila i=1, llegó como B,A');
+        $this->assertSame(['a2', 'b2'], $filas[3], 'Fila i=2, llegó como B,A');
+
+        $this->limpiarTempOpenSpout();
     }
 
     public function test_rellena_columnas_ausentes(): void
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
+        for ($i = 0, $n = $this->rowsAboveThreshold(); $i < $n; $i++) {
             $writer->writeRow($i === 0 ? ['A' => 1, 'B' => 2] : ['A' => 1]);
         }
 
         $result = $writer->finish();
-        $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        $filas  = $this->primerasFilasXlsx($result->path, 3);
 
-        $this->assertSame('1,', $lineas[2], 'La columna ausente debe quedar vacía, no desplazar');
+        $this->assertSame(1.0, (float) $filas[2][0]);
+        $this->assertSame('', (string) ($filas[2][1] ?? ''), 'La columna ausente queda vacía, no desplaza');
+
+        $this->limpiarTempOpenSpout();
     }
 
-    public function test_limpia_saltos_de_linea_para_no_romper_el_csv(): void
+    public function test_limpia_saltos_de_linea_para_no_partir_las_filas(): void
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
+        for ($i = 0, $n = $this->rowsAboveThreshold(); $i < $n; $i++) {
             $writer->writeRow(['Descripcion' => "LINEA1\nLINEA2", 'Id' => $i]);
         }
 
         $result = $writer->finish();
-        $lineas = file($result->path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
-        $this->assertCount($this->rowsForCsv() + 1, $lineas, 'Los saltos internos no deben crear filas extra');
+        $this->assertSame(
+            $this->rowsAboveThreshold() + 1,
+            $this->contarFilasXlsx($result->path),
+            'Los saltos internos no deben crear filas extra'
+        );
+
+        $this->assertStringNotContainsString(
+            "\n",
+            (string) $this->primeraFilaDatosXlsx($result->path)[0]
+        );
+
+        $this->limpiarTempOpenSpout();
     }
 
     // =========================================================================
@@ -258,18 +275,21 @@ final class StreamingExportWriterTest extends TestCase
         $writer = $this->makeWriter();
 
         // Reproduce VW_Inventory_AlmacenesPivot_315_Cmi
-        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
+        for ($i = 0, $n = $this->rowsAboveThreshold(); $i < $n; $i++) {
             $writer->writeRow(['315' => 1, '051' => 54, 'Producto' => 'ALOPURINOL']);
         }
 
         $result = $writer->finish();
 
-        $this->assertSame($this->rowsForCsv(), $result->rows);
+        $this->assertSame($this->rowsAboveThreshold(), $result->rows);
         $this->assertFileExists($result->path);
 
-        $cabecera = (string) file_get_contents($result->path, false, null, 0, 100);
-        $this->assertStringContainsString('315', $cabecera);
-        $this->assertStringContainsString('051', $cabecera);
+        $this->assertSame(
+            ['315', '051', 'Producto'],
+            array_map('strval', $this->primerasFilasXlsx($result->path, 1)[0])
+        );
+
+        $this->limpiarTempOpenSpout();
     }
 
     // =========================================================================
@@ -309,7 +329,7 @@ final class StreamingExportWriterTest extends TestCase
     {
         $writer = $this->makeWriter();
 
-        for ($i = 0, $n = $this->rowsForCsv(); $i < $n; $i++) {
+        for ($i = 0, $n = $this->rowsAboveThreshold(); $i < $n; $i++) {
             $writer->writeRow(['Id' => $i]);
         }
 
@@ -520,6 +540,33 @@ final class StreamingExportWriterTest extends TestCase
         $reader->close();
 
         return $fila;
+    }
+
+    /**
+     * Lee las primeras filas del xlsx (cabecera incluida) con el lector de
+     * OpenSpout, que es streaming: no carga la hoja completa aunque el archivo
+     * tenga 50.000 filas.
+     *
+     * @return list<list<mixed>>
+     */
+    private function primerasFilasXlsx(string $path, int $limite): array
+    {
+        $reader = new \OpenSpout\Reader\XLSX\Reader();
+        $reader->open($path);
+
+        $filas = [];
+        foreach ($reader->getSheetIterator() as $sheet) {
+            foreach ($sheet->getRowIterator() as $row) {
+                $filas[] = $row->toArray();
+                if (count($filas) >= $limite) {
+                    break;
+                }
+            }
+            break;
+        }
+        $reader->close();
+
+        return $filas;
     }
 
     private function limpiarTempOpenSpout(): void
