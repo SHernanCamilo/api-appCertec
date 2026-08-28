@@ -352,19 +352,12 @@ class FabricViewerController extends Controller
             ], 403);
         }
 
-        // ─── PASO 1: PARQUET (camino rápido, <5s) ───────────────────────────────
-        // /api/data/export/r2 lee el parquet con DuckDB. Es MUCHO más rápido que
-        // el async, que ejecuta la vista en vivo en Fabric (puede tardar minutos).
-        // Si hay parquet → el archivo queda listo de inmediato.
-        $parquetResponse = $this->exportFromR2($user, $schema, $viewName, $request);
-
-        if ($parquetResponse !== null) {
-            return $parquetResponse;
-        }
-
-        // ─── PASO 2: ASÍNCRONO (solo si no hay parquet) ─────────────────────────
-        // Graph ejecuta la vista en background y expone progreso real (0-100%)
-        // + deduplicación automática (misma vista+filtros = una sola ejecución).
+        // ─── EXPORT ASÍNCRONO (único camino) ────────────────────────────────────
+        // /api/data/export/start resuelve el parquet internamente:
+        //   1. Parquet fresco  → DuckDB lo lee en ~1s   ← la mayoría
+        //   2. Parquet viejo   → lo sirve ya y refresca en background
+        //   3. Sin parquet     → Fabric en vivo y encola el parquet para la próxima
+        // Con progreso real (0-100 + stage) y deduplicación automática.
         // Laravel solo hace relay: no genera el archivo, no usa Horizon.
         $asyncStart = app(\App\Services\Fabric\GraphAsyncExportService::class)->start(
             $user,
@@ -396,6 +389,10 @@ class FabricViewerController extends Controller
                 'success'    => true,
                 'job_id'     => $asyncStart['job_id'],
                 'async'      => true,
+                // reused=true: se engancho a un export identico (deduplicacion).
+                // ready=true: el archivo ya estaba listo, el primer poll lo entrega.
+                'reused'     => $asyncStart['reused'] ?? false,
+                'ready'      => $asyncStart['ready'] ?? false,
                 'message'    => 'Export iniciado en Graph-Fabric.',
                 'status_url' => "/api/fabric/viewer/export/status/{$asyncStart['job_id']}",
             ], 202);
@@ -444,66 +441,6 @@ class FabricViewerController extends Controller
     // ─── R2 Parquet Helpers ─────────────────────────────────────────────────────
 
     /**
-     * Llama a Graph-Fabric /api/r2/warm para verificar si el parquet está listo.
-     * - POST con body para warm inicial (con force)
-     * - GET con query params para polling
-     * Retorna null si R2 no está disponible (fallback a stream).
-     *
-     * Graph-Fabric exige TOKEN_ADMIN + user_context (grupos/departamento).
-     * GRAPHQL_API_KEY es el header X-API-Key, no el token de usuario.
-     */
-    private function tryR2Warm($user, string $schema, string $viewName, bool $forceRefresh = false): ?array
-    {
-        try {
-            $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-            $token   = (string) (config('fabric.token_admin') ?: config('fabric.api_key', ''));
-
-            if ($forceRefresh) {
-                // POST: warm inicial / invalidar parquet. Graph-Fabric pide token + user_context.
-                $response = \Illuminate\Support\Facades\Http::timeout(10)
-                    ->post("{$baseUrl}/api/r2/warm", array_merge(
-                        $this->gateway->userContextPayload($user, $viewName),
-                        [
-                            'token'       => $token,
-                            'schema_name' => $schema,
-                            'view'        => $viewName,
-                            'force'       => true,
-                        ]
-                    ));
-            } else {
-                // GET: solo estado. No lanza otra generación.
-                $response = \Illuminate\Support\Facades\Http::timeout(10)
-                    ->get("{$baseUrl}/api/r2/warm", [
-                        'token'  => $token,
-                        'schema' => $schema,
-                        'view'   => $viewName,
-                    ]);
-            }
-
-            if ($response->successful() || $response->status() === 202) {
-                \Illuminate\Support\Facades\Log::info('[R2Warm] ok', [
-                    'r2_status' => $response->json('status'),
-                    'schema'    => $schema,
-                    'view'      => $viewName,
-                    'http'      => $response->status(),
-                ]);
-                return $response->json();
-            }
-
-            \Illuminate\Support\Facades\Log::info('[R2Warm] Response no exitosa', [
-                'status' => $response->status(),
-                'body'   => substr($response->body(), 0, 300),
-            ]);
-            return null;
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::info('[R2Warm] No disponible, fallback a stream', [
-                'error' => $e->getMessage(),
-            ]);
-            return null;
-        }
-    }
-
-    /**
      * Solo consulta el estado del parquet. NO lanza otra generación.
      * El polling cada 5s debe usar esto; POST /r2/warm solo al inicio.
      */
@@ -542,149 +479,6 @@ class FabricViewerController extends Controller
             \Illuminate\Support\Facades\Log::info('[R2Status] error', ['error' => $e->getMessage()]);
             return null;
         }
-    }
-
-    /**
-     * Exporta datos directamente desde el parquet R2 (camino rápido, ~2s).
-     */
-    private function exportFromR2(
-        $user,
-        string $schema,
-        string $viewName,
-        Request $request,
-    ): ?JsonResponse {
-        $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-        $ctx     = $this->gateway->userContextPayload($user, $viewName);
-
-        try {
-            // filters [] (lista PHP) → 422 en FastAPI; hace falta dict {}
-            $response = \Illuminate\Support\Facades\Http::timeout(300)
-                ->post("{$baseUrl}/api/data/export/r2", array_merge($ctx, [
-                    'token'        => (string) (config('fabric.token_admin') ?: config('fabric.api_key', '')),
-                    'schema_name'  => $schema,
-                    'view'         => $viewName,
-                    'filters'      => $this->gateway->normalizeFiltersPublic(
-                        $request->input('filters', [])
-                    ),
-                    'columns'      => $request->input('columns', []),
-                    'max_rows'     => (int) $request->input('max_rows', 500000),
-                    'format'       => 'gzip',
-                    'ensure_fresh' => true,
-                ]));
-
-            if (!$response->successful()) {
-                // 404 no_cache = no hay parquet → el caller usa el async.
-                \Illuminate\Support\Facades\Log::info('[R2Export] sin parquet, se usara async', [
-                    'status' => $response->status(),
-                    'view'   => "{$schema}.{$viewName}",
-                ]);
-                return null;
-            }
-
-            $body       = $response->body();
-            $totalRows  = (int) ($response->header('X-Total-Rows') ?? 0);
-            $source     = $response->header('X-Source') ?? 'unknown';
-
-            // GUARDA CRÍTICA: si el body viene vacío o sin filas, NO guardar un
-            // archivo de 0 KB. Esto pasaba con vistas desactivadas del scheduler:
-            // Graph respondía 200 pero sin datos → Excel salía vacío.
-            // En ese caso, generar al vuelo desde Fabric (fallback stream).
-            if ($body === '' || strlen($body) < 20 || $totalRows === 0) {
-                \Illuminate\Support\Facades\Log::warning('[R2Export] Body vacio, se usara async', [
-                    'schema'      => $schema,
-                    'view'        => $viewName,
-                    'body_bytes'  => strlen($body),
-                    'total_rows'  => $totalRows,
-                    'source'      => $source,
-                ]);
-                return null;
-            }
-
-            // Guardar el NDJSON.gz en storage temporal
-            $filename = "{$schema}_{$viewName}_" . now()->format('Ymd_His') . '.ndjson.gz';
-            $path     = "exports/{$filename}";
-            \Illuminate\Support\Facades\Storage::disk('local')->put($path, $body);
-
-            // Registrar en cache como job "completado" para que exportDownload lo encuentre.
-            // Usar X-Total-Rows real de Graph (más preciso que el row_count del warm que puede ser stale).
-            $jobId = 'r2_' . \Illuminate\Support\Str::random(12);
-            $rows  = $totalRows;
-
-            \Illuminate\Support\Facades\Cache::put("fabric_export:{$jobId}", [
-                'status'    => 'completed',
-                'schema'    => $schema,
-                'view_name' => $viewName,
-                'rows'      => $rows,
-                'path'      => $path,
-                'filename'  => $filename,
-                'format'    => 'ndjson.gz',
-                'file_path' => $path,
-                'size'      => strlen($response->body()),
-            ], now()->addMinutes(15));
-
-            $this->auditService->log(
-                $user,
-                $schema,
-                $viewName,
-                BiVistaAccessLog::ACCION_EXPORT_INICIO,
-                $request,
-                [
-                    'filters'  => $request->input('filters', []),
-                    'metadata' => ['job_id' => $jobId, 'source' => 'r2_parquet', 'rows' => $rows],
-                ]
-            );
-
-            return response()->json([
-                'success'    => true,
-                'job_id'     => $jobId,
-                'r2_status'  => 'ready',
-                'message'    => "Datos listos desde parquet ({$rows} filas).",
-                'rows'       => $rows,
-                'status_url' => "/api/fabric/viewer/export/status/{$jobId}",
-            ]);
-        } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::warning('[R2Export] Exception, se usara async', ['error' => $e->getMessage()]);
-            return null;
-        }
-    }
-
-    /**
-     * Fallback: lanza el export stream clásico cuando R2 falla.
-     */
-    private function fallbackStreamExport($user, string $schema, string $viewName, Request $request): JsonResponse
-    {
-        $jobId = \App\Jobs\FabricStreamExportJob::dispatch_and_track(
-            $user->id,
-            $schema,
-            $viewName,
-            [
-                'columns'  => $request->input('columns', []),
-                'filters'  => $request->input('filters', []),
-                'sort_col' => $request->input('sort_col', ''),
-                'sort_dir' => $request->input('sort_dir', 'asc'),
-                'max_rows' => (int) $request->input('max_rows', 500000),
-                'format'   => $request->input('format', 'xlsx'),
-            ]
-        );
-
-        $this->auditService->log(
-            $user,
-            $schema,
-            $viewName,
-            BiVistaAccessLog::ACCION_EXPORT_INICIO,
-            $request,
-            [
-                'filters'  => $request->input('filters', []),
-                'metadata' => ['job_id' => $jobId, 'source' => 'stream_fallback'],
-            ]
-        );
-
-        return response()->json([
-            'success'    => true,
-            'job_id'     => $jobId,
-            'message'    => 'Export iniciado en segundo plano (stream).',
-            'status_url' => "/api/fabric/viewer/export/status/{$jobId}",
-        ], 202);
     }
 
     /**

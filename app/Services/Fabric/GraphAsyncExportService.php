@@ -32,10 +32,11 @@ final class GraphAsyncExportService
 
     /**
      * Cuántos 404 seguidos toleramos en /status antes de declarar el job fallido.
-     * Con polling cada 3s, 4 misses = ~12s de gracia para un 404 transitorio
-     * (deduplicación reasignando job) sin matar una descarga en curso.
+     * Graph-Fabric ya comparte el estado en Redis (antes vivía en memoria por
+     * worker de gunicorn y ~5 de cada 6 consultas daban 404), así que 2 basta
+     * como margen ante un hipo de red.
      */
-    private const MISS_TOLERANCE = 4;
+    private const MISS_TOLERANCE = 2;
 
     public function __construct(
         private readonly GraphFabricGatewayService $gateway,
@@ -77,6 +78,12 @@ final class GraphAsyncExportService
                 return ['success' => false, 'message' => 'Graph-Fabric no devolvio job_id.', 'code' => 502];
             }
 
+            // Graph avisa con `reused` cuando engancho un export identico en curso,
+            // y trae `download_url` si ese export ya estaba listo (deduplicacion).
+            $reused = (bool) ($response->json('reused') ?? false);
+            $ready  = $response->json('download_url') !== null
+                || (string) ($response->json('status') ?? '') === 'ready';
+
             // Guardar contexto del job para el status/download posteriores
             Cache::put($this->cacheKey($jobId), [
                 'schema'     => $schema,
@@ -89,12 +96,16 @@ final class GraphAsyncExportService
                 'job_id' => $jobId,
                 'view'   => "{$schema}.{$view}",
                 'status' => $response->json('status'),
+                'reused' => $reused,
+                'ready'  => $ready,
             ]);
 
             return [
                 'success' => true,
                 'job_id'  => $jobId,
                 'status'  => (string) ($response->json('status') ?? 'processing'),
+                'reused'  => $reused,
+                'ready'   => $ready,
             ];
         } catch (\Throwable $e) {
             Log::error('[GraphAsyncExport] start excepcion', [
@@ -198,13 +209,15 @@ final class GraphAsyncExportService
 
             if (!$response->successful()) {
                 @unlink($tmpFile);
-                return [
-                    'success' => false,
-                    'message' => $response->status() === 404
-                        ? 'El archivo expiro (vive 10 minutos). Vuelva a exportar.'
-                        : $this->errorMessage($response),
-                    'code'    => $response->status(),
-                ];
+
+                // 410 Gone = Graph ya limpio el archivo (status "expired").
+                $message = match ($response->status()) {
+                    410     => 'El archivo ya expiro en el servidor. Vuelva a exportar.',
+                    404     => 'El export no existe. Vuelva a intentarlo.',
+                    default => $this->errorMessage($response),
+                };
+
+                return ['success' => false, 'message' => $message, 'code' => $response->status()];
             }
 
             // Guarda: nunca entregar un archivo vacio (evita el Excel en blanco)
@@ -290,50 +303,56 @@ final class GraphAsyncExportService
     {
         $graphStatus = (string) ($g['status'] ?? 'processing');
 
-        $status = match ($graphStatus) {
-            'queued'     => 'pending',
-            'processing'  => 'processing',
-            'ready'      => 'completed',
-            'error'      => 'failed',
-            default      => 'processing',
+        // Graph-Fabric ahora expone booleanos explicitos (estado compartido en Redis,
+        // no en memoria por worker). Se usan en vez de comparar strings.
+        $ready = (bool) ($g['ready'] ?? false);
+        $done  = (bool) ($g['done'] ?? false);
+
+        $status = match (true) {
+            $ready                     => 'completed',
+            $graphStatus === 'expired' => 'failed',
+            $graphStatus === 'error'   => 'failed',
+            $done                      => 'failed',  // done sin ready = error/expirado
+            $graphStatus === 'queued'  => 'pending',
+            default                    => 'processing',
         };
 
-        $rows     = (int) ($g['total_rows'] ?? $g['fetched_rows'] ?? 0);
+        // rows/file_size vienen como alias; se aceptan ambos nombres
+        $rows     = (int) ($g['rows'] ?? $g['total_rows'] ?? $g['fetched_rows'] ?? 0);
         $progress = (int) ($g['progress'] ?? 0);
         $runningS = (float) ($g['running_s'] ?? 0);
-        $sizeKb   = (float) ($g['file_size_kb'] ?? 0);
         $filename = (string) ($g['filename'] ?? '');
+        $bytes    = (int) ($g['file_size'] ?? round(((float) ($g['file_size_kb'] ?? 0)) * 1024));
 
-        // HEURÍSTICA DE COMPLETADO
-        // Graph a veces deja el status en "processing" aunque el archivo YA esté
-        // generado (devuelve filename + file_size_kb + total_rows). Si esperamos
-        // el "ready" que no llega, el archivo expira a los 10 min y la descarga
-        // falla. Si hay archivo con tamaño y filas, lo tratamos como listo.
-        if ($status !== 'completed' && $status !== 'failed'
-            && $filename !== '' && $sizeKb > 0 && $rows > 0) {
-            Log::info('[GraphAsyncExport] completado por heuristica (archivo listo, status=' . $graphStatus . ')', [
-                'filename' => $filename, 'rows' => $rows, 'size_kb' => $sizeKb,
-                'running_s' => $runningS, 'graph_progress' => $progress,
-            ]);
-            $status   = 'completed';
-            $progress = 100;
-        }
+        // Campos nuevos de Graph para la barra de progreso
+        $stage         = (string) ($g['stage'] ?? '');
+        $source        = (string) ($g['source'] ?? '');
+        $parquetAgeMin = $g['parquet_age_min'] ?? null;
 
         return [
             'success'         => $status !== 'failed',
             'status'          => $status,
-            'progress'        => max(0, min(100, $progress)),
+            'progress'        => $ready ? 100 : max(0, min(100, $progress)),
             'rows'            => $rows,
             'running_s'       => $runningS,
             'filename'        => $filename !== '' ? $filename : null,
-            'file_size'       => (int) round($sizeKb * 1024),
-            'file_size_human' => $sizeKb > 0 ? $this->humanSize($sizeKb) : null,
+            'file_size'       => $bytes,
+            'file_size_human' => $bytes > 0 ? $this->humanSize($bytes / 1024) : null,
             'format'          => 'ndjson-gzip',
-            'message'         => $this->statusMessage($status, $progress, $rows, $runningS, (string) ($g['error_msg'] ?? '')),
+            // Pasarela de los campos nuevos al frontend
+            'stage'           => $stage !== '' ? $stage : null,
+            'source'          => $source !== '' ? $source : null,
+            'parquet_age_min' => $parquetAgeMin,
+            'message'         => $this->statusMessage($status, $stage, $rows, $runningS, (string) ($g['error_msg'] ?? '')),
         ];
     }
 
-    private function statusMessage(string $status, int $progress, int $rows, float $runningS, string $errorMsg): string
+    /**
+     * Mensaje para la UI. Graph-Fabric ya envia `stage` listo para mostrar
+     * ("Leyendo cache de datos", "Consultando Fabric (34s)"), asi que se
+     * prefiere ese texto y solo se compone uno propio si no viene.
+     */
+    private function statusMessage(string $status, string $stage, int $rows, float $runningS, string $errorMsg): string
     {
         if ($status === 'failed') {
             return $errorMsg !== '' ? $errorMsg : 'El export fallo en el servidor de datos.';
@@ -343,11 +362,13 @@ final class GraphAsyncExportService
             return number_format($rows) . ' filas listas para descargar.';
         }
 
+        if ($stage !== '') {
+            return $stage;
+        }
+
         $secs = $runningS > 0 ? ' (' . (int) round($runningS) . 's)' : '';
 
-        return $progress < 70
-            ? "Ejecutando la vista en Fabric{$secs}..."
-            : "Descargando filas{$secs}...";
+        return "Preparando la descarga{$secs}...";
     }
 
     private function humanSize(float $kb): string
