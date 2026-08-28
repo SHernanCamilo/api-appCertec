@@ -370,6 +370,55 @@ final class FastXlsxWriterTest extends TestCase
         $reader->close();
     }
 
+    // =========================================================================
+    // Portada corporativa (title != null)
+    // =========================================================================
+
+    public function test_con_titulo_escribe_portada_y_los_datos_bajan_tres_filas(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['Sede' => 'Neiva', 'Valor' => 100],
+            ['Sede' => 'Bogota', 'Valor' => 200],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz(
+            $gz,
+            $this->tmpDir,
+            'export',
+            'VW_AD_Paciente',
+            'dc.VW_AD_Paciente'
+        );
+
+        $this->assertNotNull($result);
+        $this->assertSame(2, $result->rows, 'La portada no debe contarse como fila de datos');
+
+        $rows = $this->readRows($result->path);
+
+        // Fila 1 título, fila 2 info, fila 3 encabezados, fila 4+ datos
+        $this->assertStringContainsString('dc.VW_AD_Paciente', (string) $rows[0][0]);
+        $this->assertStringContainsString('Exportado:', (string) $rows[1][0]);
+        $this->assertSame(['Sede', 'Valor'], $rows[2]);
+        $this->assertSame('Neiva', (string) $rows[3][0]);
+        $this->assertSame(100.0, (float) $rows[3][1]);
+    }
+
+    public function test_la_portada_no_rompe_el_autofiltro_ni_las_fechas(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['Fecha' => '2026-08-28T14:35:09', 'Doc' => '007112233'],
+            ['Fecha' => '2026-01-15T00:00:00', 'Doc' => '008990011'],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW', 'dc.VW');
+        $this->assertNotNull($result);
+
+        // El lector estricto de OpenSpout valida la estructura del xlsx
+        $rows = $this->readRows($result->path);
+
+        $this->assertInstanceOf(\DateTimeInterface::class, $rows[3][0], 'La fecha sigue siendo fecha real');
+        $this->assertSame('007112233', (string) $rows[3][1], 'El cero inicial se conserva');
+    }
+
     public function test_maneja_mas_columnas_que_la_z(): void
     {
         $row = [];

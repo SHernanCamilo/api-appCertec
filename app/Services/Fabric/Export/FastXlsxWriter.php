@@ -108,21 +108,37 @@ final class FastXlsxWriter
     private const STYLE_DATETIME  = 3;
 
     /**
+     * Filas de portada antes de los datos: título + info de exportación + fila
+     * de encabezados. Los datos arrancan en HEADER_ROW + 1. Da el mismo aspecto
+     * corporativo que el camino de PhpSpreadsheet para vistas chicas.
+     */
+    private const TITLE_ROW  = 1;
+    private const INFO_ROW    = 2;
+    private const HEADER_ROW  = 3;
+    private const FIRST_DATA_ROW = 4;
+
+    /** Estilo del título y de la línea de info (definidos en stylesXml). */
+    private const STYLE_TITLE = 4;
+    private const STYLE_INFO  = 5;
+
+    /**
      * Genera el .xlsx a partir de un NDJSON gzipeado.
      *
-     * @param  string $gzPath    Archivo .ndjson.gz (una fila JSON por línea)
-     * @param  string $targetDir Directorio donde se escribe el .xlsx
-     * @param  string $baseName  Nombre del archivo sin extensión
-     * @param  string $sheetName Nombre de la hoja (se sanea a las reglas de Excel)
-     * @return ExportResult|null Null si el dataset no es apto (vacío o excede el
-     *                           límite de filas de Excel); el llamador debe caer
-     *                           al camino CSV.
+     * @param  string      $gzPath    Archivo .ndjson.gz (una fila JSON por línea)
+     * @param  string      $targetDir Directorio donde se escribe el .xlsx
+     * @param  string      $baseName  Nombre del archivo sin extensión
+     * @param  string      $sheetName Nombre de la hoja (se sanea a reglas de Excel)
+     * @param  string|null $title     Título de la portada (ej. "dc.VW_AD_Paciente").
+     *                                Null = sin portada (los datos empiezan en la fila 1).
+     * @return ExportResult|null      Null si el dataset no es apto (vacío o excede
+     *                                el límite de filas); el llamador cae a CSV.
      */
     public static function fromNdjsonGz(
         string $gzPath,
         string $targetDir,
         string $baseName,
         string $sheetName,
+        ?string $title = null,
     ): ?ExportResult {
         if (!is_file($gzPath)) {
             return null;
@@ -161,12 +177,16 @@ final class FastXlsxWriter
         // tiempo total (una llamada de función + bucle por cada celda).
         $letters = self::columnLetters($colCount);
 
-        fwrite($out, self::sheetProlog($headers, $widths, $letters));
+        $hasCover = $title !== null;
+
+        fwrite($out, self::sheetProlog($headers, $widths, $letters, $hasCover ? $title : null));
 
         /** @var array<string,int> Cache fecha(YYYY-MM-DD) → serial de Excel */
-        $dayCache  = [];
-        $buffer    = '';
-        $rowNumber = 1; // la fila 1 es el encabezado
+        $dayCache = [];
+        $buffer   = '';
+        // Con portada los datos empiezan en la fila 4 (título, info, encabezado);
+        // sin portada, en la fila 2 (solo encabezado en la 1).
+        $rowNumber = $hasCover ? self::HEADER_ROW : 1;
         $truncated = false;
 
         try {
@@ -252,7 +272,7 @@ final class FastXlsxWriter
             gzclose($gz);
         }
 
-        $dataRows = $rowNumber - 1;
+        $dataRows = $rowNumber - ($hasCover ? self::HEADER_ROW : 1);
 
         // Excel no puede con el dataset: se descarta el trabajo y el llamador
         // entrega CSV, que no tiene límite de filas.
@@ -275,7 +295,7 @@ final class FastXlsxWriter
             return null;
         }
 
-        fwrite($out, $buffer . self::sheetEpilog($colCount, $rowNumber, $letters));
+        fwrite($out, $buffer . self::sheetEpilog($colCount, $rowNumber, $letters, $hasCover));
         fclose($out);
 
         if (!self::package($sheetXml, $xlsxPath, $sheetName)) {
@@ -577,13 +597,22 @@ final class FastXlsxWriter
      * @param list<string>      $headers
      * @param array<int,int>    $widths
      * @param array<int,string> $letters
+     * @param string|null       $title  Título de portada; null = sin portada
      */
-    private static function sheetProlog(array $headers, array $widths, array $letters): string
+    private static function sheetProlog(array $headers, array $widths, array $letters, ?string $title): string
     {
+        $hasCover  = $title !== null;
+        $headerRow = $hasCover ? self::HEADER_ROW : 1;
+        // La vista se congela justo debajo de la fila de encabezados.
+        $freezeRow = $headerRow;
+        $topLeft   = 'A' . ($headerRow + 1);
+        $lastCol   = $letters[count($headers) - 1] ?? 'A';
+
         $xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             . '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
             . '<sheetViews><sheetView tabSelected="1" workbookViewId="0">'
-            . '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+            . '<pane ySplit="' . $freezeRow . '" topLeftCell="' . $topLeft
+            . '" activePane="bottomLeft" state="frozen"/>'
             . '</sheetView></sheetViews>'
             . '<sheetFormatPr defaultRowHeight="15"/>';
 
@@ -597,10 +626,29 @@ final class FastXlsxWriter
             $xml .= '</cols>';
         }
 
-        $xml .= '<sheetData><row r="1" ht="22" customHeight="1">';
+        $xml .= '<sheetData>';
+
+        // Portada: título + línea de exportación (mismo aspecto que el camino
+        // de PhpSpreadsheet para vistas chicas). Las celdas fusionadas se
+        // declaran al final, en el epílogo.
+        if ($hasCover) {
+            $titleText = strpbrk($title, self::XML_UNSAFE) !== false ? self::escape($title) : $title;
+            $info      = 'Exportado: ' . now()->format('d/m/Y H:i');
+
+            $xml .= '<row r="' . self::TITLE_ROW . '" ht="20" customHeight="1">'
+                . '<c r="A' . self::TITLE_ROW . '" s="' . self::STYLE_TITLE . '" t="inlineStr">'
+                . '<is><t>JadeOne — ' . $titleText . '</t></is></c></row>';
+
+            $xml .= '<row r="' . self::INFO_ROW . '">'
+                . '<c r="A' . self::INFO_ROW . '" s="' . self::STYLE_INFO . '" t="inlineStr">'
+                . '<is><t>' . $info . '</t></is></c></row>';
+        }
+
+        // Fila de encabezados
+        $xml .= '<row r="' . $headerRow . '" ht="22" customHeight="1">';
 
         foreach ($headers as $i => $header) {
-            $ref  = ($letters[$i] ?? 'A') . '1';
+            $ref  = ($letters[$i] ?? 'A') . $headerRow;
             $text = strpbrk($header, self::XML_UNSAFE) !== false
                 ? self::escape($header)
                 : $header;
@@ -613,16 +661,27 @@ final class FastXlsxWriter
     }
 
     /**
-     * Cierre del XML: autofiltro sobre el rango completo.
+     * Cierre del XML: celdas fusionadas de la portada + autofiltro sobre el rango.
      *
      * @param array<int,string> $letters
      */
-    private static function sheetEpilog(int $colCount, int $lastRow, array $letters): string
+    private static function sheetEpilog(int $colCount, int $lastRow, array $letters, bool $hasCover): string
     {
-        $lastCol = $letters[$colCount - 1] ?? 'A';
+        $lastCol   = $letters[$colCount - 1] ?? 'A';
+        $headerRow = $hasCover ? self::HEADER_ROW : 1;
 
-        return '</sheetData>'
-            . '<autoFilter ref="A1:' . $lastCol . $lastRow . '"/>'
+        $xml = '</sheetData>';
+
+        // El orden lo fija el esquema OOXML: mergeCells va antes que autoFilter.
+        if ($hasCover) {
+            $xml .= '<mergeCells count="2">'
+                . '<mergeCell ref="A' . self::TITLE_ROW . ':' . $lastCol . self::TITLE_ROW . '"/>'
+                . '<mergeCell ref="A' . self::INFO_ROW . ':' . $lastCol . self::INFO_ROW . '"/>'
+                . '</mergeCells>';
+        }
+
+        return $xml
+            . '<autoFilter ref="A' . $headerRow . ':' . $lastCol . $lastRow . '"/>'
             . '</worksheet>';
     }
 
@@ -719,12 +778,13 @@ final class FastXlsxWriter
     }
 
     /**
-     * styles.xml mínimo con los cuatro estilos que usa la hoja.
+     * styles.xml con los estilos que usa la hoja.
      *
      * Excel exige que fills 0 sea "none" y fills 1 sea "gray125": si faltan,
      * declara el archivo dañado aunque no se usen.
      *
-     * cellXfs: 0 general · 1 encabezado · 2 fecha · 3 fecha y hora
+     * fonts:   0 normal · 1 encabezado (blanco, negrita) · 2 título (grande, negrita) · 3 info (gris, cursiva)
+     * cellXfs: 0 general · 1 encabezado · 2 fecha · 3 fecha y hora · 4 título · 5 info
      */
     private static function stylesXml(): string
     {
@@ -734,9 +794,11 @@ final class FastXlsxWriter
             . '<numFmt numFmtId="164" formatCode="yyyy\-mm\-dd"/>'
             . '<numFmt numFmtId="165" formatCode="yyyy\-mm\-dd\ hh:mm:ss"/>'
             . '</numFmts>'
-            . '<fonts count="2">'
+            . '<fonts count="4">'
             . '<font><sz val="11"/><name val="Calibri"/><family val="2"/></font>'
             . '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/></font>'
+            . '<font><b/><sz val="14"/><color rgb="FF1B3A5C"/><name val="Calibri"/><family val="2"/></font>'
+            . '<font><i/><sz val="9"/><color rgb="FF808080"/><name val="Calibri"/><family val="2"/></font>'
             . '</fonts>'
             . '<fills count="3">'
             . '<fill><patternFill patternType="none"/></fill>'
@@ -745,12 +807,15 @@ final class FastXlsxWriter
             . '</fills>'
             . '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
             . '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-            . '<cellXfs count="4">'
+            . '<cellXfs count="6">'
             . '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
             . '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1">'
             . '<alignment horizontal="center" vertical="center" wrapText="1"/></xf>'
             . '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
             . '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+            . '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1">'
+            . '<alignment horizontal="left" vertical="center"/></xf>'
+            . '<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
             . '</cellXfs>'
             . '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
             . '</styleSheet>';

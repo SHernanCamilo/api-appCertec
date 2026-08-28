@@ -558,7 +558,9 @@ final class StreamingExportWriter
         }
 
         if (!self::qualifiesForRichFormat($gzPath, $rowHint)) {
-            $fast = FastXlsxWriter::fromNdjsonGz($gzPath, $targetDir, $baseName, $view);
+            // Se pasa el título para que el xlsx grande lleve la misma portada
+            // corporativa (JadeOne — esquema.vista + fecha) que el chico.
+            $fast = FastXlsxWriter::fromNdjsonGz($gzPath, $targetDir, $baseName, $view, "{$schema}.{$view}");
 
             if ($fast !== null) {
                 return $fast;

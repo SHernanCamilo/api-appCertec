@@ -308,21 +308,30 @@ final class GraphAsyncExportService
         $ready = (bool) ($g['ready'] ?? false);
         $done  = (bool) ($g['done'] ?? false);
 
-        $status = match (true) {
-            $ready                     => 'completed',
-            $graphStatus === 'expired' => 'failed',
-            $graphStatus === 'error'   => 'failed',
-            $done                      => 'failed',  // done sin ready = error/expirado
-            $graphStatus === 'queued'  => 'pending',
-            default                    => 'processing',
-        };
-
         // rows/file_size vienen como alias; se aceptan ambos nombres
         $rows     = (int) ($g['rows'] ?? $g['total_rows'] ?? $g['fetched_rows'] ?? 0);
         $progress = (int) ($g['progress'] ?? 0);
         $runningS = (float) ($g['running_s'] ?? 0);
         $filename = (string) ($g['filename'] ?? '');
         $bytes    = (int) ($g['file_size'] ?? round(((float) ($g['file_size_kb'] ?? 0)) * 1024));
+
+        // Un export que termino CON datos (archivo + tamanio) esta listo, aunque
+        // Graph ya no exponga el flag `ready` (expira en los exports "stale").
+        // Antes, `$done => 'failed'` marcaba como fallido un export perfecto:
+        // la respuesta traia progress:100, filename, 116 MB y stage "Listo",
+        // pero el usuario veia "El export fallo en el servidor de datos".
+        $terminoConDatos = ($filename !== '' && $bytes > 0)
+            || ($progress >= 100 && $rows > 0);
+
+        $status = match (true) {
+            $ready                     => 'completed',
+            $done && $terminoConDatos  => 'completed',
+            $graphStatus === 'expired' => 'failed',
+            $graphStatus === 'error'   => 'failed',
+            $done                      => 'failed',  // done SIN datos = error/expirado real
+            $graphStatus === 'queued'  => 'pending',
+            default                    => 'processing',
+        };
 
         // Campos nuevos de Graph para la barra de progreso
         $stage         = (string) ($g['stage'] ?? '');
@@ -332,7 +341,7 @@ final class GraphAsyncExportService
         return [
             'success'         => $status !== 'failed',
             'status'          => $status,
-            'progress'        => $ready ? 100 : max(0, min(100, $progress)),
+            'progress'        => $status === 'completed' ? 100 : max(0, min(100, $progress)),
             'rows'            => $rows,
             'running_s'       => $runningS,
             'filename'        => $filename !== '' ? $filename : null,
