@@ -498,9 +498,18 @@ class FabricViewerController extends Controller
             \App\Jobs\ConvertGraphExportToXlsxJob::cacheKey($jobId)
         );
 
-        // Primera vez que vemos el export listo → encolar la conversión
+        // Primera vez que vemos el export listo → encolar la conversión.
+        // Se escribe el cache ANTES de despachar para que el siguiente poll
+        // (2,5 s después) no vea null y despache un segundo job. Esto evitaba
+        // una race condition que generaba el xlsx DOS veces.
         if ($conversion === null) {
             $ctx = \Illuminate\Support\Facades\Cache::get("graph_async_export:{$jobId}", []);
+
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Jobs\ConvertGraphExportToXlsxJob::cacheKey($jobId),
+                ['status' => 'converting', 'message' => 'Generando Excel...', 'started_at' => time()],
+                1800
+            );
 
             \App\Jobs\ConvertGraphExportToXlsxJob::dispatch(
                 $jobId,
@@ -540,11 +549,17 @@ class FabricViewerController extends Controller
             ]);
         }
 
-        // converting
+        // converting: reportar progreso que avanza para que el usuario sepa que
+        // algo pasa. El 92 → 96 fijo que usábamos antes dejaba la barra clavada
+        // 40+ segundos. Ahora se calcula un porcentaje suave basado en el running_s
+        // del job de Graph (que ya terminó) + el tiempo que lleva el job de xlsx.
+        $elapsed = time() - (int) ($conversion['started_at'] ?? time());
+        $pct     = min(99, 92 + (int) (7 * min(1, $elapsed / 60)));
+
         return array_merge($graphData, [
             'status'   => 'processing',
-            'progress' => 96,
-            'message'  => 'Generando Excel...',
+            'progress' => $pct,
+            'message'  => 'Generando Excel (' . number_format((int) ($graphData['rows'] ?? 0)) . ' filas)...',
             'stage'    => 'Generando Excel',
         ]);
     }
@@ -557,9 +572,61 @@ class FabricViewerController extends Controller
      */
     private function downloadFromGraphAsync(string $jobId): mixed
     {
-        // El xlsx ya fue generado por ConvertGraphExportToXlsxJob durante el
-        // polling. Aquí solo se sirve el archivo → descarga instantánea, sin
-        // conversiones dentro del request (que causaban timeouts y el 405).
+        // Dos consumidores distintos, un solo job:
+        //
+        //   as=data (grilla)  → sirve el NDJSON.gz crudo (~12 MB). El navegador
+        //                       lo descomprime y lo pinta en AG Grid en segundos.
+        //                       Es lo que carga la vista al terminar el polling.
+        //
+        //   as=file (defecto) → sirve el .xlsx de 200+ MB para guardarlo en disco.
+        //                       El navegador NUNCA lo parsea; solo lo baja. Antes
+        //                       se pasaba ese xlsx gigante a SheetJS y congelaba
+        //                       la pagina (238 MB → varios GB de RAM en el tab).
+        $as = (string) request()->query('as', 'file');
+
+        return $as === 'data'
+            ? $this->serveGraphDataForGrid($jobId)
+            : $this->serveGraphXlsxFile($jobId);
+    }
+
+    /**
+     * Sirve el NDJSON.gz crudo de Graph para pintar la grilla (descarga liviana).
+     */
+    private function serveGraphDataForGrid(string $jobId): mixed
+    {
+        $download = app(\App\Services\Fabric\GraphAsyncExportService::class)->download($jobId);
+
+        if (($download['success'] ?? false) !== true) {
+            return response()->json([
+                'success' => false,
+                'message' => $download['message'] ?? 'No se pudieron obtener los datos.',
+            ], 502);
+        }
+
+        $gzPath = (string) ($download['path'] ?? '');
+
+        if ($gzPath === '' || !is_file($gzPath)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Los datos expiraron. Vuelva a exportar.',
+            ], 410);
+        }
+
+        return response()->download($gzPath, "data_{$jobId}.ndjson.gz", [
+            'Content-Type'     => 'application/gzip',
+            'Content-Encoding' => 'identity', // el body YA es gzip; que el navegador no lo re-descomprima
+            'X-Export-Format'  => 'ndjson-gzip',
+            'X-Export-Rows'    => (string) ($download['rows'] ?? 0),
+            'Cache-Control'    => 'no-store, no-cache',
+        ])->deleteFileAfterSend(true);
+    }
+
+    /**
+     * Sirve el .xlsx ya generado en cola. Descarga instantánea: solo entrega el
+     * archivo, sin convertir nada dentro del request (eso causaba timeouts y el 405).
+     */
+    private function serveGraphXlsxFile(string $jobId): mixed
+    {
         $conversion = \Illuminate\Support\Facades\Cache::get(
             \App\Jobs\ConvertGraphExportToXlsxJob::cacheKey($jobId)
         );
@@ -606,6 +673,8 @@ class FabricViewerController extends Controller
             ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             : 'text/csv; charset=utf-8';
 
+        // No se borra tras enviar: el usuario puede pedir la grilla y luego el
+        // archivo, o volver a descargar. Lo limpia la expiracion de cache.
         return response()->download(
             $path,
             (string) ($conversion['filename'] ?? "export.{$format}"),
@@ -615,7 +684,7 @@ class FabricViewerController extends Controller
                 'X-Export-Rows'   => (string) ($conversion['rows'] ?? 0),
                 'Cache-Control'   => 'no-store, no-cache',
             ]
-        )->deleteFileAfterSend(true);
+        );
     }
 
     /**
