@@ -504,6 +504,54 @@ final class StreamingExportWriter
      * Los CSV sin formato confundían a los usuarios: los campos con comas
      * internas (notas médicas, descripciones) rompían la separación de columnas.
      */
+    /**
+     * Construye el .xlsx a partir de un archivo NDJSON gzipeado (formato que
+     * devuelve el export async de Graph-Fabric).
+     *
+     * Lee el .gz linea por linea con gzgets() — NUNCA carga el archivo completo
+     * en RAM. Cada linea es un objeto JSON que se pasa a writeRow(). El writer
+     * decide xlsx (streaming OpenSpout) o csv segun el tamaño. Esto permite
+     * exportar 500K+ filas / 160+ MB sin agotar memoria, cosa que el navegador
+     * NO puede hacer.
+     */
+    public static function fromNdjsonGzFile(
+        string $gzPath,
+        string $targetDir,
+        string $baseName,
+        string $schema,
+        string $view,
+    ): ExportResult {
+        if (!is_file($gzPath)) {
+            return new ExportResult('', '', 'xlsx', 0, 0);
+        }
+
+        $gz = gzopen($gzPath, 'rb');
+        if ($gz === false) {
+            return new ExportResult('', '', 'xlsx', 0, 0);
+        }
+
+        $writer = new self($targetDir, $baseName, $schema, $view);
+
+        try {
+            while (($line = gzgets($gz)) !== false) {
+                $line = trim($line);
+                if ($line === '') {
+                    continue;
+                }
+
+                /** @var array<string,mixed>|null $row */
+                $row = json_decode($line, true);
+                if (is_array($row) && $row !== []) {
+                    $writer->writeRow($row);
+                }
+            }
+        } finally {
+            gzclose($gz);
+        }
+
+        return $writer->finish();
+    }
+
     public static function fromCsvFile(
         string $csvPath,
         string $targetDir,

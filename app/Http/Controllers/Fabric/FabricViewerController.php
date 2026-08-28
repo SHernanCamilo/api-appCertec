@@ -498,32 +498,67 @@ class FabricViewerController extends Controller
             ], $result['code'] ?? 500);
         }
 
+        $ctx    = \Illuminate\Support\Facades\Cache::get("graph_async_export:{$jobId}", []);
+        $schema = (string) ($ctx['schema'] ?? 'export');
+        $view   = (string) ($ctx['view'] ?? $jobId);
+        $gzPath = $result['path'];
+
+        // CONVERSIÓN A XLSX EN EL BACKEND (streaming, ~5 MB RAM fijos con OpenSpout).
+        // Antes el navegador descomprimia+parseaba+armaba el xlsx: con 567K filas
+        // / 163 MB se quedaba sin RAM y descargaba el .ndjson.gz crudo.
+        // Ahora Laravel arma el xlsx a disco linea por linea y entrega listo.
+        $dir      = dirname($gzPath);
+        $baseName = "{$schema}_{$view}_" . now()->format('Ymd_His');
+
+        try {
+            $export = \App\Services\Fabric\Export\StreamingExportWriter::fromNdjsonGzFile(
+                $gzPath, $dir, $baseName, $schema, $view
+            );
+        } catch (\Throwable $e) {
+            @unlink($gzPath);
+            \Illuminate\Support\Facades\Log::error('[ExportDownload] conversion xlsx fallo', [
+                'job_id' => $jobId, 'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo generar el Excel. Aplique filtros para reducir los datos.',
+            ], 500);
+        }
+
+        @unlink($gzPath); // el .gz ya no se necesita
+
+        if ($export->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'El export no devolvio datos.',
+            ], 422);
+        }
+
         $user = auth()->user();
         if ($user) {
-            $ctx = \Illuminate\Support\Facades\Cache::get("graph_async_export:{$jobId}", []);
             $this->auditService->log(
                 $user,
-                (string) ($ctx['schema'] ?? ''),
-                (string) ($ctx['view'] ?? ''),
+                $schema,
+                $view,
                 BiVistaAccessLog::ACCION_EXPORT_DESCARGA,
                 request(),
                 [
-                    'rows_returned' => (int) ($result['rows'] ?? 0),
-                    'metadata'      => ['job_id' => $jobId, 'source' => 'graph_async'],
+                    'rows_returned' => $export->rows,
+                    'metadata'      => ['job_id' => $jobId, 'source' => 'graph_async', 'format' => $export->format],
                 ]
             );
         }
 
-        return response()->download(
-            $result['path'],
-            $result['filename'],
-            [
-                'Content-Type'    => 'application/gzip',
-                'X-Export-Format' => $result['format'],
-                'X-Export-Rows'   => (string) ($result['rows'] ?? 0),
-                'Cache-Control'   => 'no-store, no-cache',
-            ]
-        )->deleteFileAfterSend(true);
+        $contentType = $export->format === 'xlsx'
+            ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            : 'text/csv; charset=utf-8';
+
+        return response()->download($export->path, $export->filename, [
+            'Content-Type'    => $contentType,
+            'X-Export-Format' => $export->format,
+            'X-Export-Rows'   => (string) $export->rows,
+            'Cache-Control'   => 'no-store, no-cache',
+        ])->deleteFileAfterSend(true);
     }
 
     /**
