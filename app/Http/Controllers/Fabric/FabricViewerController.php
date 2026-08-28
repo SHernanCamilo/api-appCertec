@@ -352,7 +352,17 @@ class FabricViewerController extends Controller
             ], 403);
         }
 
-        // ─── Export ASÍNCRONO en Graph-Fabric (camino principal) ────────────────
+        // ─── PASO 1: PARQUET (camino rápido, <5s) ───────────────────────────────
+        // /api/data/export/r2 lee el parquet con DuckDB. Es MUCHO más rápido que
+        // el async, que ejecuta la vista en vivo en Fabric (puede tardar minutos).
+        // Si hay parquet → el archivo queda listo de inmediato.
+        $parquetResponse = $this->exportFromR2($user, $schema, $viewName, $request);
+
+        if ($parquetResponse !== null) {
+            return $parquetResponse;
+        }
+
+        // ─── PASO 2: ASÍNCRONO (solo si no hay parquet) ─────────────────────────
         // Graph ejecuta la vista en background y expone progreso real (0-100%)
         // + deduplicación automática (misma vista+filtros = una sola ejecución).
         // Laravel solo hace relay: no genera el archivo, no usa Horizon.
@@ -542,8 +552,7 @@ class FabricViewerController extends Controller
         string $schema,
         string $viewName,
         Request $request,
-        array $r2Status,
-    ): JsonResponse {
+    ): ?JsonResponse {
         $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
         $ctx     = $this->gateway->userContextPayload($user, $viewName);
 
@@ -564,12 +573,12 @@ class FabricViewerController extends Controller
                 ]));
 
             if (!$response->successful()) {
-                // Fallback a stream si R2 export falla (404 no_cache, 500, etc.)
-                \Illuminate\Support\Facades\Log::warning('[R2Export] Fallo, fallback', [
+                // 404 no_cache = no hay parquet → el caller usa el async.
+                \Illuminate\Support\Facades\Log::info('[R2Export] sin parquet, se usara async', [
                     'status' => $response->status(),
-                    'body'   => substr($response->body(), 0, 500),
+                    'view'   => "{$schema}.{$viewName}",
                 ]);
-                return $this->fallbackStreamExport($user, $schema, $viewName, $request);
+                return null;
             }
 
             $body       = $response->body();
@@ -581,14 +590,14 @@ class FabricViewerController extends Controller
             // Graph respondía 200 pero sin datos → Excel salía vacío.
             // En ese caso, generar al vuelo desde Fabric (fallback stream).
             if ($body === '' || strlen($body) < 20 || $totalRows === 0) {
-                \Illuminate\Support\Facades\Log::warning('[R2Export] Body vacio, fallback a stream (export al vuelo)', [
+                \Illuminate\Support\Facades\Log::warning('[R2Export] Body vacio, se usara async', [
                     'schema'      => $schema,
                     'view'        => $viewName,
                     'body_bytes'  => strlen($body),
                     'total_rows'  => $totalRows,
                     'source'      => $source,
                 ]);
-                return $this->fallbackStreamExport($user, $schema, $viewName, $request);
+                return null;
             }
 
             // Guardar el NDJSON.gz en storage temporal
@@ -599,7 +608,7 @@ class FabricViewerController extends Controller
             // Registrar en cache como job "completado" para que exportDownload lo encuentre.
             // Usar X-Total-Rows real de Graph (más preciso que el row_count del warm que puede ser stale).
             $jobId = 'r2_' . \Illuminate\Support\Str::random(12);
-            $rows  = $totalRows > 0 ? $totalRows : ($r2Status['row_count'] ?? 0);
+            $rows  = $totalRows;
 
             \Illuminate\Support\Facades\Cache::put("fabric_export:{$jobId}", [
                 'status'    => 'completed',
@@ -634,8 +643,8 @@ class FabricViewerController extends Controller
                 'status_url' => "/api/fabric/viewer/export/status/{$jobId}",
             ]);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('[R2Export] Exception', ['error' => $e->getMessage()]);
-            return $this->fallbackStreamExport($user, $schema, $viewName, $request);
+            \Illuminate\Support\Facades\Log::warning('[R2Export] Exception, se usara async', ['error' => $e->getMessage()]);
+            return null;
         }
     }
 

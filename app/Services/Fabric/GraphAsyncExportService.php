@@ -30,6 +30,13 @@ final class GraphAsyncExportService
     /** TTL del mapeo job → contexto en cache (Graph guarda el archivo 10 min). */
     private const JOB_CACHE_TTL = 900; // 15 min, margen sobre los 10 de Graph
 
+    /**
+     * Cuántos 404 seguidos toleramos en /status antes de declarar el job fallido.
+     * Con polling cada 3s, 4 misses = ~12s de gracia para un 404 transitorio
+     * (deduplicación reasignando job) sin matar una descarga en curso.
+     */
+    private const MISS_TOLERANCE = 4;
+
     public function __construct(
         private readonly GraphFabricGatewayService $gateway,
     ) {}
@@ -116,15 +123,47 @@ final class GraphAsyncExportService
                 ->acceptJson()
                 ->get($this->url("/api/data/export/status/{$jobId}"));
 
+            // 404: el job desaparecio de Graph. Puede ser transitorio (Graph
+            // reasignando por deduplicacion) o definitivo (job expirado/borrado).
+            // Toleramos hasta MISS_TOLERANCE 404 seguidos antes de rendirnos:
+            // asi un 404 puntual no mata una descarga que va al 11%.
+            if ($response->status() === 404) {
+                $missKey  = "graph_async_miss:{$jobId}";
+                $misses   = (int) Cache::increment($missKey);
+                Cache::put($missKey, $misses, 120); // ventana de 2 min
+
+                Log::info('[GraphAsyncExport] status 404', [
+                    'job_id' => $jobId, 'misses' => $misses,
+                ]);
+
+                if ($misses < self::MISS_TOLERANCE) {
+                    // Aun toleramos: seguir en processing para que el front reintente
+                    return [
+                        'success'  => true,
+                        'status'   => 'processing',
+                        'progress' => 0,
+                        'message'  => 'Reconectando con el servidor de datos...',
+                    ];
+                }
+
+                Cache::forget($missKey);
+                return [
+                    'success' => false,
+                    'status'  => 'failed',
+                    'message' => 'El export ya no esta disponible en el servidor (pudo expirar o fallar la vista). Vuelva a intentarlo.',
+                ];
+            }
+
             if (!$response->successful()) {
                 return [
                     'success' => false,
                     'status'  => 'failed',
-                    'message' => $response->status() === 404
-                        ? 'El export expiro o no existe. Vuelva a intentarlo.'
-                        : $this->errorMessage($response),
+                    'message' => $this->errorMessage($response),
                 ];
             }
+
+            // Respuesta OK: resetear el contador de 404 (el job existe)
+            Cache::forget("graph_async_miss:{$jobId}");
 
             return $this->mapStatus($response->json() ?? []);
         } catch (\Throwable $e) {
@@ -263,6 +302,22 @@ final class GraphAsyncExportService
         $progress = (int) ($g['progress'] ?? 0);
         $runningS = (float) ($g['running_s'] ?? 0);
         $sizeKb   = (float) ($g['file_size_kb'] ?? 0);
+        $filename = (string) ($g['filename'] ?? '');
+
+        // HEURÍSTICA DE COMPLETADO
+        // Graph a veces deja el status en "processing" aunque el archivo YA esté
+        // generado (devuelve filename + file_size_kb + total_rows). Si esperamos
+        // el "ready" que no llega, el archivo expira a los 10 min y la descarga
+        // falla. Si hay archivo con tamaño y filas, lo tratamos como listo.
+        if ($status !== 'completed' && $status !== 'failed'
+            && $filename !== '' && $sizeKb > 0 && $rows > 0) {
+            Log::info('[GraphAsyncExport] completado por heuristica (archivo listo, status=' . $graphStatus . ')', [
+                'filename' => $filename, 'rows' => $rows, 'size_kb' => $sizeKb,
+                'running_s' => $runningS, 'graph_progress' => $progress,
+            ]);
+            $status   = 'completed';
+            $progress = 100;
+        }
 
         return [
             'success'         => $status !== 'failed',
@@ -270,7 +325,7 @@ final class GraphAsyncExportService
             'progress'        => max(0, min(100, $progress)),
             'rows'            => $rows,
             'running_s'       => $runningS,
-            'filename'        => $g['filename'] ?? null,
+            'filename'        => $filename !== '' ? $filename : null,
             'file_size'       => (int) round($sizeKb * 1024),
             'file_size_human' => $sizeKb > 0 ? $this->humanSize($sizeKb) : null,
             'format'          => 'ndjson-gzip',
