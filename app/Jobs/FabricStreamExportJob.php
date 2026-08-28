@@ -159,14 +159,10 @@ final class FabricStreamExportJob implements ShouldQueue
         $token   = config('fabric.token_admin', '');
         $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
 
+        // v2: el endpoint /api/data/export/r2 ahora soporta filtros (Graph aplica
+        // el WHERE sobre el parquet o al generar al vuelo). Ya no saltamos a Fabric
+        // directo por tener filtros.
         $filters = $this->options['filters'] ?? [];
-        if (!empty($filters)) {
-            Log::info('FabricStreamExportJob: export con filtros, Fabric directo', [
-                'job_id'  => $this->jobId,
-                'filters' => array_keys($filters),
-            ]);
-            return false;
-        }
 
         $this->updateStatus(self::STATUS_PROCESSING, null, [
             'progress' => 5, 'rows' => 0, 'message' => 'Descargando datos...',
@@ -184,7 +180,8 @@ final class FabricStreamExportJob implements ShouldQueue
             // para no cargar todo el body en RAM (puede ser >80 MB).
             $gzFile = "{$dir}/{$baseName}_raw.gz";
 
-            $response = Http::timeout((int) config('fabric.export_timeout', 600))
+            // Timeout 120s: con ensure_fresh Graph puede tardar hasta 90s regenerando.
+            $response = Http::timeout(120)
                 ->connectTimeout(10)
                 ->withHeaders(['X-API-Key' => config('fabric.api_key', '')])
                 ->sink($gzFile)
@@ -196,22 +193,42 @@ final class FabricStreamExportJob implements ShouldQueue
                     'groups'       => $gateway->getGruposBd($user),
                     'schema_name'  => $this->schema,
                     'view'         => $this->view,
-                    'filters'      => new \stdClass(),
+                    'filters'      => empty($filters) ? new \stdClass() : $gateway->normalizeFiltersPublic($filters),
                     'columns'      => $this->options['columns'] ?? [],
                     'max_rows'     => $maxRows,
                     'format'       => 'csv',
                     'ensure_fresh' => true,
                 ]);
 
+            // 404 "no_cache" → vista grande sin parquet: usar el stream clasico.
+            if ($response->status() === 404) {
+                @unlink($gzFile);
+                Log::info('FabricStreamExportJob: 404 no_cache, usando Fabric stream', [
+                    'job_id' => $this->jobId, 'view' => "{$this->schema}.{$this->view}",
+                ]);
+                return false; // handle() cae a exportFromFabricDirect
+            }
+
             if ($response->status() !== 200) {
                 @unlink($gzFile);
-                Log::info('FabricStreamExportJob: R2 no disponible (sink)', [
+                Log::info('FabricStreamExportJob: R2 no exitoso (sink)', [
                     'job_id' => $this->jobId, 'status' => $response->status(),
                 ]);
                 return false;
             }
 
             $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
+            $xFormat   = strtolower((string) ($response->header('X-Format') ?? 'csv-gzip'));
+
+            // Validar que el archivo descargado no venga vacio (evita Excel 0 KB)
+            if (!is_file($gzFile) || filesize($gzFile) < 20 || $totalRows === 0) {
+                @unlink($gzFile);
+                Log::warning('FabricStreamExportJob: R2 body vacio, fallback stream', [
+                    'job_id' => $this->jobId, 'rows' => $totalRows,
+                    'bytes'  => is_file($gzFile) ? filesize($gzFile) : 0,
+                ]);
+                return false;
+            }
 
             // Guarda de tamaño: por encima de 1M filas el archivo es inmanejable
             if ($totalRows > self::MAX_EXPORTABLE_ROWS) {
@@ -304,7 +321,6 @@ final class FabricStreamExportJob implements ShouldQueue
         // interactivos entre lote y lote. Evita que un export monopolice un worker.
         $chunkPauseMs = (int) config('fabric.export_chunk_pause_ms', 100);
         $totalRows = 0;
-        $chunkNum  = 0;
 
         // Informar inmediatamente al usuario que estamos trabajando (no dejar en 0%)
         $this->updateStatus(self::STATUS_PROCESSING, null, [
