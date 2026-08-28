@@ -482,6 +482,74 @@ class FabricViewerController extends Controller
     }
 
     /**
+     * Gestiona la fase de conversión a .xlsx después de que Graph-Fabric terminó.
+     *
+     * Estados que devuelve al frontend:
+     *   - processing "Generando Excel..."  → la conversión está en cola/corriendo
+     *   - completed                        → el archivo está en disco, descarga instantánea
+     *   - failed                           → la conversión falló
+     *
+     * @param  array<string,mixed>  $graphData
+     * @return array<string,mixed>
+     */
+    private function trackXlsxConversion(string $jobId, array $graphData): array
+    {
+        $conversion = \Illuminate\Support\Facades\Cache::get(
+            \App\Jobs\ConvertGraphExportToXlsxJob::cacheKey($jobId)
+        );
+
+        // Primera vez que vemos el export listo → encolar la conversión
+        if ($conversion === null) {
+            $ctx = \Illuminate\Support\Facades\Cache::get("graph_async_export:{$jobId}", []);
+
+            \App\Jobs\ConvertGraphExportToXlsxJob::dispatch(
+                $jobId,
+                (string) ($ctx['schema'] ?? 'export'),
+                (string) ($ctx['view'] ?? $jobId)
+            );
+
+            return array_merge($graphData, [
+                'status'   => 'processing',
+                'progress' => 92,
+                'message'  => 'Generando Excel...',
+                'stage'    => 'Generando Excel',
+            ]);
+        }
+
+        $convStatus = (string) ($conversion['status'] ?? 'converting');
+
+        if ($convStatus === 'ready') {
+            return array_merge($graphData, [
+                'status'          => 'completed',
+                'progress'        => 100,
+                'rows'            => (int) ($conversion['rows'] ?? $graphData['rows'] ?? 0),
+                'filename'        => $conversion['filename'] ?? null,
+                'file_size'       => (int) ($conversion['bytes'] ?? 0),
+                'file_size_human' => $conversion['file_size_human'] ?? null,
+                'format'          => $conversion['format'] ?? 'xlsx',
+                'message'         => $conversion['message'] ?? 'Descarga lista.',
+                'stage'           => 'Listo',
+            ]);
+        }
+
+        if ($convStatus === 'failed') {
+            return array_merge($graphData, [
+                'success' => false,
+                'status'  => 'failed',
+                'message' => $conversion['message'] ?? 'No se pudo generar el Excel.',
+            ]);
+        }
+
+        // converting
+        return array_merge($graphData, [
+            'status'   => 'processing',
+            'progress' => 96,
+            'message'  => 'Generando Excel...',
+            'stage'    => 'Generando Excel',
+        ]);
+    }
+
+    /**
      * Descarga el archivo de un job async de Graph-Fabric y lo entrega al frontend.
      *
      * El body es gzip (NDJSON). El frontend lo descomprime y arma el .xlsx.
@@ -489,76 +557,65 @@ class FabricViewerController extends Controller
      */
     private function downloadFromGraphAsync(string $jobId): mixed
     {
-        $result = app(\App\Services\Fabric\GraphAsyncExportService::class)->download($jobId);
+        // El xlsx ya fue generado por ConvertGraphExportToXlsxJob durante el
+        // polling. Aquí solo se sirve el archivo → descarga instantánea, sin
+        // conversiones dentro del request (que causaban timeouts y el 405).
+        $conversion = \Illuminate\Support\Facades\Cache::get(
+            \App\Jobs\ConvertGraphExportToXlsxJob::cacheKey($jobId)
+        );
 
-        if ($result['success'] !== true) {
+        if ($conversion === null || ($conversion['status'] ?? '') !== 'ready') {
             return response()->json([
                 'success' => false,
-                'message' => $result['message'] ?? 'No se pudo descargar el export.',
-            ], $result['code'] ?? 500);
+                'message' => 'El Excel aun se esta generando. Espere a que el progreso llegue al 100%.',
+            ], 409);
         }
 
-        $ctx    = \Illuminate\Support\Facades\Cache::get("graph_async_export:{$jobId}", []);
-        $schema = (string) ($ctx['schema'] ?? 'export');
-        $view   = (string) ($ctx['view'] ?? $jobId);
-        $gzPath = $result['path'];
+        $path = (string) ($conversion['path'] ?? '');
 
-        // CONVERSIÓN A XLSX EN EL BACKEND (streaming, ~5 MB RAM fijos con OpenSpout).
-        // Antes el navegador descomprimia+parseaba+armaba el xlsx: con 567K filas
-        // / 163 MB se quedaba sin RAM y descargaba el .ndjson.gz crudo.
-        // Ahora Laravel arma el xlsx a disco linea por linea y entrega listo.
-        $dir      = dirname($gzPath);
-        $baseName = "{$schema}_{$view}_" . now()->format('Ymd_His');
-
-        try {
-            $export = \App\Services\Fabric\Export\StreamingExportWriter::fromNdjsonGzFile(
-                $gzPath, $dir, $baseName, $schema, $view
-            );
-        } catch (\Throwable $e) {
-            @unlink($gzPath);
-            \Illuminate\Support\Facades\Log::error('[ExportDownload] conversion xlsx fallo', [
-                'job_id' => $jobId, 'error' => $e->getMessage(),
-            ]);
+        if ($path === '' || !is_file($path)) {
             return response()->json([
                 'success' => false,
-                'message' => 'No se pudo generar el Excel. Aplique filtros para reducir los datos.',
-            ], 500);
+                'message' => 'El archivo expiro. Vuelva a exportar.',
+            ], 410);
         }
 
-        @unlink($gzPath); // el .gz ya no se necesita
-
-        if ($export->isEmpty()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'El export no devolvio datos.',
-            ], 422);
-        }
-
+        $ctx  = \Illuminate\Support\Facades\Cache::get("graph_async_export:{$jobId}", []);
         $user = auth()->user();
+
         if ($user) {
             $this->auditService->log(
                 $user,
-                $schema,
-                $view,
+                (string) ($ctx['schema'] ?? ''),
+                (string) ($ctx['view'] ?? ''),
                 BiVistaAccessLog::ACCION_EXPORT_DESCARGA,
                 request(),
                 [
-                    'rows_returned' => $export->rows,
-                    'metadata'      => ['job_id' => $jobId, 'source' => 'graph_async', 'format' => $export->format],
+                    'rows_returned' => (int) ($conversion['rows'] ?? 0),
+                    'metadata'      => [
+                        'job_id' => $jobId,
+                        'source' => 'graph_async',
+                        'format' => $conversion['format'] ?? 'xlsx',
+                    ],
                 ]
             );
         }
 
-        $contentType = $export->format === 'xlsx'
+        $format      = (string) ($conversion['format'] ?? 'xlsx');
+        $contentType = $format === 'xlsx'
             ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             : 'text/csv; charset=utf-8';
 
-        return response()->download($export->path, $export->filename, [
-            'Content-Type'    => $contentType,
-            'X-Export-Format' => $export->format,
-            'X-Export-Rows'   => (string) $export->rows,
-            'Cache-Control'   => 'no-store, no-cache',
-        ])->deleteFileAfterSend(true);
+        return response()->download(
+            $path,
+            (string) ($conversion['filename'] ?? "export.{$format}"),
+            [
+                'Content-Type'    => $contentType,
+                'X-Export-Format' => $format,
+                'X-Export-Rows'   => (string) ($conversion['rows'] ?? 0),
+                'Cache-Control'   => 'no-store, no-cache',
+            ]
+        )->deleteFileAfterSend(true);
     }
 
     /**
@@ -627,6 +684,13 @@ class FabricViewerController extends Controller
         // ── Job async de Graph-Fabric: proxear el progreso real (0-100 + running_s)
         if (\Illuminate\Support\Facades\Cache::has("graph_async_export:{$jobId}")) {
             $data = app(\App\Services\Fabric\GraphAsyncExportService::class)->status($jobId);
+
+            // Cuando Graph ya tiene los datos, falta convertirlos a .xlsx.
+            // Esa conversión va en cola (no en la petición de descarga) porque
+            // con 500K+ filas tarda 1-2 min y el request HTTP se caía por timeout.
+            if (($data['status'] ?? '') === 'completed') {
+                $data = $this->trackXlsxConversion($jobId, $data);
+            }
 
             return response()->json([
                 'success' => true,
