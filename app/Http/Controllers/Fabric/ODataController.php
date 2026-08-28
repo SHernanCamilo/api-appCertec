@@ -28,7 +28,8 @@ class ODataController extends Controller
 {
     public function __construct(
         private GraphFabricGatewayService $gateway,
-        private \App\Services\Fabric\ODataSnapshotService $snapshots
+        private \App\Services\Fabric\ODataSnapshotService $snapshots,
+        private \App\Services\Fabric\ODataParquetService $parquet
     ) {
     }
 
@@ -107,6 +108,220 @@ class ODataController extends Controller
 
         // Devolver datos paginados
         return $this->fetchData($request, $code, $link, $authResult);
+    }
+
+    // =========================================================================
+    // CARRIL NUEVO: PARQUET PAGINADO POR GRAPH (DuckDB) — no toca el flujo viejo
+    // =========================================================================
+
+    /**
+     * Igual que queryByLink pero delega la paginación a Graph-Fabric, que lee el
+     * parquet con DuckDB (OFFSET/LIMIT casi gratis).
+     *
+     * Ruta: GET /api/fabric/odata/parquet/{code}         (service document)
+     *       GET /api/fabric/odata/parquet/{code}/value   (datos)
+     *
+     * Diferencias con el carril viejo:
+     *   - Laravel NO baja el parquet, NO copia a NDJSON, NO relee el archivo.
+     *   - Sin los topes del flujo viejo (page_size 50K, recorte isHeavyView 20K).
+     *     Excel puede pedir páginas de hasta 200K y traer la vista completa.
+     *   - La autenticación y los permisos son EXACTAMENTE los mismos (se reutiliza
+     *     authenticateRequest + checkViewPermission), así que no se abre un hueco.
+     */
+    public function queryByLinkParquet(Request $request, string $code): mixed
+    {
+        $odataLog = Log::channel('odata');
+        $odataLog->info('OData parquet request', [
+            'code' => $code,
+            'ip'   => $request->ip(),
+            'url'  => $request->fullUrl(),
+        ]);
+
+        // Misma restricción de cliente que el carril viejo
+        $userAgent = $request->userAgent() ?? '';
+        $isOfficeClient = false;
+        foreach (['Microsoft.Data.Mashup', 'PowerQuery', 'Excel', 'Power BI', 'OData'] as $client) {
+            if (stripos($userAgent, $client) !== false) {
+                $isOfficeClient = true;
+                break;
+            }
+        }
+        if (!$isOfficeClient) {
+            return $this->odataError('ClientNotAllowed', 'Este endpoint solo está disponible desde Microsoft Excel o Power Query.', 403);
+        }
+
+        $link = OdataLink::where('code', $code)->first();
+        if (!$link) {
+            return $this->odataError('LinkNotFound', 'El link no existe o fue eliminado.', 404);
+        }
+        if (!$link->isValid()) {
+            return $this->odataError('LinkExpired', 'El link ha expirado o fue desactivado.', 403);
+        }
+
+        $authResult = $this->authenticateRequest($request, $link);
+        if ($authResult['error']) {
+            if ($authResult['code'] === 'AuthRequired') {
+                return response()->json([
+                    'error' => ['code' => 'AuthRequired', 'message' => $authResult['message']],
+                ], 401)->withHeaders([
+                    'WWW-Authenticate' => 'Basic realm="JadeOne OData - Use su email y API Key"',
+                ]);
+            }
+            return $this->odataError($authResult['code'], $authResult['message'], 401);
+        }
+
+        // Service document (primera llamada de Excel, sin params de datos)
+        $isValueEndpoint = str_ends_with($request->path(), '/value');
+        $hasDataParams   = $request->has('$top') || $request->has('$skip') || $request->has('$filter');
+        if (!$hasDataParams && !$isValueEndpoint) {
+            return $this->serviceDocumentParquet($code, $link);
+        }
+
+        return $this->fetchDataParquet($request, $code, $link, $authResult);
+    }
+
+    /**
+     * Service document del carril parquet (apunta al mismo $metadata que el viejo).
+     */
+    private function serviceDocumentParquet(string $code, OdataLink $link): JsonResponse
+    {
+        $baseUrl    = url("/api/fabric/odata/parquet/{$code}");
+        $entityName = str_replace('VW_', '', $link->view_name);
+
+        return response()->json([
+            '@odata.context' => "{$baseUrl}/\$metadata",
+            'value' => [[
+                'name' => $entityName,
+                'kind' => 'EntitySet',
+                'url'  => 'value',
+            ]],
+        ], 200, [
+            'OData-Version' => '4.0',
+            'Content-Type'  => 'application/json; odata.metadata=minimal',
+        ]);
+    }
+
+    /**
+     * Datos paginados sirviéndose del parquet vía Graph. El @odata.nextLink que
+     * se devuelve apunta a la URL pública de Laravel (no a Graph), para que el
+     * token y la ruta sigan pasando por la autenticación de este controlador.
+     */
+    private function fetchDataParquet(Request $request, string $code, OdataLink $link, array $authResult): JsonResponse
+    {
+        $maxTop = 200000;
+        $top    = min((int) $request->query('$top', '50000'), $maxTop);
+        $top    = max(1, $top);
+        $skip   = max(0, (int) $request->query('$skip', '0'));
+        $filter = (string) $request->query('$filter', '');
+        $select = (string) $request->query('$select', '');
+        $orderby = (string) $request->query('$orderby', '');
+
+        // Misma protección anti-inyección que el carril viejo
+        if ($filter && preg_match('/;|--|DROP|DELETE|INSERT|UPDATE|EXEC|xp_|UNION|SCRIPT|ALTER|CREATE|TRUNCATE|\/\*|<script>/i', $filter)) {
+            return $this->odataError('InvalidFilter', 'El filtro OData contiene sentencias no permitidas.', 400);
+        }
+
+        $columns = $select
+            ? array_map('trim', explode(',', $select))
+            : ($link->columns ?? []);
+
+        [$sortCol, $sortDir] = $this->parseOrderBy($orderby);
+        if (!$sortCol) {
+            $sortCol = $link->sort_col ?? '';
+            $sortDir = $link->sort_dir ?? 'asc';
+        }
+
+        // $count solo en la primera página (cuesta un COUNT extra en Graph)
+        $withCount = $skip === 0 && filter_var($request->query('$count', 'true'), FILTER_VALIDATE_BOOLEAN);
+
+        $startTime = microtime(true);
+
+        $page = $this->parquet->page(
+            $link->schema_name,
+            $link->view_name,
+            $skip,
+            $top,
+            [
+                'columns'      => $columns,
+                'sort_col'     => $sortCol,
+                'sort_dir'     => $sortDir,
+                'odata_filter' => $filter,
+            ],
+            $withCount
+        );
+
+        $elapsedMs = (int) round((microtime(true) - $startTime) * 1000);
+
+        if (!$page['success']) {
+            $status = (int) ($page['status'] ?? 502);
+            $code409 = $status === 409 ? 'ParquetNotReady' : 'DataSourceError';
+            return $this->odataError($code409, $page['message'] ?? 'Error consultando datos.', $status);
+        }
+
+        $items = $page['value'] ?? [];
+
+        // Auditoría (no bloquea la respuesta)
+        $link->recordAccess();
+        try {
+            OdataAccessLog::create([
+                'odata_link_id'  => $link->id,
+                'user_email'     => $authResult['email'],
+                'user_name'      => $authResult['name'],
+                'schema_name'    => $link->schema_name,
+                'view_name'      => $link->view_name,
+                'visibility'     => $link->visibility,
+                'filter_applied' => $filter ?: null,
+                'top'            => $top,
+                'skip'           => $skip,
+                'rows_returned'  => count($items),
+                'elapsed_ms'     => $elapsedMs,
+                'ip_address'     => $request->ip(),
+                'user_agent'     => $request->userAgent(),
+                'auth_method'    => $authResult['method'],
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('OData parquet access log failed', ['error' => $e->getMessage()]);
+        }
+
+        // __id como Key único entre páginas (Excel OData lo requiere)
+        $indexed = [];
+        foreach ($items as $i => $item) {
+            $item['__id'] = $skip + $i + 1;
+            $indexed[] = $item;
+        }
+
+        $entityName = str_replace('VW_', '', $link->view_name);
+        $response = [
+            '@odata.context' => url("/api/fabric/odata/parquet/{$code}/\$metadata#{$entityName}"),
+            'value'          => $indexed,
+        ];
+
+        if ($page['count'] !== null) {
+            $response['@odata.count'] = $page['count'];
+        }
+
+        // nextLink hacia la URL pública de Laravel (no la de Graph)
+        if ($page['next_skip'] !== null && count($items) > 0) {
+            $nextParams = array_filter([
+                '$top'     => (string) $top,
+                '$skip'    => (string) $page['next_skip'],
+                '$filter'  => $filter ?: null,
+                '$select'  => $select ?: null,
+                '$orderby' => $orderby ?: null,
+                'token'    => $request->query('token'),
+            ]);
+            $response['@odata.nextLink'] = url("/api/fabric/odata/parquet/{$code}/value")
+                . '?' . http_build_query($nextParams);
+        }
+
+        return response()->json($response, 200, [
+            'OData-Version'    => '4.0',
+            'Content-Type'     => 'application/json; odata.metadata=minimal',
+            'X-Page-Size'      => (string) $top,
+            'X-Rows-Returned'  => (string) count($items),
+            'X-Snapshot-Source' => (string) ($page['source'] ?? 'parquet-local'),
+            'X-Parquet-Age-Min' => (string) ($page['age_min'] ?? ''),
+        ]);
     }
 
     /**
@@ -477,6 +692,9 @@ class ODataController extends Controller
                 'visibility' => $link->visibility,
                 'url' => url("/api/fabric/odata/link/{$link->code}"),
                 'excel_url' => url("/api/fabric/odata/link/{$link->code}"),
+                // URL del carril rápido (parquet paginado por Graph). Recomendada
+                // para vistas grandes: sin límite de filas y sin releer archivos.
+                'parquet_url' => url("/api/fabric/odata/parquet/{$link->code}"),
                 'expires_at' => $link->expires_at?->toIso8601String(),
             ],
         ];
@@ -524,6 +742,7 @@ class ODataController extends Controller
                 'schema' => $l->schema_name,
                 'view' => $l->view_name,
                 'url' => url("/api/fabric/odata/link/{$l->code}"),
+                'parquet_url' => url("/api/fabric/odata/parquet/{$l->code}"),
                 'active' => $l->active,
                 'expires_at' => $l->expires_at?->toIso8601String(),
                 'access_count' => $l->access_count,

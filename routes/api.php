@@ -329,6 +329,17 @@ Route::prefix('fabric/odata')->group(function () {
     // Service document (raíz)
     Route::get('/link/{code}', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLink'])
         ->where('code', '[a-f0-9]{32}');
+
+    // ── Carril NUEVO: parquet paginado por Graph (DuckDB) ──────────────────
+    // Mismo $metadata que el carril viejo (las columnas no cambian).
+    Route::get('/parquet/{code}/$metadata', [\App\Http\Controllers\Fabric\ODataController::class, 'metadata'])
+        ->where('code', '[a-f0-9]{32}');
+    // EntitySet "value" — datos paginados desde el parquet
+    Route::get('/parquet/{code}/value', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLinkParquet'])
+        ->where('code', '[a-f0-9]{32}');
+    // Service document (raíz) del carril parquet
+    Route::get('/parquet/{code}', [\App\Http\Controllers\Fabric\ODataController::class, 'queryByLinkParquet'])
+        ->where('code', '[a-f0-9]{32}');
 });
 
 // Rutas de Notificaciones (Interconsultas) → routes/Notificaciones/NotificacionesRouter.php
