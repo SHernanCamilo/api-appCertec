@@ -14,15 +14,16 @@ use Illuminate\Support\Facades\Log;
  * solo genera ~5-8 parquets/min. La demanda (~40/min) supera la capacidad → cola
  * infinita, Fabric saturado, 462 vistas "pendientes".
  *
- * ESTRATEGIA (v2 - todas via parquet):
- *   1. Vistas PEQUEÑAS (<10K filas)      → parquet cada 60 min (Graph tambien
- *      genera al vuelo si no existe; el export siempre sale por /api/data/export/r2).
+ * ESTRATEGIA (acordada con Graph-Fabric):
+ *   1. Vistas PEQUEÑAS (<10K filas)      → DESACTIVAR del scheduler.
+ *      El export sale al vuelo por /api/data/export/r2 (3-10s), sin pre-generar.
+ *      Esto evita represar el scheduler (762 vistas vs capacidad 8/min).
  *   2. Vistas GRANDES (>10K filas)       → parquet, intervalo segun tamaño.
  *   3. Censos/Urgencias/Triage           → 5-15 min (críticos en vivo).
  *   4. Históricas (Ledger/Payroll/Fixed) → 120-480 min.
  *
- * NOTA v2: ya NO se desactivan vistas del scheduler. Todas quedan activas para
- * que la descarga sea rapida (parquet) y en tiempo real (ensure_fresh).
+ * La descarga de las pequeñas sigue siendo rapida porque Graph genera al vuelo
+ * (3-10s) y el fallback del 404 usa /api/data/export/stream para las grandes.
  *
  * FUENTE DE row_count: Graph-Fabric /api/r2/schedule (ya lo reporta por vista).
  *
@@ -208,13 +209,13 @@ class RebalanceParquetSchedulerCommand extends Command
             }
         }
 
-        // 3. PEQUEÑAS (<threshold): mantener parquet pero con intervalo largo.
-        //    NOTA: ya NO se desactivan. Graph-Fabric garantiza el export via parquet
-        //    (o Fabric al vuelo si no hay parquet). Todas quedan activas para que
-        //    la descarga sea rapida y en tiempo real.
+        // 3. PEQUEÑAS (<threshold): DESACTIVAR del scheduler → export al vuelo.
+        //    Confirmado con Graph-Fabric: reactivar todas represa el scheduler
+        //    (762 vistas, demanda 40/min vs capacidad 8/min). Las pequeñas se
+        //    resuelven al vuelo en /api/data/export/r2 (3-10s) sin pre-generar.
         if ($rows !== null && $rows < $smallThreshold) {
-            return $this->buildDecision($config, 'kept', 'PEQUENA-PARQUET',
-                60, 'operativo', true, $rows);
+            return $this->buildDecision($config, 'disabled', 'DESACTIVAR-PEQUENA',
+                $config->refresh_interval_min, $config->priority, false, $rows);
         }
 
         // 4. GRANDES: mantener parquet, intervalo segun tamaño

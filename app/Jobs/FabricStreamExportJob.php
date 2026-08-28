@@ -138,13 +138,132 @@ final class FabricStreamExportJob implements ShouldQueue
      */
     private function exportToExcel(User $user): void
     {
-        // Intentar R2 cache primero (12x mÃ¡s rÃ¡pido para vistas grandes)
+        // 1. Intentar parquet R2 (rapido: <5s para vistas con parquet, 3-10s al vuelo)
         if ($this->tryExportFromR2($user)) {
-            return; // R2 resolviÃ³ el export completo
+            return; // R2 resolvio el export completo
         }
 
-        // Fallback: descargar de Fabric request por request
+        // 2. Fallback: /api/data/export/stream (carriles de export dedicados,
+        //    no compiten con las grillas). Recomendado por Graph-Fabric para
+        //    vistas grandes sin parquet (404 no_cache).
+        if ($this->tryExportFromStream($user)) {
+            return;
+        }
+
+        // 3. Ultimo recurso: /api/data/dynamic paginado (probado, mas lento).
         $this->exportFromFabricDirect($user);
+    }
+
+    /**
+     * Fallback recomendado por Graph-Fabric: /api/data/export/stream.
+     *
+     * Usa los carriles de export dedicados (fast/medium/heavy) que NO compiten
+     * con las consultas de las grillas. Devuelve datos comprimidos igual que
+     * /export/r2. Retorna false si el endpoint no esta disponible → cae a dynamic.
+     */
+    private function tryExportFromStream(User $user): bool
+    {
+        $url     = rtrim((string) config('fabric.url', 'http://127.0.0.1:8001'), '/');
+        $token   = (string) config('fabric.token_admin', '');
+        $gateway = app(\App\Services\Fabric\GraphFabricGatewayService::class);
+        $filters = $this->options['filters'] ?? [];
+
+        $this->updateStatus(self::STATUS_PROCESSING, null, [
+            'progress' => 8, 'rows' => 0, 'message' => 'Exportando desde Fabric (stream)...',
+        ]);
+
+        try {
+            $maxRows  = min((int)($this->options['max_rows'] ?? 500000), self::MAX_EXPORTABLE_ROWS);
+            $dir      = storage_path("app/fabric_exports/{$this->jobId}");
+            if (!is_dir($dir)) { mkdir($dir, 0775, true); }
+            $baseName = "{$this->schema}_{$this->view}_" . date('Ymd_His');
+            $gzFile   = "{$dir}/{$baseName}_raw.gz";
+
+            $response = Http::timeout(300)
+                ->connectTimeout(10)
+                ->withHeaders(['X-API-Key' => (string) config('fabric.api_key', '')])
+                ->sink($gzFile)
+                ->post($url . '/api/data/export/stream', [
+                    'token'        => $token,
+                    'user_email'   => $user->email,
+                    'user_name'    => $user->name ?? $user->email,
+                    'department'   => $gateway->resolveDepartmentForGrantView($user, $this->view),
+                    'groups'       => $gateway->getGruposBd($user),
+                    'schema_name'  => $this->schema,
+                    'view'         => $this->view,
+                    'filters'      => empty($filters) ? new \stdClass() : $gateway->normalizeFiltersPublic($filters),
+                    'columns'      => $this->options['columns'] ?? [],
+                    'max_rows'     => $maxRows,
+                    'format'       => 'csv',
+                ]);
+
+            // 404/405 → el endpoint no existe en esta version de Graph → dynamic
+            if (in_array($response->status(), [404, 405], true)) {
+                @unlink($gzFile);
+                Log::info('FabricStreamExportJob: /export/stream no disponible, usando dynamic', [
+                    'job_id' => $this->jobId, 'status' => $response->status(),
+                ]);
+                return false;
+            }
+
+            if ($response->status() !== 200) {
+                @unlink($gzFile);
+                return false;
+            }
+
+            $totalRows = (int) ($response->header('X-Total-Rows') ?? 0);
+
+            if (!is_file($gzFile) || filesize($gzFile) < 20 || $totalRows === 0) {
+                @unlink($gzFile);
+                return false;
+            }
+
+            if ($totalRows > self::MAX_EXPORTABLE_ROWS) {
+                @unlink($gzFile);
+                $this->updateStatus(self::STATUS_FAILED, sprintf(
+                    'La vista tiene %s registros y excede el máximo exportable (%s). Aplique filtros.',
+                    number_format($totalRows), number_format(self::MAX_EXPORTABLE_ROWS)
+                ));
+                return true;
+            }
+
+            // Descomprimir gz → csv y armar el archivo (mismo flujo que R2)
+            $csvFile = "{$dir}/{$baseName}_raw.csv";
+            $gz  = gzopen($gzFile, 'rb');
+            $csv = fopen($csvFile, 'w');
+            if ($gz === false || $csv === false) {
+                @unlink($gzFile);
+                return false;
+            }
+            while (!gzeof($gz)) {
+                $chunk = gzread($gz, 65536);
+                if ($chunk !== false && $chunk !== '') {
+                    fwrite($csv, $chunk);
+                }
+            }
+            gzclose($gz);
+            fclose($csv);
+            @unlink($gzFile);
+
+            $this->updateStatus(self::STATUS_PROCESSING, null, [
+                'progress' => 60, 'rows' => $totalRows,
+                'message' => "Generando archivo ({$totalRows} filas)...",
+            ]);
+
+            $result = StreamingExportWriter::fromCsvFile($csvFile, $dir, $baseName, $this->schema, $this->view);
+            if ($result->isEmpty()) {
+                $this->updateStatus(self::STATUS_COMPLETED, 'No hay datos.', ['rows' => 0, 'progress' => 100]);
+                return true;
+            }
+
+            $this->publishResult($result, 'stream');
+            return true;
+        } catch (\Throwable $e) {
+            Log::info('FabricStreamExportJob: /export/stream fallo, usando dynamic', [
+                'job_id' => $this->jobId, 'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
     }
 
     /**
@@ -250,10 +369,11 @@ final class FabricStreamExportJob implements ShouldQueue
             }
 
             Log::info('FabricStreamExportJob: R2 OK', [
-                'job_id' => $this->jobId,
-                'view'   => "{$this->schema}.{$this->view}",
-                'rows'   => $totalRows,
-                'source' => $response->header('X-Source'),
+                'job_id'   => $this->jobId,
+                'view'     => "{$this->schema}.{$this->view}",
+                'rows'     => $totalRows,
+                'source'   => $response->header('X-Source'),   // local | r2-cache | fabric-inline
+                'x_format' => $xFormat,                        // csv-gzip (confirmado por Graph)
             ]);
 
             $csvFile = "{$dir}/{$baseName}_raw.csv";
