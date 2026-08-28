@@ -352,48 +352,51 @@ class FabricViewerController extends Controller
             ], 403);
         }
 
-        // ─── R2 Parquet Pre-Warming ─────────────────────────────────────────────
-        // Intentar usar el parquet pre-generado por Graph-Fabric.
-        // Si está listo (~2s), se usa export/r2.
-        // Si está generándose, el frontend hace polling.
-        // Si es demasiado grande, forzar filtros.
-        // Si R2 no está disponible, fallback al export stream clásico.
-        $forceRefresh = (bool) $request->input('force_refresh', false);
-        $r2Status = $this->tryR2Warm($user, $schema, $viewName, $forceRefresh);
+        // ─── Export ASÍNCRONO en Graph-Fabric (camino principal) ────────────────
+        // Graph ejecuta la vista en background y expone progreso real (0-100%)
+        // + deduplicación automática (misma vista+filtros = una sola ejecución).
+        // Laravel solo hace relay: no genera el archivo, no usa Horizon.
+        $asyncStart = app(\App\Services\Fabric\GraphAsyncExportService::class)->start(
+            $user,
+            $schema,
+            $viewName,
+            [
+                'filters'  => $request->input('filters', []),
+                'columns'  => $request->input('columns', []),
+                'sort_col' => $request->input('sort_col', ''),
+                'sort_dir' => $request->input('sort_dir', 'asc'),
+                'max_rows' => (int) $request->input('max_rows', 1_000_000),
+            ]
+        );
 
-        if ($r2Status !== null) {
-            $status = $r2Status['status'] ?? 'unknown';
+        if ($asyncStart['success'] === true) {
+            $this->auditService->log(
+                $user,
+                $schema,
+                $viewName,
+                BiVistaAccessLog::ACCION_EXPORT_INICIO,
+                $request,
+                [
+                    'filters'  => $request->input('filters', []),
+                    'metadata' => ['job_id' => $asyncStart['job_id'], 'source' => 'graph_async'],
+                ]
+            );
 
-            // READY o READY_STALE → exportar inmediatamente desde parquet
-            if (in_array($status, ['ready', 'ready_stale'])) {
-                return $this->exportFromR2(
-                    $user, $schema, $viewName, $request, $r2Status
-                );
-            }
-
-            // GENERATING → decirle al frontend que haga polling
-            if ($status === 'generating') {
-                return response()->json([
-                    'success'     => true,
-                    'r2_status'   => 'generating',
-                    'message'     => $r2Status['message'] ?? 'El parquet se está generando...',
-                    'estimated_s' => $r2Status['estimated_s'] ?? 60,
-                    'row_count'   => $r2Status['row_count'] ?? null,
-                ], 202);
-            }
-
-            // TOO_BIG → requiere filtros
-            if ($status === 'too_big') {
-                return response()->json([
-                    'success'    => true,
-                    'r2_status'  => 'too_big',
-                    'message'    => 'La vista tiene más de 1M de filas. Aplique un filtro de fechas.',
-                    'row_count'  => $r2Status['row_count'] ?? null,
-                ], 200);
-            }
+            return response()->json([
+                'success'    => true,
+                'job_id'     => $asyncStart['job_id'],
+                'async'      => true,
+                'message'    => 'Export iniciado en Graph-Fabric.',
+                'status_url' => "/api/fabric/viewer/export/status/{$asyncStart['job_id']}",
+            ], 202);
         }
 
-        // ─── Fallback: Export stream clásico (si R2 no disponible) ───────────────
+        \Illuminate\Support\Facades\Log::warning('[ExportStart] async no disponible, usando job local', [
+            'view'    => "{$schema}.{$viewName}",
+            'message' => $asyncStart['message'] ?? null,
+        ]);
+
+        // ─── Fallback: job local (si el async de Graph no está disponible) ──────
         $jobId = \App\Jobs\FabricStreamExportJob::dispatch_and_track(
             $user->id,
             $schema,
@@ -676,6 +679,51 @@ class FabricViewerController extends Controller
     }
 
     /**
+     * Descarga el archivo de un job async de Graph-Fabric y lo entrega al frontend.
+     *
+     * El body es gzip (NDJSON). El frontend lo descomprime y arma el .xlsx.
+     * El archivo temporal se borra tras enviarlo.
+     */
+    private function downloadFromGraphAsync(string $jobId): mixed
+    {
+        $result = app(\App\Services\Fabric\GraphAsyncExportService::class)->download($jobId);
+
+        if ($result['success'] !== true) {
+            return response()->json([
+                'success' => false,
+                'message' => $result['message'] ?? 'No se pudo descargar el export.',
+            ], $result['code'] ?? 500);
+        }
+
+        $user = auth()->user();
+        if ($user) {
+            $ctx = \Illuminate\Support\Facades\Cache::get("graph_async_export:{$jobId}", []);
+            $this->auditService->log(
+                $user,
+                (string) ($ctx['schema'] ?? ''),
+                (string) ($ctx['view'] ?? ''),
+                BiVistaAccessLog::ACCION_EXPORT_DESCARGA,
+                request(),
+                [
+                    'rows_returned' => (int) ($result['rows'] ?? 0),
+                    'metadata'      => ['job_id' => $jobId, 'source' => 'graph_async'],
+                ]
+            );
+        }
+
+        return response()->download(
+            $result['path'],
+            $result['filename'],
+            [
+                'Content-Type'    => 'application/gzip',
+                'X-Export-Format' => $result['format'],
+                'X-Export-Rows'   => (string) ($result['rows'] ?? 0),
+                'Cache-Control'   => 'no-store, no-cache',
+            ]
+        )->deleteFileAfterSend(true);
+    }
+
+    /**
      * Polling del estado de R2 warm para el frontend.
      *
      * GET /api/fabric/viewer/r2/status?schema=dc&view=VW_Censo_Eal
@@ -738,6 +786,17 @@ class FabricViewerController extends Controller
      */
     public function exportStatus(string $jobId): JsonResponse
     {
+        // ── Job async de Graph-Fabric: proxear el progreso real (0-100 + running_s)
+        if (\Illuminate\Support\Facades\Cache::has("graph_async_export:{$jobId}")) {
+            $data = app(\App\Services\Fabric\GraphAsyncExportService::class)->status($jobId);
+
+            return response()->json([
+                'success' => true,
+                'data'    => $data,
+            ]);
+        }
+
+        // ── Job local (fallback legacy)
         $status = \Illuminate\Support\Facades\Cache::get("fabric_export:{$jobId}");
 
         if ($status === null) {
@@ -767,6 +826,12 @@ class FabricViewerController extends Controller
         $req = request();
         if (!$req->bearerToken() && $req->query('token')) {
             $req->headers->set('Authorization', 'Bearer ' . $req->query('token'));
+        }
+
+        // ── Job async de Graph-Fabric: traer el gzip y entregarlo al frontend.
+        //    El frontend descomprime el NDJSON y arma el .xlsx.
+        if (\Illuminate\Support\Facades\Cache::has("graph_async_export:{$jobId}")) {
+            return $this->downloadFromGraphAsync($jobId);
         }
 
         $status = \Illuminate\Support\Facades\Cache::get("fabric_export:{$jobId}");
