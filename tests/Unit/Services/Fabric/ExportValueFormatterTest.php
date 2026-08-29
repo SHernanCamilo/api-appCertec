@@ -245,4 +245,111 @@ final class ExportValueFormatterTest extends TestCase
         $this->assertFalse(ExportValueFormatter::looksLikeIsoDate(20260730));
         $this->assertFalse(ExportValueFormatter::looksLikeIsoDate(null));
     }
+
+    // =========================================================================
+    // xmlSafe — un .xlsx es XML; un caracter ilegal hace que Excel lo "repare"
+    // =========================================================================
+
+    public function test_xmlsafe_quita_caracteres_de_control(): void
+    {
+        $this->assertSame('ABCD', ExportValueFormatter::xmlSafe("AB\x01\x08\x1FCD"));
+        $this->assertSame('LINEA1LINEA2', ExportValueFormatter::xmlSafe("LINEA1\x0BLINEA2"));
+    }
+
+    /**
+     * U+FFFE y U+FFFF son UTF-8 VÁLIDO, así que htmlspecialchars los deja pasar,
+     * pero XML 1.0 los prohíbe. Rompían el xlsx de glosas e historia clínica.
+     */
+    public function test_xmlsafe_quita_codepoints_prohibidos_por_xml(): void
+    {
+        $this->assertSame('MALCHAR', ExportValueFormatter::xmlSafe("MAL\u{FFFE}CHAR"));
+        $this->assertSame('AB', ExportValueFormatter::xmlSafe("A\u{FFFF}B"));
+    }
+
+    public function test_xmlsafe_conserva_acentos_emojis_y_saltos_legitimos(): void
+    {
+        $this->assertSame('áéíóú ñÑ', ExportValueFormatter::xmlSafe('áéíóú ñÑ'));
+        $this->assertSame('中文 😀', ExportValueFormatter::xmlSafe('中文 😀'));
+        // Tab, LF y CR SÍ son válidos en XML
+        $this->assertSame("a\tb\nc\rd", ExportValueFormatter::xmlSafe("a\tb\nc\rd"));
+    }
+
+    public function test_xmlsafe_tolera_utf8_corrupto_sin_devolver_vacio(): void
+    {
+        // Byte Latin-1 suelto: no debe reventar ni vaciar toda la cadena
+        $result = ExportValueFormatter::xmlSafe("ni\xF1o enfermo");
+
+        $this->assertNotSame('', $result);
+        $this->assertStringContainsString('enfermo', $result);
+    }
+
+    public function test_sanitize_aplica_el_saneo_xml_ademas_de_los_saltos(): void
+    {
+        // sanitize lo usa el camino clásico (writeRow → CSV → OpenSpout)
+        $this->assertSame(
+            'NOTA MEDICA',
+            ExportValueFormatter::sanitize("NOTA\n\x01MEDICA")
+        );
+    }
+
+    // =========================================================================
+    // decodeNdjsonLine — ninguna fila debe perderse
+    // =========================================================================
+
+    public function test_decodifica_una_linea_normal(): void
+    {
+        $row = ExportValueFormatter::decodeNdjsonLine('{"Id":1,"Nota":"ok"}');
+
+        $this->assertSame(['Id' => 1, 'Nota' => 'ok'], $row);
+    }
+
+    /**
+     * Regresión: "niño" en Latin-1 (ni\xF1o) hacía que json_decode devolviera
+     * null y la fila DESAPARECÍA del Excel sin aviso.
+     */
+    public function test_recupera_lineas_con_utf8_invalido(): void
+    {
+        $row = ExportValueFormatter::decodeNdjsonLine("{\"Id\":1,\"Nota\":\"ni\xF1o\"}");
+
+        $this->assertIsArray($row, 'La fila con Latin-1 no debe perderse');
+        $this->assertSame(1, $row['Id']);
+    }
+
+    /**
+     * Regresión: JSON prohíbe \x00-\x1F sin escapar dentro de un string. Si el
+     * origen escribió el byte crudo, json_decode fallaba con CTRL_CHAR y se
+     * perdía la fila (medido: 20% de las filas en una vista de HC).
+     */
+    public function test_recupera_lineas_con_caracteres_de_control_crudos(): void
+    {
+        $row = ExportValueFormatter::decodeNdjsonLine("{\"Id\":7,\"Nota\":\"AB\x01CD\"}");
+
+        $this->assertIsArray($row, 'La fila con control chars crudos no debe perderse');
+        $this->assertSame(7, $row['Id']);
+    }
+
+    public function test_recupera_lineas_con_ambos_problemas_a_la_vez(): void
+    {
+        $row = ExportValueFormatter::decodeNdjsonLine("{\"Id\":9,\"Nota\":\"ni\xF1o\x01raro\"}");
+
+        $this->assertIsArray($row);
+        $this->assertSame(9, $row['Id']);
+    }
+
+    public function test_devuelve_null_solo_si_no_es_json_de_objeto(): void
+    {
+        $this->assertNull(ExportValueFormatter::decodeNdjsonLine(''));
+        $this->assertNull(ExportValueFormatter::decodeNdjsonLine('   '));
+        $this->assertNull(ExportValueFormatter::decodeNdjsonLine('esto no es json'));
+        $this->assertNull(ExportValueFormatter::decodeNdjsonLine('{}'));
+    }
+
+    public function test_ignora_el_salto_de_linea_del_formato_ndjson(): void
+    {
+        // El \n final es del NDJSON, no del JSON: no debe romper la decodificación
+        $row = ExportValueFormatter::decodeNdjsonLine("{\"Id\":3,\"Nota\":\"AB\x01CD\"}\n");
+
+        $this->assertIsArray($row);
+        $this->assertSame(3, $row['Id']);
+    }
 }

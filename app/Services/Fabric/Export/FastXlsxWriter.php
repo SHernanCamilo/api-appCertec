@@ -332,29 +332,15 @@ final class FastXlsxWriter
     // =========================================================================
 
     /**
-     * Decodifica una línea NDJSON tolerando UTF-8 inválido.
-     *
-     * Por qué: el NDJSON viene de Fabric/SQL Server, y campos de texto libre
-     * (historia clínica, notas) suelen traer bytes que no son UTF-8 válido
-     * (Latin-1 sin convertir, secuencias truncas). Con json_decode a secas esas
-     * líneas devuelven null y la fila DESAPARECÍA del Excel sin aviso.
-     *
-     * Aquí, si el primer intento falla por UTF-8 malformado, se re-decodifica
-     * pidiéndole a PHP que sustituya los bytes inválidos (JSON_INVALID_UTF8_SUBSTITUTE).
-     * Así la fila se conserva y el saneo final de xmlText() garantiza XML válido.
+     * Decodifica una línea NDJSON tolerando UTF-8 inválido y caracteres de
+     * control crudos. La lógica vive en ExportValueFormatter para que el camino
+     * clásico use exactamente la misma, y ninguna fila se pierda en ninguno.
      *
      * @return array<string,mixed>|null  null solo si la línea no es JSON de objeto
      */
     private static function decodeLine(string $line): ?array
     {
-        $row = json_decode($line, true);
-
-        if (!is_array($row) && json_last_error() === JSON_ERROR_UTF8) {
-            // Reintento tolerante: sustituye los bytes UTF-8 inválidos.
-            $row = json_decode($line, true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
-        }
-
-        return is_array($row) && $row !== [] ? $row : null;
+        return ExportValueFormatter::decodeNdjsonLine($line);
     }
 
     // =========================================================================
@@ -621,27 +607,13 @@ final class FastXlsxWriter
      */
     private static function xmlText(string $value): string
     {
-        // ¿Hay algo fuera del ASCII imprimible + tab/LF/CR? Si no, camino corto.
-        if (preg_match('/[^\x09\x0A\x0D\x20-\x7E]/', $value) === 1) {
-            // Quita todo codepoint que XML no admite. La 'u' interpreta UTF-8;
-            // si la cadena trae bytes UTF-8 inválidos, el regex falla y se cae
-            // al saneo byte a byte de respaldo.
-            $clean = preg_replace(
-                '/[^\x{09}\x{0A}\x{0D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u',
-                '',
-                $value
-            );
-
-            // preg_replace devuelve null si el UTF-8 estaba corrupto: se limpia
-            // forzando a UTF-8 válido y se reintenta.
-            $value = $clean ?? preg_replace(
-                '/[^\x{09}\x{0A}\x{0D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u',
-                '',
-                mb_convert_encoding($value, 'UTF-8', 'UTF-8')
-            ) ?? '';
-        }
-
-        return htmlspecialchars($value, ENT_QUOTES | ENT_XML1, 'UTF-8');
+        // El saneo de codepoints vive en ExportValueFormatter para que el camino
+        // clásico (writeRow → CSV → OpenSpout) use exactamente la misma regla.
+        return htmlspecialchars(
+            ExportValueFormatter::xmlSafe($value),
+            ENT_QUOTES | ENT_XML1,
+            'UTF-8'
+        );
     }
 
     /**

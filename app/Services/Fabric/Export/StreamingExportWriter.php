@@ -557,7 +557,18 @@ final class StreamingExportWriter
             return new ExportResult('', '', 'xlsx', 0, 0);
         }
 
-        if (!self::qualifiesForRichFormat($gzPath, $rowHint)) {
+        $usaFormatoRico = self::qualifiesForRichFormat($gzPath, $rowHint);
+
+        // Log de diagnóstico: sin esto no se sabía qué camino generó el archivo,
+        // y se perdió tiempo arreglando el writer rápido cuando el archivo lo
+        // producía el clásico (o al revés).
+        \Illuminate\Support\Facades\Log::info('[StreamingExport] camino elegido', [
+            'view'      => "{$schema}.{$view}",
+            'row_hint'  => $rowHint,
+            'camino'    => $usaFormatoRico ? 'clasico (PhpSpreadsheet/OpenSpout)' : 'rapido (FastXlsxWriter)',
+        ]);
+
+        if (!$usaFormatoRico) {
             // Se pasa el título para que el xlsx grande lleve la misma portada
             // corporativa (JadeOne — esquema.vista + fecha) que el chico.
             $fast = FastXlsxWriter::fromNdjsonGz($gzPath, $targetDir, $baseName, $view, "{$schema}.{$view}");
@@ -566,8 +577,9 @@ final class StreamingExportWriter
                 return $fast;
             }
 
-            // Null = no apto para xlsx (supera el límite de filas de Excel).
-            // Se continúa por el camino clásico, que entrega CSV en ese caso.
+            \Illuminate\Support\Facades\Log::warning('[StreamingExport] el writer rapido devolvio null, se usa el clasico', [
+                'view' => "{$schema}.{$view}",
+            ]);
         }
 
         // Export chico: PhpSpreadsheet con formato corporativo completo
@@ -585,9 +597,12 @@ final class StreamingExportWriter
                     continue;
                 }
 
-                /** @var array<string,mixed>|null $row */
-                $row = json_decode($line, true);
-                if (is_array($row) && $row !== []) {
+                // Decodificación tolerante (UTF-8 inválido + caracteres de
+                // control crudos): sin esto se perdía ~20% de las filas en
+                // vistas de texto libre como historia clínica.
+                $row = ExportValueFormatter::decodeNdjsonLine($line);
+
+                if ($row !== null) {
                     $writer->writeRow($row);
                 }
             }
@@ -749,7 +764,10 @@ final class StreamingExportWriter
             return new ExportResult('', '', 'xlsx', 0, 0);
         }
 
-        $headers = array_map('trim', $headerLine);
+        $headers = array_map(
+            static fn ($h) => ExportValueFormatter::xmlSafe(trim((string) $h)),
+            $headerLine
+        );
 
         // Detectar columnas de texto (ceros iniciales) y fecha por nombre
         $textColumns = ExportValueFormatter::detectTextColumns($headers);
@@ -828,7 +846,11 @@ final class StreamingExportWriter
             $cells = [];
 
             foreach ($fields as $index => $value) {
-                $value = trim((string) $value);
+                // xmlSafe es obligatorio aquí: OpenSpout escapa < > & pero NO
+                // elimina los caracteres que XML prohíbe (controles, U+FFFE).
+                // Si uno llega a la celda, Excel abre el archivo "reparando".
+                // Este CSV puede venir de R2/DuckDB sin pasar por sanitize().
+                $value = ExportValueFormatter::xmlSafe(trim((string) $value));
 
                 // El CSV intermedio protege los ceros iniciales con la fórmula
                 // ="036004835", que es lo que entiende Excel al abrir un CSV.

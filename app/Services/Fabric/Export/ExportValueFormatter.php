@@ -155,7 +155,13 @@ final class ExportValueFormatter
 
     /**
      * Normaliza un valor de celda: quita saltos de línea y tabs que romperían
-     * la estructura del CSV.
+     * la estructura del CSV, y elimina los caracteres que XML prohíbe.
+     *
+     * El saneo XML va aquí (y no solo en el writer rápido) porque este método
+     * lo usa el camino clásico writeRow → CSV → OpenSpout. Un .xlsx es XML
+     * comprimido: si un carácter ilegal llega a la celda, Excel abre el archivo
+     * "reparando y quitando el contenido". Pasaba con vistas de historia clínica
+     * (hg.VW_HC_EvolucionesEspecialistas) y de glosas.
      */
     public static function sanitize(mixed $value): mixed
     {
@@ -163,7 +169,120 @@ final class ExportValueFormatter
             return $value;
         }
 
-        return str_replace(["\r\n", "\r", "\n", "\t"], ' ', $value);
+        return self::xmlSafe(str_replace(["\r\n", "\r", "\n", "\t"], ' ', $value));
+    }
+
+    /**
+     * Elimina todo codepoint que XML 1.0 NO admite.
+     *
+     * Fuente única de verdad para los dos caminos de export (FastXlsxWriter y
+     * el clásico con OpenSpout), porque ambos terminan escribiendo XML.
+     *
+     * Rango válido en XML 1.0:
+     *   \x09 \x0A \x0D | \x20–\uD7FF | \uE000–\uFFFD | \u10000–\u10FFFF
+     *
+     * Lo que se quita, y por qué aparece en datos reales:
+     *   - \x00–\x1F (salvo tab/LF/CR): campos varbinary mal casteados, texto
+     *     pegado desde Word.
+     *   - U+FFFE / U+FFFF: marcas de orden de bytes que quedaron dentro del
+     *     texto al importar de sistemas viejos. Son UTF-8 válido, así que
+     *     htmlspecialchars NO las filtra: hay que quitarlas explícitamente.
+     *   - Surrogates sueltos y bytes UTF-8 corruptos.
+     *
+     * Camino rápido: si la cadena es ASCII imprimible (el 99% de los valores)
+     * se devuelve tal cual, sin pagar el regex Unicode.
+     */
+    public static function xmlSafe(string $value): string
+    {
+        if ($value === '' || preg_match('/[^\x09\x0A\x0D\x20-\x7E]/', $value) !== 1) {
+            return $value;
+        }
+
+        $clean = preg_replace(self::XML_ILLEGAL_PATTERN, '', $value);
+
+        // preg_replace devuelve null si el UTF-8 de entrada estaba corrupto:
+        // se fuerza a UTF-8 válido y se reintenta.
+        if ($clean === null) {
+            $clean = preg_replace(
+                self::XML_ILLEGAL_PATTERN,
+                '',
+                mb_convert_encoding($value, 'UTF-8', 'UTF-8')
+            );
+        }
+
+        return $clean ?? '';
+    }
+
+    /** Codepoints fuera del rango que XML 1.0 permite. */
+    private const XML_ILLEGAL_PATTERN =
+        '/[^\x{09}\x{0A}\x{0D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u';
+
+    /**
+     * Decodifica una línea NDJSON tolerando las dos formas en que el NDJSON de
+     * Fabric viene malformado. Sin esto, la fila DESAPARECE del Excel sin aviso.
+     *
+     * Caso 1 — UTF-8 inválido (JSON_ERROR_UTF8):
+     *   Texto libre con Latin-1 sin convertir ("niño" como ni\xF1o) o secuencias
+     *   truncas. Se reintenta con JSON_INVALID_UTF8_SUBSTITUTE.
+     *
+     * Caso 2 — caracteres de control crudos (JSON_ERROR_CTRL_CHAR):
+     *   JSON prohíbe \x00–\x1F sin escapar dentro de un string. Si el origen
+     *   escribió el byte crudo, la línea entera es JSON inválido. Se escapan
+     *   esos bytes a \uXXXX y se reintenta.
+     *
+     * Medido: en una vista de historia clínica se perdía el 20% de las filas
+     * por este motivo.
+     *
+     * @return array<string,mixed>|null  null solo si la línea no es un objeto JSON
+     */
+    public static function decodeNdjsonLine(string $line): ?array
+    {
+        // Recortar ANTES de cualquier escape: el salto de línea final es parte
+        // del formato NDJSON, no del JSON. Si se escapa junto con los controles
+        // internos, queda un \u000a fuera de las comillas y el JSON se rompe.
+        $line = trim($line);
+
+        if ($line === '') {
+            return null;
+        }
+
+        $row = json_decode($line, true);
+
+        if (!is_array($row)) {
+            $error = json_last_error();
+
+            if ($error === JSON_ERROR_UTF8) {
+                $row = json_decode($line, true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
+            } elseif ($error === JSON_ERROR_CTRL_CHAR) {
+                $row = json_decode(self::escapeRawControlChars($line), true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
+            }
+
+            // Último intento: puede traer ambos problemas a la vez.
+            if (!is_array($row)) {
+                $row = json_decode(
+                    self::escapeRawControlChars($line),
+                    true,
+                    512,
+                    JSON_INVALID_UTF8_SUBSTITUTE
+                );
+            }
+        }
+
+        return is_array($row) && $row !== [] ? $row : null;
+    }
+
+    /**
+     * Escapa a \uXXXX los bytes de control crudos que hacen inválido el JSON.
+     * Se preservan \t \n \r escapados como corresponde, porque son legítimos
+     * dentro de un string JSON una vez escapados.
+     */
+    private static function escapeRawControlChars(string $line): string
+    {
+        return (string) preg_replace_callback(
+            '/[\x00-\x1F]/',
+            static fn (array $m): string => sprintf('\\u%04x', ord($m[0])),
+            $line
+        );
     }
 
     /**
