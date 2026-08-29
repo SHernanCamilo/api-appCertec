@@ -6,3 +6,22 @@
   AddHandler application/x-httpd-ea-php83 .php .php8 .phtml
 </IfModule>
 # php -- END cPanel-generated handler, do not edit
+
+# ─────────────────────────────────────────────────────────────────────────────
+# No recomprimir descargas ya comprimidas (xlsx, zip, gzip).
+#
+# Un .xlsx es un ZIP: si mod_deflate lo re-gzipea, el navegador puede recibir un
+# archivo con Content-Length erróneo y guardarlo cortado -> Excel abre
+# "reparando y quitando el contenido". Esto excluye esos tipos de la compresión.
+# ─────────────────────────────────────────────────────────────────────────────
+<IfModule mod_deflate.c>
+  SetEnvIfNoCase Request_URI \.(?:xlsx|xls|zip|gz|gzip)$ no-gzip dont-vary
+  # La descarga de export va por /export/download/ sin extensión en la URL:
+  SetEnvIfNoCase Request_URI export/download no-gzip dont-vary
+</IfModule>
+<IfModule mod_headers.c>
+  # Reafirma que el proxy no altere la codificación de esas descargas.
+  <IfModule mod_setenvif.c>
+    Header unset Content-Encoding env=no-gzip
+  </IfModule>
+</IfModule>

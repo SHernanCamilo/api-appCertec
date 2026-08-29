@@ -673,18 +673,35 @@ class FabricViewerController extends Controller
             ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             : 'text/csv; charset=utf-8';
 
+        // El archivo del servidor está íntegro (validado al generarse), pero
+        // llegaba corrupto al navegador: Apache/mod_deflate recomprimía la
+        // respuesta y el Content-Length quedaba mal, así que el navegador
+        // guardaba un .xlsx cortado. Un .xlsx YA es un ZIP: recomprimirlo no
+        // ahorra nada y sí lo rompe. Estos headers lo evitan.
+        $size = (int) filesize($path);
+
         // No se borra tras enviar: el usuario puede pedir la grilla y luego el
         // archivo, o volver a descargar. Lo limpia la expiracion de cache.
-        return response()->download(
+        $response = response()->download(
             $path,
             (string) ($conversion['filename'] ?? "export.{$format}"),
             [
-                'Content-Type'    => $contentType,
-                'X-Export-Format' => $format,
-                'X-Export-Rows'   => (string) ($conversion['rows'] ?? 0),
-                'Cache-Control'   => 'no-store, no-cache',
+                'Content-Type'      => $contentType,
+                'Content-Length'    => (string) $size,
+                // Apaga la compresión del proxy para este response (Apache/LiteSpeed/
+                // nginx respetan estas señales) — clave para que no re-gzipee el xlsx.
+                'Content-Encoding'  => 'identity',
+                'X-Accel-Buffering' => 'no',
+                'X-Export-Format'   => $format,
+                'X-Export-Rows'     => (string) ($conversion['rows'] ?? 0),
+                'Cache-Control'     => 'no-store, no-cache, must-revalidate',
             ]
         );
+
+        // Envío binario exacto: sin ninguna transformación de contenido.
+        $response->headers->set('Content-Transfer-Encoding', 'binary');
+
+        return $response;
     }
 
     /**
