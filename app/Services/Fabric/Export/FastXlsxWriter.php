@@ -358,6 +358,18 @@ final class FastXlsxWriter
             return null;
         }
 
+        // Validación FINAL leyendo la hoja DESDE EL ZIP, que es lo que hace Excel.
+        // Validar el XML suelto no basta: ZipArchive puede producir una entrada
+        // dañada con archivos grandes (el stream deflate queda mal en el borde,
+        // o el central directory necesita ZIP64), y close() igual devuelve true.
+        // Ese era el caso de las vistas grandes: XML suelto válido, pero Excel
+        // no podía leer la parte del ZIP y abría "reparando".
+        if (!self::packagedSheetIsReadable($xlsxPath, $sheetName)) {
+            @unlink($xlsxPath);
+
+            return null;
+        }
+
         // Marca de versión: si esto NO aparece en el log al exportar, es que el
         // worker corre bytecode viejo (OPcache) y hay que reiniciar de verdad.
         Log::info('[FastXlsxWriter] xlsx OK', [
@@ -365,6 +377,7 @@ final class FastXlsxWriter
             'sheet' => $sheetName,
             'rows'  => $dataRows,
             'cols'  => $colCount,
+            'bytes' => (int) filesize($xlsxPath),
         ]);
 
         return new ExportResult(
@@ -921,6 +934,73 @@ final class FastXlsxWriter
         $zip->setCompressionName('xl/worksheets/sheet1.xml', ZipArchive::CM_DEFLATE, self::ZIP_LEVEL);
 
         return $zip->close();
+    }
+
+    /**
+     * Abre el .xlsx ya cerrado, extrae la hoja DEL ZIP y valida su XML — igual
+     * que hará Excel. Detecta corrupción a nivel de ZIP que no se ve validando
+     * el XML suelto.
+     */
+    private static function packagedSheetIsReadable(string $xlsxPath, string $sheetName): bool
+    {
+        $zip = new ZipArchive();
+        if ($zip->open($xlsxPath) !== true) {
+            Log::error('[FastXlsxWriter] el xlsx final no abre como ZIP', ['sheet' => $sheetName]);
+
+            return false;
+        }
+
+        $idx = $zip->locateName('xl/worksheets/sheet1.xml');
+        if ($idx === false) {
+            $zip->close();
+            Log::error('[FastXlsxWriter] el xlsx final no contiene la hoja', ['sheet' => $sheetName]);
+
+            return false;
+        }
+
+        // Leer la entrada por streaming y parsearla incrementalmente: valida el
+        // deflate y el XML sin cargar los cientos de MB en RAM.
+        $stream = $zip->getStream('xl/worksheets/sheet1.xml');
+        if ($stream === false) {
+            $zip->close();
+            Log::error('[FastXlsxWriter] no se pudo leer la hoja del ZIP (entrada danada)', ['sheet' => $sheetName]);
+
+            return false;
+        }
+
+        $prev = libxml_use_internal_errors(true);
+        libxml_clear_errors();
+
+        $parser = xml_parser_create('UTF-8');
+        $ok     = true;
+
+        while (!feof($stream)) {
+            $chunk = fread($stream, 262144);
+            if ($chunk === false) {
+                $ok = false;
+                break;
+            }
+            if (!xml_parse($parser, $chunk, feof($stream))) {
+                $line = xml_get_current_line_number($parser);
+                $col  = xml_get_current_column_number($parser);
+                Log::error('[FastXlsxWriter] la hoja del ZIP tiene XML invalido', [
+                    'sheet'  => $sheetName,
+                    'line'   => $line,
+                    'column' => $col,
+                    'error'  => xml_error_string(xml_get_error_code($parser)),
+                ]);
+                $ok = false;
+                break;
+            }
+        }
+
+        xml_parser_free($parser);
+        fclose($stream);
+        $zip->close();
+        libxml_clear_errors();
+        libxml_use_internal_errors($prev);
+
+        return $ok;
     }
 
     private static function contentTypesXml(): string
