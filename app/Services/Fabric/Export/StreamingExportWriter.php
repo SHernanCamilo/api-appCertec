@@ -569,15 +569,18 @@ final class StreamingExportWriter
         ]);
 
         if (!$usaFormatoRico) {
-            // Se pasa el título para que el xlsx grande lleve la misma portada
-            // corporativa (JadeOne — esquema.vista + fecha) que el chico.
-            $fast = FastXlsxWriter::fromNdjsonGz($gzPath, $targetDir, $baseName, $view, "{$schema}.{$view}");
+            // Writer sobre OpenSpout: librería mantenida y probada que se encarga
+            // del ZIP, del escapado y del streaming. Reemplazó al generador de XML
+            // propio, que acumuló fallas (caracteres ilegales, escrituras
+            // parciales, empaquetado ZIP) difíciles de cazar.
+            // El título da la portada corporativa igual que en el camino chico.
+            $spout = SpoutXlsxWriter::fromNdjsonGz($gzPath, $targetDir, $baseName, $view, "{$schema}.{$view}");
 
-            if ($fast !== null) {
-                return $fast;
+            if ($spout !== null) {
+                return $spout;
             }
 
-            \Illuminate\Support\Facades\Log::warning('[StreamingExport] el writer rapido devolvio null, se usa el clasico', [
+            \Illuminate\Support\Facades\Log::warning('[StreamingExport] OpenSpout devolvio null, se usa el camino clasico', [
                 'view' => "{$schema}.{$view}",
             ]);
         }
