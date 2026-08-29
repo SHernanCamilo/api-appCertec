@@ -452,6 +452,44 @@ final class FastXlsxWriterTest extends TestCase
         $this->assertSame('MALCHAR', (string) $this->readRows($result->path)[1][0]);
     }
 
+    /**
+     * Regresión: hg.VW_HC_EvolucionesEspecialistas_Tja traía en las notas de
+     * historia clínica bytes Latin-1 crudos (ñ mal codificada, secuencias
+     * truncas). json_decode devolvía null y esas filas DESAPARECÍAN del Excel.
+     *
+     * Aquí se escribe NDJSON con bytes inválidos crudos (como los manda el
+     * pipeline real, no vía json_encode) y se verifica que ninguna fila se
+     * pierde y que el XML sigue siendo válido.
+     */
+    public function test_recupera_filas_con_utf8_invalido_sin_perderlas(): void
+    {
+        $path = $this->tmpDir . '/raw.ndjson.gz';
+        $gz   = gzopen($path, 'wb1');
+        // Fila 1 normal, fila 2 con ñ en Latin-1 (0xF1), fila 3 con secuencia
+        // UTF-8 trunca (0xE2 0x82 sin el tercer byte).
+        gzwrite($gz, "{\"Id\":1,\"Nota\":\"normal\"}\n");
+        gzwrite($gz, "{\"Id\":2,\"Nota\":\"ni\xF1o enfermo\"}\n");
+        gzwrite($gz, "{\"Id\":3,\"Nota\":\"corte\xE2\x82aqui\"}\n");
+        gzclose($gz);
+
+        $result = FastXlsxWriter::fromNdjsonGz($path, $this->tmpDir, 'export', 'VW_HC');
+
+        $this->assertNotNull($result);
+        $this->assertSame(3, $result->rows, 'Ninguna fila con UTF-8 inválido debe perderse');
+
+        // Y el XML de la hoja debe validar
+        $zip = new \ZipArchive();
+        $zip->open($result->path);
+        $sheetXml = $zip->getFromName('xl/worksheets/sheet1.xml');
+        $zip->close();
+
+        $prev = libxml_use_internal_errors(true);
+        $doc  = simplexml_load_string($sheetXml);
+        libxml_use_internal_errors($prev);
+
+        $this->assertNotFalse($doc, 'El XML debe ser válido pese a los bytes Latin-1');
+    }
+
     public function test_conserva_emojis_y_caracteres_multibyte_validos(): void
     {
         $gz = $this->writeNdjsonGz([

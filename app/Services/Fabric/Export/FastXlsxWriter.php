@@ -184,9 +184,8 @@ final class FastXlsxWriter
                     continue;
                 }
 
-                /** @var array<string,mixed>|null $row */
-                $row = json_decode($line, true);
-                if (!is_array($row) || $row === []) {
+                $row = self::decodeLine($line);
+                if ($row === null) {
                     continue;
                 }
 
@@ -279,6 +278,17 @@ final class FastXlsxWriter
         fwrite($out, $buffer . self::sheetEpilog($colCount, $rowNumber, $letters, $hasCover));
         fclose($out);
 
+        // Red de seguridad: verificar que el XML de la hoja es válido ANTES de
+        // empaquetar. Si por algún caso no previsto quedó mal formado, se
+        // devuelve null (el llamador entrega CSV) en vez de darle a Excel un
+        // archivo que abrirá "reparando y quitando el contenido". Se registra
+        // la línea exacta para poder cazar el dato que lo causó.
+        if (!self::sheetXmlIsValid($sheetXml, $sheetName)) {
+            @unlink($sheetXml);
+
+            return null;
+        }
+
         if (!self::package($sheetXml, $xlsxPath, $sheetName)) {
             @unlink($sheetXml);
             @unlink($xlsxPath);
@@ -299,6 +309,36 @@ final class FastXlsxWriter
             rows: $dataRows,
             bytes: (int) filesize($xlsxPath),
         );
+    }
+
+    // =========================================================================
+    // DECODIFICACIÓN ROBUSTA DE CADA LÍNEA NDJSON
+    // =========================================================================
+
+    /**
+     * Decodifica una línea NDJSON tolerando UTF-8 inválido.
+     *
+     * Por qué: el NDJSON viene de Fabric/SQL Server, y campos de texto libre
+     * (historia clínica, notas) suelen traer bytes que no son UTF-8 válido
+     * (Latin-1 sin convertir, secuencias truncas). Con json_decode a secas esas
+     * líneas devuelven null y la fila DESAPARECÍA del Excel sin aviso.
+     *
+     * Aquí, si el primer intento falla por UTF-8 malformado, se re-decodifica
+     * pidiéndole a PHP que sustituya los bytes inválidos (JSON_INVALID_UTF8_SUBSTITUTE).
+     * Así la fila se conserva y el saneo final de xmlText() garantiza XML válido.
+     *
+     * @return array<string,mixed>|null  null solo si la línea no es JSON de objeto
+     */
+    private static function decodeLine(string $line): ?array
+    {
+        $row = json_decode($line, true);
+
+        if (!is_array($row) && json_last_error() === JSON_ERROR_UTF8) {
+            // Reintento tolerante: sustituye los bytes UTF-8 inválidos.
+            $row = json_decode($line, true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
+        }
+
+        return is_array($row) && $row !== [] ? $row : null;
     }
 
     // =========================================================================
@@ -329,8 +369,8 @@ final class FastXlsxWriter
                 continue;
             }
 
-            $row = json_decode($line, true);
-            if (!is_array($row) || $row === []) {
+            $row = self::decodeLine($line);
+            if ($row === null) {
                 continue;
             }
 
@@ -708,8 +748,55 @@ final class FastXlsxWriter
     }
 
     // =========================================================================
-    // EMPAQUETADO ZIP
+    // VALIDACIÓN Y EMPAQUETADO ZIP
     // =========================================================================
+
+    /**
+     * ¿El XML de la hoja es bien formado? Se recorre en streaming con XMLReader
+     * (no carga los cientos de MB en RAM). Si algo quedó mal, registra la línea
+     * y columna exactas para poder identificar el dato que lo causó.
+     */
+    private static function sheetXmlIsValid(string $sheetXmlPath, string $sheetName): bool
+    {
+        $prev = libxml_use_internal_errors(true);
+        libxml_clear_errors();
+
+        $reader = new \XMLReader();
+        if ($reader->open($sheetXmlPath) === false) {
+            libxml_use_internal_errors($prev);
+
+            return false;
+        }
+
+        $valid = true;
+        try {
+            while ($reader->read()) {
+                // recorrer todo el árbol; cualquier char ilegal lanza error libxml
+            }
+        } catch (\Throwable) {
+            $valid = false;
+        }
+
+        $errors = libxml_get_errors();
+        $reader->close();
+        libxml_clear_errors();
+        libxml_use_internal_errors($prev);
+
+        if ($errors !== []) {
+            $first = $errors[0];
+            Log::error('[FastXlsxWriter] XML de la hoja invalido, se cae a CSV', [
+                'sheet'   => $sheetName,
+                'line'    => $first->line,
+                'column'  => $first->column,
+                'code'    => $first->code,
+                'message' => trim($first->message),
+            ]);
+
+            return false;
+        }
+
+        return $valid;
+    }
 
     /**
      * Arma el .xlsx (un ZIP con los XMLs del formato OOXML mínimo).
