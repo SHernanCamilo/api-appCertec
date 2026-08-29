@@ -673,35 +673,27 @@ class FabricViewerController extends Controller
             ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             : 'text/csv; charset=utf-8';
 
-        // El archivo del servidor está íntegro (validado al generarse), pero
-        // llegaba corrupto al navegador: Apache/mod_deflate recomprimía la
-        // respuesta y el Content-Length quedaba mal, así que el navegador
-        // guardaba un .xlsx cortado. Un .xlsx YA es un ZIP: recomprimirlo no
-        // ahorra nada y sí lo rompe. Estos headers lo evitan.
-        $size = (int) filesize($path);
-
+        // IMPORTANTE: no forzar Content-Length ni Content-Encoding a mano.
+        // response()->download() (BinaryFileResponse de Symfony) ya calcula el
+        // Content-Length real y gestiona el envío binario. Sobrescribirlos hacía
+        // que el navegador recibiera un archivo cortado y Excel dijera "el
+        // formato o la extensión no son válidos".
+        //
+        // Para que el proxy no recomprima el xlsx (un .xlsx ya es un ZIP) está
+        // la regla de mod_deflate en el .htaccess, que es el lugar correcto.
+        //
         // No se borra tras enviar: el usuario puede pedir la grilla y luego el
         // archivo, o volver a descargar. Lo limpia la expiracion de cache.
-        $response = response()->download(
+        return response()->download(
             $path,
             (string) ($conversion['filename'] ?? "export.{$format}"),
             [
-                'Content-Type'      => $contentType,
-                'Content-Length'    => (string) $size,
-                // Apaga la compresión del proxy para este response (Apache/LiteSpeed/
-                // nginx respetan estas señales) — clave para que no re-gzipee el xlsx.
-                'Content-Encoding'  => 'identity',
-                'X-Accel-Buffering' => 'no',
-                'X-Export-Format'   => $format,
-                'X-Export-Rows'     => (string) ($conversion['rows'] ?? 0),
-                'Cache-Control'     => 'no-store, no-cache, must-revalidate',
+                'Content-Type'    => $contentType,
+                'X-Export-Format' => $format,
+                'X-Export-Rows'   => (string) ($conversion['rows'] ?? 0),
+                'Cache-Control'   => 'no-store, no-cache',
             ]
         );
-
-        // Envío binario exacto: sin ninguna transformación de contenido.
-        $response->headers->set('Content-Transfer-Encoding', 'binary');
-
-        return $response;
     }
 
     /**
