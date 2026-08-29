@@ -66,6 +66,13 @@ use ZipArchive;
  */
 final class FastXlsxWriter
 {
+    /**
+     * Marca de versión del writer. Sirve para verificar en el log de producción
+     * que el worker está ejecutando el código nuevo y no bytecode viejo cacheado
+     * por OPcache. Súbelo en cada cambio relevante del saneo/validación.
+     */
+    private const BUILD = '2026-08-29-xmlguard';
+
     /** Límite físico de filas de una hoja de Excel (incluye el encabezado). */
     public const EXCEL_MAX_ROWS = 1048576;
 
@@ -301,6 +308,15 @@ final class FastXlsxWriter
         if (!is_file($xlsxPath)) {
             return null;
         }
+
+        // Marca de versión: si esto NO aparece en el log al exportar, es que el
+        // worker corre bytecode viejo (OPcache) y hay que reiniciar de verdad.
+        Log::info('[FastXlsxWriter] xlsx OK', [
+            'build' => self::BUILD,
+            'sheet' => $sheetName,
+            'rows'  => $dataRows,
+            'cols'  => $colCount,
+        ]);
 
         return new ExportResult(
             path: $xlsxPath,

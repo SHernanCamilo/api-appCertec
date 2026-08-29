@@ -6,10 +6,13 @@ namespace Tests\Unit\Services\Fabric;
 
 use App\Services\Fabric\Export\ExportValueFormatter;
 use App\Services\Fabric\Export\FastXlsxWriter;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 /**
  * Fija el comportamiento del escritor rápido de xlsx.
+ *
+ * Extiende Tests\TestCase (no el de PHPUnit puro) porque el writer usa los
+ * helpers de Laravel now() y Log en el camino de éxito.
  *
  * FastXlsxWriter arma el XML de la hoja a mano, así que hay dos riesgos que
  * estos tests cubren de forma explícita:
