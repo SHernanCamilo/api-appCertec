@@ -79,8 +79,14 @@ final class FastXlsxWriter
     /** Filas que se leen al inicio para deducir columnas, tipos y anchos. */
     private const SAMPLE_ROWS = 200;
 
-    /** Tamaño del búfer de XML antes de volcar a disco. */
-    private const FLUSH_BYTES = 1048576;
+    /**
+     * Tamaño del búfer de XML antes de volcar a disco.
+     *
+     * 256 KB en vez de 1 MB: los búferes grandes aumentan la probabilidad de
+     * escrituras parciales (que ahora se manejan en writeAll, pero es mejor no
+     * provocarlas) y el rendimiento es prácticamente idéntico.
+     */
+    private const FLUSH_BYTES = 262144;
 
     /**
      * Nivel de compresión del ZIP.
@@ -175,15 +181,24 @@ final class FastXlsxWriter
 
         $hasCover = $title !== null;
 
-        fwrite($out, self::sheetProlog($headers, $widths, $letters, $hasCover ? $title : null));
+        if (!self::writeAll($out, self::sheetProlog($headers, $widths, $letters, $hasCover ? $title : null))) {
+            fclose($out);
+            gzclose($gz);
+            @unlink($sheetXml);
+
+            Log::error('[FastXlsxWriter] fallo al escribir la cabecera de la hoja', ['sheet' => $sheetName]);
+
+            return null;
+        }
 
         /** @var array<string,int> Cache fecha(YYYY-MM-DD) → serial de Excel */
         $dayCache = [];
         $buffer   = '';
         // Con portada los datos empiezan en la fila 4 (título, info, encabezado);
         // sin portada, en la fila 2 (solo encabezado en la 1).
-        $rowNumber = $hasCover ? self::HEADER_ROW : 1;
-        $truncated = false;
+        $rowNumber   = $hasCover ? self::HEADER_ROW : 1;
+        $truncated   = false;
+        $writeFailed = false;
 
         try {
             while (($line = gzgets($gz)) !== false) {
@@ -251,12 +266,30 @@ final class FastXlsxWriter
                 $buffer .= '</row>';
 
                 if (isset($buffer[self::FLUSH_BYTES])) {
-                    fwrite($out, $buffer);
+                    if (!self::writeAll($out, $buffer)) {
+                        $writeFailed = true;
+                        break;
+                    }
                     $buffer = '';
                 }
             }
         } finally {
             gzclose($gz);
+        }
+
+        // Escritura incompleta (disco lleno, cuota, error de I/O): abortar. Antes
+        // se seguía adelante y el XML quedaba truncado a la mitad, que es lo que
+        // Excel reporta como "Cargar error. Línea N, columna 0".
+        if ($writeFailed) {
+            fclose($out);
+            @unlink($sheetXml);
+
+            Log::error('[FastXlsxWriter] escritura incompleta del XML, se cae a CSV', [
+                'sheet'      => $sheetName,
+                'free_bytes' => @disk_free_space($targetDir) ?: null,
+            ]);
+
+            return null;
         }
 
         $dataRows = $rowNumber - ($hasCover ? self::HEADER_ROW : 1);
@@ -282,8 +315,24 @@ final class FastXlsxWriter
             return null;
         }
 
-        fwrite($out, $buffer . self::sheetEpilog($colCount, $rowNumber, $letters, $hasCover));
-        fclose($out);
+        $epilogOk = self::writeAll($out, $buffer . self::sheetEpilog($colCount, $rowNumber, $letters, $hasCover));
+
+        // fclose también puede fallar si quedaban datos en el búfer del SO y no
+        // se pudieron volcar (disco lleno). Hay que comprobarlo.
+        $closeOk = fclose($out);
+
+        if (!$epilogOk || !$closeOk) {
+            @unlink($sheetXml);
+
+            Log::error('[FastXlsxWriter] no se pudo cerrar el XML completo, se cae a CSV', [
+                'sheet'      => $sheetName,
+                'epilog_ok'  => $epilogOk,
+                'close_ok'   => $closeOk,
+                'free_bytes' => @disk_free_space($targetDir) ?: null,
+            ]);
+
+            return null;
+        }
 
         // Red de seguridad: verificar que el XML de la hoja es válido ANTES de
         // empaquetar. Si por algún caso no previsto quedó mal formado, se
@@ -740,12 +789,73 @@ final class FastXlsxWriter
     // =========================================================================
 
     /**
+     * Escribe TODO el contenido, reintentando las escrituras parciales.
+     *
+     * fwrite() no garantiza escribir los bytes pedidos: con búferes grandes, o
+     * si el sistema de archivos está bajo presión, devuelve menos. El código
+     * anterior ignoraba el retorno, así que un flush parcial dejaba el XML
+     * truncado y Excel reportaba "Cargar error. Línea N, columna 0" (columna 0 =
+     * fin de archivo inesperado, no un carácter inválido).
+     *
+     * @param resource $handle
+     */
+    private static function writeAll($handle, string $data): bool
+    {
+        $length  = strlen($data);
+        $written = 0;
+
+        while ($written < $length) {
+            $chunk = fwrite($handle, substr($data, $written));
+
+            // false = error de I/O; 0 = no se pudo avanzar (disco lleno)
+            if ($chunk === false || $chunk === 0) {
+                return false;
+            }
+
+            $written += $chunk;
+        }
+
+        return true;
+    }
+
+    /**
      * ¿El XML de la hoja es bien formado? Se recorre en streaming con XMLReader
      * (no carga los cientos de MB en RAM). Si algo quedó mal, registra la línea
      * y columna exactas para poder identificar el dato que lo causó.
      */
     private static function sheetXmlIsValid(string $sheetXmlPath, string $sheetName): bool
     {
+        // Chequeo barato de truncamiento antes del recorrido completo: el archivo
+        // debe terminar en </worksheet>. Detecta al instante el caso de XML
+        // cortado sin tener que parsear cientos de MB.
+        $size = @filesize($sheetXmlPath);
+        if ($size === false || $size < 100) {
+            Log::error('[FastXlsxWriter] XML de la hoja vacio o inexistente', [
+                'sheet' => $sheetName,
+                'bytes' => $size,
+            ]);
+
+            return false;
+        }
+
+        $tail = '';
+        $fh   = @fopen($sheetXmlPath, 'rb');
+        if ($fh !== false) {
+            fseek($fh, -32, SEEK_END);
+            $tail = (string) fread($fh, 32);
+            fclose($fh);
+        }
+
+        if (!str_contains($tail, '</worksheet>')) {
+            Log::error('[FastXlsxWriter] XML de la hoja TRUNCADO (no cierra en </worksheet>)', [
+                'sheet' => $sheetName,
+                'bytes' => $size,
+                'tail'  => substr($tail, -40),
+            ]);
+
+            return false;
+        }
+
         $prev = libxml_use_internal_errors(true);
         libxml_clear_errors();
 
