@@ -419,6 +419,53 @@ final class FastXlsxWriterTest extends TestCase
         $this->assertSame('007112233', (string) $rows[3][1], 'El cero inicial se conserva');
     }
 
+    /**
+     * Regresión: gd.VW_Glosa_EstadisticoGlosas_Fla traía valores con U+FFFE, un
+     * codepoint que XML 1.0 prohíbe pero que es UTF-8 válido, así que pasaba el
+     * filtro viejo (strpbrk single-byte) y llegaba crudo al XML. Excel lo abría
+     * "reparando" y quitaba la hoja: "Cargar error. Línea N".
+     */
+    public function test_elimina_codepoints_unicode_prohibidos_por_xml(): void
+    {
+        // U+FFFE y U+FFFF son válidos en UTF-8 pero ilegales en XML 1.0
+        $gz = $this->writeNdjsonGz([
+            ['Entidad' => "MAL\u{FFFE}CHAR\u{FFFF}"],
+            ['Entidad' => 'NORMAL'],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_Glosa');
+        $this->assertNotNull($result);
+
+        // El XML de la hoja debe validar (Excel no lo "reparará")
+        $zip = new \ZipArchive();
+        $this->assertTrue($zip->open($result->path) === true);
+        $sheetXml = $zip->getFromName('xl/worksheets/sheet1.xml');
+        $zip->close();
+
+        $prev = libxml_use_internal_errors(true);
+        $doc  = simplexml_load_string($sheetXml);
+        libxml_use_internal_errors($prev);
+
+        $this->assertNotFalse($doc, 'El XML de la hoja debe ser válido para que Excel no lo repare');
+
+        // El texto queda sin los codepoints prohibidos, conservando lo legible
+        $this->assertSame('MALCHAR', (string) $this->readRows($result->path)[1][0]);
+    }
+
+    public function test_conserva_emojis_y_caracteres_multibyte_validos(): void
+    {
+        $gz = $this->writeNdjsonGz([
+            ['Nota' => 'Chino 中文 y emoji 😀'],
+            ['Nota' => 'ok'],
+        ]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW');
+        $this->assertNotNull($result);
+
+        // No se deben sobre-limpiar los codepoints válidos
+        $this->assertSame('Chino 中文 y emoji 😀', (string) $this->readRows($result->path)[1][0]);
+    }
+
     public function test_maneja_mas_columnas_que_la_z(): void
     {
         $row = [];

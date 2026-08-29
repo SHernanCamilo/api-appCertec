@@ -91,17 +91,6 @@ final class FastXlsxWriter
      */
     private const ZIP_LEVEL = 3;
 
-    /**
-     * Caracteres que obligan a escapar el texto.
-     *
-     * Se resuelve con un solo strpbrk() por celda (rapidísimo) y solo se llama
-     * a htmlspecialchars() cuando de verdad hay algo que escapar. Incluye los
-     * caracteres de control que XML 1.0 prohíbe y que sí aparecen en datos
-     * traídos de SQL Server (por ejemplo \x00 en campos varbinary mal casteados).
-     */
-    private const XML_UNSAFE = "<>&\"'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0B\x0C\x0E\x0F"
-        . "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F";
-
     /** Índices de estilo definidos en styles.xml (ver buildStylesXml). */
     private const STYLE_HEADER    = 1;
     private const STYLE_DATE      = 2;
@@ -248,17 +237,9 @@ final class FastXlsxWriter
                     }
 
                     // Texto (y todo lo que no encajó como fecha o número).
-                    // Va inline en vez de llamar a textCell(): una llamada de
-                    // función por celda son 32 millones de llamadas y se notan
-                    // en el reloj.
-                    $text = (string) $value;
-
-                    if (strpbrk($text, self::XML_UNSAFE) !== false) {
-                        $text = self::escape($text);
-                    }
-
                     $buffer .= '<c r="' . $ref . '" t="inlineStr"><is><t xml:space="preserve">'
-                        . $text . '</t></is></c>';
+                        . self::xmlText((string) $value)
+                        . '</t></is></c>';
                 }
 
                 $buffer .= '</row>';
@@ -565,26 +546,46 @@ final class FastXlsxWriter
     // =========================================================================
 
     /**
-     * Escapa texto para XML y quita los caracteres de control que XML 1.0
-     * prohíbe (un \x00 dentro del texto hace que Excel rechace todo el archivo).
+     * Deja el texto listo para meterse en el XML de la hoja: escapa < > & " '
+     * y elimina cualquier codepoint que XML 1.0 PROHÍBE.
      *
-     * Solo se llama cuando strpbrk() detectó algo que escapar, así que el costo
-     * no está en el camino caliente.
+     * Por qué no basta con htmlspecialchars: un dato como "MAL\u{FFFE}CHAR"
+     * (que aparece en vistas heredadas, p. ej. gd.VW_Glosa_EstadisticoGlosas)
+     * es UTF-8 válido, así que htmlspecialchars lo deja pasar, pero U+FFFE está
+     * prohibido en XML 1.0. Excel entonces "repara" el archivo quitando la hoja
+     * y muestra "Cargar error. Línea N". Lo mismo con los caracteres de control
+     * \x00–\x1F (salvo tab, LF y CR), U+FFFF y los surrogates sueltos.
+     *
+     * Caracteres XML 1.0 válidos:
+     *   \x09 \x0A \x0D | \x20–\uD7FF | \uE000–\uFFFD | \u10000–\u10FFFF
+     *
+     * Camino rápido: si la cadena es ASCII imprimible pura (el 99% de los
+     * valores), se salta el regex y solo se escapa. El regex Unicode solo corre
+     * cuando de verdad hay bytes altos o de control.
      */
-    private static function escape(string $value): string
+    private static function xmlText(string $value): string
     {
-        static $control = [
-            "\x00", "\x01", "\x02", "\x03", "\x04", "\x05", "\x06", "\x07", "\x08",
-            "\x0B", "\x0C", "\x0E", "\x0F", "\x10", "\x11", "\x12", "\x13", "\x14",
-            "\x15", "\x16", "\x17", "\x18", "\x19", "\x1A", "\x1B", "\x1C", "\x1D",
-            "\x1E", "\x1F",
-        ];
+        // ¿Hay algo fuera del ASCII imprimible + tab/LF/CR? Si no, camino corto.
+        if (preg_match('/[^\x09\x0A\x0D\x20-\x7E]/', $value) === 1) {
+            // Quita todo codepoint que XML no admite. La 'u' interpreta UTF-8;
+            // si la cadena trae bytes UTF-8 inválidos, el regex falla y se cae
+            // al saneo byte a byte de respaldo.
+            $clean = preg_replace(
+                '/[^\x{09}\x{0A}\x{0D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u',
+                '',
+                $value
+            );
 
-        return htmlspecialchars(
-            str_replace($control, '', $value),
-            ENT_QUOTES | ENT_XML1,
-            'UTF-8'
-        );
+            // preg_replace devuelve null si el UTF-8 estaba corrupto: se limpia
+            // forzando a UTF-8 válido y se reintenta.
+            $value = $clean ?? preg_replace(
+                '/[^\x{09}\x{0A}\x{0D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u',
+                '',
+                mb_convert_encoding($value, 'UTF-8', 'UTF-8')
+            ) ?? '';
+        }
+
+        return htmlspecialchars($value, ENT_QUOTES | ENT_XML1, 'UTF-8');
     }
 
     /**
@@ -632,7 +633,7 @@ final class FastXlsxWriter
         // de PhpSpreadsheet para vistas chicas). Las celdas fusionadas se
         // declaran al final, en el epílogo.
         if ($hasCover) {
-            $titleText = strpbrk($title, self::XML_UNSAFE) !== false ? self::escape($title) : $title;
+            $titleText = self::xmlText($title);
             $info      = 'Exportado: ' . now()->format('d/m/Y H:i');
 
             $xml .= '<row r="' . self::TITLE_ROW . '" ht="20" customHeight="1">'
@@ -649,9 +650,7 @@ final class FastXlsxWriter
 
         foreach ($headers as $i => $header) {
             $ref  = ($letters[$i] ?? 'A') . $headerRow;
-            $text = strpbrk($header, self::XML_UNSAFE) !== false
-                ? self::escape($header)
-                : $header;
+            $text = self::xmlText($header);
 
             $xml .= '<c r="' . $ref . '" s="' . self::STYLE_HEADER . '" t="inlineStr"><is><t>'
                 . $text . '</t></is></c>';
