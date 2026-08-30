@@ -154,14 +154,35 @@ final class ExportValueFormatter
     }
 
     /**
-     * Normaliza un valor de celda: quita saltos de línea y tabs que romperían
-     * la estructura del CSV, y elimina los caracteres que XML prohíbe.
+     * Máximo de caracteres que se escriben en una celda de texto.
      *
-     * El saneo XML va aquí (y no solo en el writer rápido) porque este método
-     * lo usa el camino clásico writeRow → CSV → OpenSpout. Un .xlsx es XML
-     * comprimido: si un carácter ilegal llega a la celda, Excel abre el archivo
-     * "reparando y quitando el contenido". Pasaba con vistas de historia clínica
-     * (hg.VW_HC_EvolucionesEspecialistas) y de glosas.
+     * Las notas de historia clínica (Analisis, Observacion, Diagnostico) traen
+     * párrafos enteros. Una celda con 4.000 caracteres estira la fila hasta
+     * ocupar toda la pantalla y vuelve la hoja imposible de leer. Se recorta y
+     * se marca con “…” para que se vea que hay más contenido.
+     *
+     * El dato completo sigue estando en la vista y en el visor web: el Excel es
+     * para analizar y filtrar, no para leer historias clínicas enteras.
+     */
+    public const MAX_CELL_TEXT = 300;
+
+    /**
+     * Normaliza un valor de celda para que la hoja quede legible y válida.
+     *
+     * Hace, en este orden:
+     *   1. Colapsa saltos de línea y tabuladores a un espacio. Sin esto la fila
+     *      se estira con las notas de varios párrafos (y en CSV rompía la
+     *      estructura de filas).
+     *   2. Colapsa espacios repetidos que quedan al unir los párrafos.
+     *   3. Elimina los codepoints que XML prohíbe (ver xmlSafe): un .xlsx es XML
+     *      comprimido, y un carácter ilegal hace que Excel abra el archivo
+     *      "reparando y quitando el contenido".
+     *   4. Recorta a MAX_CELL_TEXT marcando el corte.
+     *
+     * Vive aquí, y no en cada writer, para que el resultado sea IDÉNTICO por los
+     * dos caminos de export (el clásico y el de OpenSpout). Tener reglas
+     * distintas en cada camino fue la causa de que unas vistas salieran bien y
+     * otras mal según su tamaño.
      */
     public static function sanitize(mixed $value): mixed
     {
@@ -169,7 +190,22 @@ final class ExportValueFormatter
             return $value;
         }
 
-        return self::xmlSafe(str_replace(["\r\n", "\r", "\n", "\t"], ' ', $value));
+        if (strpbrk($value, "\r\n\t") !== false) {
+            $value = str_replace(["\r\n", "\r", "\n", "\t"], ' ', $value);
+        }
+
+        if (str_contains($value, '  ')) {
+            $value = (string) preg_replace('/ {2,}/', ' ', $value);
+        }
+
+        $value = trim(self::xmlSafe($value));
+
+        // mb_* para no cortar un carácter multibyte por la mitad
+        if (mb_strlen($value) > self::MAX_CELL_TEXT) {
+            $value = mb_substr($value, 0, self::MAX_CELL_TEXT - 1) . '…';
+        }
+
+        return $value;
     }
 
     /**

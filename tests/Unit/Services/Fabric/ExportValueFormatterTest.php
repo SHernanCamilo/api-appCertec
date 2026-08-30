@@ -293,6 +293,67 @@ final class ExportValueFormatterTest extends TestCase
     }
 
     // =========================================================================
+    // Presentación de la celda: sin saltos, sin espacios dobles y recortada
+    // =========================================================================
+
+    /**
+     * Las notas de historia clínica traen párrafos con saltos de línea. Si se
+     * escriben tal cual, la fila del Excel se estira hasta ocupar la pantalla.
+     */
+    public function test_colapsa_los_saltos_de_linea_a_un_espacio(): void
+    {
+        $nota = "PRIMERA LINEA\nSEGUNDA LINEA\r\nTERCERA\tCUARTA";
+
+        $result = (string) ExportValueFormatter::sanitize($nota);
+
+        $this->assertStringNotContainsString("\n", $result);
+        $this->assertStringNotContainsString("\r", $result);
+        $this->assertStringNotContainsString("\t", $result);
+        $this->assertSame('PRIMERA LINEA SEGUNDA LINEA TERCERA CUARTA', $result);
+    }
+
+    public function test_colapsa_espacios_repetidos(): void
+    {
+        $this->assertSame(
+            'TEXTO CON ESPACIOS',
+            ExportValueFormatter::sanitize("TEXTO    CON\n\n  ESPACIOS")
+        );
+    }
+
+    public function test_recorta_el_texto_largo_y_marca_el_corte(): void
+    {
+        $largo = str_repeat('A', 1000);
+
+        $result = (string) ExportValueFormatter::sanitize($largo);
+
+        $this->assertSame(ExportValueFormatter::MAX_CELL_TEXT, mb_strlen($result));
+        $this->assertStringEndsWith('…', $result);
+    }
+
+    public function test_no_toca_el_texto_que_ya_cabe(): void
+    {
+        $corto = 'INSUFICIENCIA VENOSA (CRONICA) (PERIFERICA)';
+
+        $this->assertSame($corto, ExportValueFormatter::sanitize($corto));
+    }
+
+    public function test_recorta_sin_partir_caracteres_multibyte(): void
+    {
+        // 400 emojis: si se cortara por bytes, quedaría un carácter roto
+        $result = (string) ExportValueFormatter::sanitize(str_repeat('😀', 400));
+
+        $this->assertSame(ExportValueFormatter::MAX_CELL_TEXT, mb_strlen($result));
+        $this->assertTrue(mb_check_encoding($result, 'UTF-8'), 'El recorte debe dejar UTF-8 válido');
+    }
+
+    public function test_no_altera_los_valores_que_no_son_texto(): void
+    {
+        $this->assertSame(1500, ExportValueFormatter::sanitize(1500));
+        $this->assertSame(12.5, ExportValueFormatter::sanitize(12.5));
+        $this->assertNull(ExportValueFormatter::sanitize(null));
+    }
+
+    // =========================================================================
     // decodeNdjsonLine — ninguna fila debe perderse
     // =========================================================================
 

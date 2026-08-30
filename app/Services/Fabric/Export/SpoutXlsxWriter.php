@@ -66,6 +66,13 @@ final class SpoutXlsxWriter
     /** Azul corporativo del encabezado. */
     private const HEADER_BG = '1B3A5C';
 
+    /** Ancho mínimo y máximo de columna, en caracteres. */
+    private const MIN_COL_WIDTH = 10;
+    private const MAX_COL_WIDTH = 45;
+
+    /** Alto fijo de las filas de datos, para que ninguna se estire. */
+    private const DATA_ROW_HEIGHT = 15.0;
+
     /**
      * Genera el .xlsx a partir de un NDJSON gzipeado.
      *
@@ -115,9 +122,16 @@ final class SpoutXlsxWriter
         $options->SHOULD_USE_INLINE_STRINGS = true;
         $options->setTempFolder($tempDir);
 
+        // Alto de fila fijo: junto con el colapso de saltos de línea en cellText(),
+        // garantiza que ninguna fila se estire por una nota larga.
+        $options->DEFAULT_ROW_HEIGHT = self::DATA_ROW_HEIGHT;
+
         // Anchos de columna (OpenSpout los aplica al ensamblar la hoja)
         foreach ($widths as $i => $len) {
-            $options->setColumnWidth((float) max(9, min(60, $len + 3)), $i + 1);
+            $options->setColumnWidth(
+                (float) max(self::MIN_COL_WIDTH, min(self::MAX_COL_WIDTH, $len + 2)),
+                $i + 1
+            );
         }
 
         $writer   = new Writer($options);
@@ -211,11 +225,7 @@ final class SpoutXlsxWriter
                         }
                     }
 
-                    // Texto. xmlSafe es imprescindible: OpenSpout escapa < > &
-                    // pero NO quita los caracteres que XML prohíbe.
-                    $cells[] = StringCell::fromValue(
-                        ExportValueFormatter::xmlSafe((string) $value)
-                    );
+                    $cells[] = StringCell::fromValue(self::cellText((string) $value));
                 }
 
                 $writer->addRow(new Row($cells));
@@ -303,6 +313,29 @@ final class SpoutXlsxWriter
             rows: $dataRows,
             bytes: $bytes,
         );
+    }
+
+    // =========================================================================
+    // TEXTO DE CELDA
+    // =========================================================================
+
+    /**
+     * Deja un valor de texto listo para la celda:
+     *
+     *   1. xmlSafe: quita los codepoints que XML prohíbe (imprescindible, porque
+     *      OpenSpout escapa < > & pero no filtra U+FFFE ni los de control).
+     *   2. Colapsa saltos de línea y tabuladores a un espacio. Sin esto, una nota
+     *      de historia clínica con párrafos estira la fila hasta ocupar toda la
+     *      pantalla, que es lo que hacía la hoja ilegible.
+     *   3. Colapsa espacios repetidos, que quedan al unir los párrafos.
+     *   4. Recorta a MAX_TEXT_LENGTH y marca el corte con “…”.
+     */
+    private static function cellText(string $value): string
+    {
+        // Delega en la regla compartida para que el resultado sea idéntico al
+        // del camino clásico. Tener normalizaciones distintas por camino era la
+        // causa de que unas vistas salieran bien y otras mal según su tamaño.
+        return (string) ExportValueFormatter::sanitize($value);
     }
 
     // =========================================================================
@@ -403,28 +436,52 @@ final class SpoutXlsxWriter
     }
 
     /**
+     * Ancho estimado por columna, en caracteres.
+     *
+     * Se mide sobre el texto YA normalizado (saltos colapsados y recortado a
+     * MAX_TEXT_LENGTH), porque medir el texto crudo daba anchos absurdos para
+     * las notas de historia clínica. El tope real lo aplica el llamador con
+     * MAX_COL_WIDTH; aquí se usa la mediana en vez del máximo para que un valor
+     * atípico no ensanche toda la columna.
+     *
      * @param  list<string>      $headers
      * @param  list<list<mixed>> $sample
      * @return array<int,int>
      */
     private static function estimateWidths(array $headers, array $sample): array
     {
-        $widths = [];
+        $widths  = [];
+        $lengths = [];
 
         foreach ($headers as $i => $header) {
-            $widths[$i] = mb_strlen($header);
+            $widths[$i]  = mb_strlen($header);
+            $lengths[$i] = [];
         }
 
         foreach ($sample as $row) {
-            foreach ($widths as $i => $current) {
+            foreach ($widths as $i => $_current) {
                 $value = $row[$i] ?? null;
-                if ($value === null) {
+                if ($value === null || $value === '') {
                     continue;
                 }
-                $len = mb_strlen((string) $value);
-                if ($len > $current) {
-                    $widths[$i] = $len;
-                }
+
+                $lengths[$i][] = mb_strlen(self::cellText((string) $value));
+            }
+        }
+
+        foreach ($lengths as $i => $list) {
+            if ($list === []) {
+                continue;
+            }
+
+            sort($list);
+
+            // Percentil 75: cubre la mayoría de los valores sin dejar que el
+            // más largo del muestreo defina el ancho de toda la columna.
+            $p75 = $list[(int) floor(count($list) * 0.75)] ?? end($list);
+
+            if ($p75 > $widths[$i]) {
+                $widths[$i] = (int) $p75;
             }
         }
 

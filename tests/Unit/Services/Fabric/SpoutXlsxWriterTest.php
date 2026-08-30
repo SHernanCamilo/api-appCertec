@@ -339,6 +339,63 @@ final class SpoutXlsxWriterTest extends TestCase
         );
     }
 
+    // =========================================================================
+    // Presentación: la hoja tiene que quedar legible
+    // =========================================================================
+
+    /**
+     * Regresión: una nota de historia clínica con párrafos hacía que la fila
+     * ocupara toda la pantalla y la hoja fuera ilegible.
+     */
+    public function test_las_notas_largas_no_estiran_la_fila(): void
+    {
+        $nota = "PRIMERA LINEA DE LA NOTA\nSEGUNDA LINEA\nTERCERA LINEA\n" . str_repeat('detalle clinico ', 100);
+
+        $gz = $this->writeGz([
+            ['Analisis' => $nota, 'Codigo' => 'I872'],
+            ['Analisis' => 'corta', 'Codigo' => 'J100'],
+        ]);
+
+        $result = SpoutXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_HC');
+        $this->assertNotNull($result);
+
+        $celda = (string) $this->readRows($result->path)[1][0];
+
+        $this->assertStringNotContainsString("\n", $celda, 'Sin saltos: la fila no debe crecer');
+        $this->assertLessThanOrEqual(300, mb_strlen($celda), 'El texto debe venir recortado');
+        $this->assertStringEndsWith('…', $celda, 'El corte se marca para que se sepa que hay más');
+    }
+
+    public function test_declara_alto_de_fila_fijo_y_anchos_topados(): void
+    {
+        // Columna con valores largos y otra con valores cortos
+        $gz = $this->writeGz([
+            ['Corta' => 'ab', 'Larga' => str_repeat('x', 500)],
+            ['Corta' => 'cd', 'Larga' => str_repeat('y', 500)],
+        ]);
+
+        $result = SpoutXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW');
+        $this->assertNotNull($result);
+
+        $zip = new ZipArchive();
+        $zip->open($result->path);
+        $sheet = (string) $zip->getFromName('xl/worksheets/sheet1.xml');
+        $zip->close();
+
+        // Alto de fila declarado (evita que Excel las estire)
+        $this->assertMatchesRegularExpression('/defaultRowHeight="15/', $sheet);
+
+        // Los anchos se declaran y ninguno pasa del tope
+        $this->assertMatchesRegularExpression('/<cols>/', $sheet);
+        preg_match_all('/width="([\d.]+)"/', $sheet, $m);
+        $this->assertNotEmpty($m[1], 'Debe declarar anchos de columna');
+
+        foreach ($m[1] as $w) {
+            $this->assertLessThanOrEqual(45.0, (float) $w, 'Ninguna columna debe pasar el ancho máximo');
+            $this->assertGreaterThanOrEqual(10.0, (float) $w, 'Ninguna columna debe quedar más angosta que el mínimo');
+        }
+    }
+
     public function test_maneja_mas_de_26_columnas(): void
     {
         $row = [];
