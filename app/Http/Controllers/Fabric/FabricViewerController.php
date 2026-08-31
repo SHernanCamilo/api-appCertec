@@ -612,9 +612,16 @@ class FabricViewerController extends Controller
             ], 410);
         }
 
+        // Se sirve el .gz tal cual. 'Content-Encoding: identity' le dice al
+        // navegador que NO descomprima: el body ya es gzip. El frontend lo
+        // descomprime con DecompressionStream y lee el NDJSON.
+        //
+        // IMPORTANTE: NO usar 'application/gzip' como Content-Type porque algunos
+        // navegadores/proxies lo interpretan como descarga binaria opaca y no
+        // dejan leer el body desde Angular. 'application/octet-stream' es neutro.
         return response()->download($gzPath, "data_{$jobId}.ndjson.gz", [
-            'Content-Type'     => 'application/gzip',
-            'Content-Encoding' => 'identity', // el body YA es gzip; que el navegador no lo re-descomprima
+            'Content-Type'     => 'application/octet-stream',
+            'Content-Encoding' => 'identity',
             'X-Export-Format'  => 'ndjson-gzip',
             'X-Export-Rows'    => (string) ($download['rows'] ?? 0),
             'Cache-Control'    => 'no-store, no-cache',
