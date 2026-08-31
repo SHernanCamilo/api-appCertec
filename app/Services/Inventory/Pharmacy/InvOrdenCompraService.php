@@ -412,27 +412,48 @@ class InvOrdenCompraService
     }
 
     /**
-     * Listar las sucursales disponibles para el usuario (para el selector de UI).
-     * Se apoya en las empresas del usuario y devuelve sus sucursales con prefijo.
+     * Listar las sucursales disponibles para el selector de inventario.
+     *
+     * El módulo de inventario farmacia opera sobre una sola empresa
+     * (Clínica Medilaser). Además, solo tiene sentido ofrecer las sucursales
+     * que YA tienen prefijo/secuencia parametrizada, para no mostrar decenas de
+     * sucursales duplicadas de otras empresas (problema visto en el selector).
      */
     public function getSucursalesDisponibles(int $userId): array
     {
-        $user = \App\Models\User::find($userId);
-        if (!$user) {
-            return ['success' => false, 'message' => 'Usuario no encontrado', 'data' => []];
-        }
+        $empresaId = (int) config('inventory.empresa_id', 1);
 
-        $empresaIds = $user->empresas()->pluck('ent_empresas.id')->toArray();
+        // Preferir las sucursales que YA tienen secuencia de inventario parametrizada
+        // (existe un config_sec_detalles con patrón para esa sucursal). Es la fuente de
+        // verdad: son exactamente las sucursales que pueden generar consecutivo.
+        $sucursalIdsConSecuencia = DB::table('config_sec_detalles as d')
+            ->join('config_sec_secuencias as s', 's.id', '=', 'd.secuencia_id')
+            ->join('seg_modulos as m', 'm.id', '=', 's.modulo_id')
+            ->where('s.empresa_id', $empresaId)
+            ->where('m.codigo', 'INV')
+            ->whereNull('d.deleted_at')
+            ->where('d.estado', true)
+            ->whereNotNull('d.sucursal_id')
+            ->pluck('d.sucursal_id')
+            ->unique()
+            ->values()
+            ->all();
 
-        $query = \App\Models\Sucursal::query();
-        if (!empty($empresaIds)) {
-            $query->whereIn('id_Empresa', $empresaIds);
+        $query = \App\Models\Sucursal::where('id_Empresa', $empresaId);
+
+        if (!empty($sucursalIdsConSecuencia)) {
+            $query->whereIn('id', $sucursalIdsConSecuencia);
+        } else {
+            // Fallback (antes de correr el seeder): sucursales con prefijo definido.
+            $query->whereNotNull('prefijo')->whereRaw("TRIM(prefijo) <> ''");
         }
 
         $sucursales = $query->orderBy('nombre')->get(['id', 'nombre', 'prefijo', 'id_Empresa']);
 
-        // Marcar la sucursal principal del usuario para preseleccionarla en la UI.
+        // Preseleccionar la sucursal principal del usuario si pertenece a esta empresa.
+        $user = \App\Models\User::find($userId);
         $principal = (int) ($user->id_sucursal ?? 0);
+
         $data = $sucursales->map(function ($s) use ($principal) {
             return [
                 'id'        => $s->id,
@@ -440,7 +461,7 @@ class InvOrdenCompraService
                 'prefijo'   => $s->prefijo,
                 'principal' => (int) $s->id === $principal,
             ];
-        });
+        })->values();
 
         return ['success' => true, 'data' => $data];
     }
