@@ -459,21 +459,25 @@ class InvOrdenCompraService
         }
 
         // 2. Filtrar por los permisos del usuario en la empresa.
-        $accesoTotal = false;                 // ¿tiene "Todas las sucursales" recursivo?
+        //    Los administradores (rol con es_admin) ven todas las sucursales sin
+        //    depender de seg_empresa_user (no tienen filas por empresa/sucursal).
+        $accesoTotal = $this->esUsuarioAdmin($userId);
         $sucursalesPermitidas = [];           // ids explícitos permitidos
 
-        $filasAcceso = DB::table('seg_empresa_user')
-            ->where('user_id', $userId)
-            ->where('empresa_id', $empresaId)
-            ->get(['id_sucursal', 'recursivo']);
+        if (!$accesoTotal) {
+            $filasAcceso = DB::table('seg_empresa_user')
+                ->where('user_id', $userId)
+                ->where('empresa_id', $empresaId)
+                ->get(['id_sucursal', 'recursivo']);
 
-        foreach ($filasAcceso as $fila) {
-            if ($fila->id_sucursal === null && (int) $fila->recursivo === 1) {
-                $accesoTotal = true;          // acceso a todas las sucursales de la empresa
-                break;
-            }
-            if ($fila->id_sucursal !== null) {
-                $sucursalesPermitidas[] = (int) $fila->id_sucursal;
+            foreach ($filasAcceso as $fila) {
+                if ($fila->id_sucursal === null && (int) $fila->recursivo === 1) {
+                    $accesoTotal = true;          // "Todas las sucursales" recursivo
+                    break;
+                }
+                if ($fila->id_sucursal !== null) {
+                    $sucursalesPermitidas[] = (int) $fila->id_sucursal;
+                }
             }
         }
 
@@ -516,6 +520,11 @@ class InvOrdenCompraService
      */
     public function usuarioTieneAccesoSucursal(int $userId, int $sucursalId): bool
     {
+        // Los administradores tienen acceso a cualquier sucursal.
+        if ($this->esUsuarioAdmin($userId)) {
+            return true;
+        }
+
         $empresaId = (int) config('inventory.empresa_id', 1);
 
         $filas = DB::table('seg_empresa_user')
@@ -535,5 +544,20 @@ class InvOrdenCompraService
         }
 
         return false;
+    }
+
+    /**
+     * Indica si el usuario tiene un rol administrador (es_admin) activo.
+     * Los admin (ej. Super Administrador) no tienen filas en seg_empresa_user,
+     * pero deben ver/operar todas las sucursales.
+     */
+    private function esUsuarioAdmin(int $userId): bool
+    {
+        return DB::table('seg_rol_user as ru')
+            ->join('seg_roles_custom as r', 'r.id', '=', 'ru.rol_id')
+            ->where('ru.user_id', $userId)
+            ->where('r.estado', true)
+            ->where('r.es_admin', true)
+            ->exists();
     }
 }
