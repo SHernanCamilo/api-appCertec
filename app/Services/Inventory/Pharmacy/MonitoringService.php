@@ -12,6 +12,7 @@ use App\Models\Inventory\InvIndigoTrazabilidad;
 use App\Models\Inventory\InvIndigoEvento;
 use App\Models\Inventory\InvCompraAuditoria;
 use App\Services\Inventory\FabricInventoryService;
+use App\Services\Inventory\Pharmacy\InvSequenceService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -21,7 +22,8 @@ use Illuminate\Support\Facades\Log;
 class MonitoringService
 {
     public function __construct(
-        private readonly FabricInventoryService $fabricService
+        private readonly FabricInventoryService $fabricService,
+        private readonly InvSequenceService $sequenceService
     ) {}
 
     /**
@@ -97,16 +99,21 @@ class MonitoringService
                     $esNueva = false;
 
                     if (!$ordenLocal) {
-                        // Nombre de la OC: se prioriza el consecutivo interno detectado en la
-                        // descripción de Indigo (ej. "FLA-2026-000174"). Si no se pudo extraer,
-                        // se usa el prefijo de la sucursal elegida + el número de Indigo, de modo
-                        // que la OC quede identificada con su sucursal real (no genérica).
-                        if ($numeroPedidoInterno) {
-                            $numeroOrdenCompra = "{$numeroPedidoInterno}-OC";
-                        } elseif ($sucursalPrefijo) {
-                            $numeroOrdenCompra = "{$sucursalPrefijo}-IND-{$numeroOrdenIndigo}";
-                        } else {
-                            $numeroOrdenCompra = "IND-{$numeroOrdenIndigo}";
+                        // Generar el número de OC con el generador de secuencias oficial
+                        // (config_sec_detalles por sucursal), que garantiza el consecutivo
+                        // correcto (ej. FLA-2026-000179). Ya no se usa el texto de la
+                        // descripción de Indigo, que puede traer números cortos o desalineados.
+                        try {
+                            $numeroOrdenCompra = $this->sequenceService->generateSequence(
+                                'INV', $userId, 'INV-ORDEN_COMPRA', $sucursalId
+                            );
+                        } catch (\RuntimeException $e) {
+                            // Si la secuencia no está parametrizada para esta sucursal,
+                            // caemos al prefijo + número Indigo (mejor que un número corto).
+                            Log::warning("[INDIGO-SYNC] Secuencia no disponible para sucursal {$sucursalId}: {$e->getMessage()}. Usando fallback.");
+                            $numeroOrdenCompra = $sucursalPrefijo
+                                ? "{$sucursalPrefijo}-IND-{$numeroOrdenIndigo}"
+                                : "IND-{$numeroOrdenIndigo}";
                         }
 
                         $ordenLocal = InvOrdenCompra::create([
@@ -114,7 +121,7 @@ class MonitoringService
                             'fecha_orden'         => $cabecera['Fecha'] ?? now()->toDateString(),
                             'observaciones'       => $descripcion,
                             'proveedor_nombre'    => $cabecera['Proveedor'] ?? null,
-                            'estado'              => 'en_transito',
+                            'estado'              => 'pendiente',
                             'sincronizado_indigo' => true,
                             'sucursal_id'         => $sucursalId,
                             'creado_por'          => $userId,
@@ -276,21 +283,27 @@ class MonitoringService
             }
 
             $stats = [
-                'procesadas' => $procesadas,
-                'nuevas' => $nuevas,
-                'actualizadas' => $actualizadas,
-                'devoluciones' => $devoluciones,
-                'errores' => $errores,
+                'procesadas'    => $procesadas,
+                'nuevas'        => $nuevas,
+                'actualizadas'  => $actualizadas,
+                'devoluciones'  => $devoluciones,
+                'errores'       => $errores,
                 'total_registros' => $registros->count(),
-                'total_ordenes' => $ordenesAgrupadas->count(),
+                'total_ordenes'   => $ordenesAgrupadas->count(),
             ];
+
+            // Indicar claramente si la OC ya existía (para que el frontend informe al usuario).
+            $yaExistia = $nuevas === 0 && $actualizadas > 0;
 
             Log::channel('daily')->info('[INDIGO-SYNC] Sincronización completada', $stats);
 
             return [
-                'success' => true,
-                'message' => "Sincronización exitosa. Procesadas: {$procesadas}, Nuevas: {$nuevas}, Actualizadas: {$actualizadas}, Devoluciones: {$devoluciones}",
-                'stats' => $stats,
+                'success'    => true,
+                'ya_existia' => $yaExistia,
+                'message'    => $yaExistia
+                    ? "La orden ya estaba registrada en el sistema y fue actualizada. ({$actualizadas} actualizada/s)"
+                    : "Sincronización exitosa. Procesadas: {$procesadas}, Nuevas: {$nuevas}, Actualizadas: {$actualizadas}, Devoluciones: {$devoluciones}",
+                'stats'      => $stats,
             ];
         } catch (\Exception $e) {
             Log::error('[INDIGO-SYNC] Error general: ' . $e->getMessage());
