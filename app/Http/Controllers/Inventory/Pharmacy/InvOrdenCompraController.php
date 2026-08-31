@@ -26,12 +26,15 @@ class InvOrdenCompraController extends Controller
     {
         try {
             $filters = [
-                'search'    => $request->query('search'),
-                'estado'    => $request->query('estado'),
-                'proveedor' => $request->query('proveedor'),
-                'source'    => $request->query('source'),
-                'limit'     => $request->query('limit', 25),
-                'offset'    => $request->query('offset', 0),
+                'search'      => $request->query('search'),
+                'estado'      => $request->query('estado') ?? $request->query('status'),
+                'proveedor'   => $request->query('proveedor'),
+                'fecha_desde' => $request->query('fecha_desde'),
+                'fecha_hasta' => $request->query('fecha_hasta'),
+                'creado_por'  => $request->query('creado_por'),
+                'source'      => $request->query('source'),
+                'limit'       => $request->query('perPage') ?? $request->query('limit', 25),
+                'offset'      => $request->query('offset', 0),
             ];
 
             $result = $this->service->getAll($filters);
@@ -81,6 +84,39 @@ class InvOrdenCompraController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        $userId = auth('api')->id() ?? 1;
+
+        // Creación MANUAL desde el aplicativo: llega un pedido_id o detalles.
+        // (Se distingue de la sincronización externa, que trae numero_orden + proveedor.)
+        $esCreacionManual = $request->filled('pedido_id') || $request->filled('detalles');
+
+        if ($esCreacionManual) {
+            $validator = Validator::make($request->all(), [
+                'sucursal_id' => 'required|integer',
+                'detalles'    => 'nullable|array',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Error de validación',
+                    'errors'  => $validator->errors(),
+                ], 422);
+            }
+
+            try {
+                $result = $this->service->create($request->all(), (int) $userId);
+                return response()->json($result, $result['success'] ? 201 : 500);
+            } catch (\Exception $e) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Error al crear la orden',
+                    'error'   => $e->getMessage(),
+                ], 500);
+            }
+        }
+
+        // Camino de sincronización/creación externa.
         $validator = Validator::make($request->all(), [
             'numero_orden' => 'required|string',
             'proveedor'    => 'required|string',
@@ -95,8 +131,7 @@ class InvOrdenCompraController extends Controller
         }
 
         try {
-            $userId = auth()->user()->id ?? 1;
-            $result = $this->service->syncFromExternal($request->all(), $userId);
+            $result = $this->service->syncFromExternal($request->all(), (int) $userId);
 
             return response()->json($result, $result['success'] ? 201 : 500);
         } catch (\Exception $e) {
@@ -109,13 +144,84 @@ class InvOrdenCompraController extends Controller
     }
 
     /**
+     * Actualizar una orden de compra local.
+     * PUT/PATCH /api/inventario/ordenes-compra/{id}
+     * Solo OC creadas en el aplicativo, por su creador y en estado pendiente.
+     */
+    public function update(Request $request, string $id): JsonResponse
+    {
+        try {
+            $userId = auth('api')->id();
+            if (!$userId) {
+                return response()->json(['success' => false, 'message' => 'No autenticado'], 401);
+            }
+
+            $result = $this->service->update((int) $id, $request->all(), (int) $userId);
+            $status = $result['success'] ? 200 : ($result['code'] ?? 400);
+
+            return response()->json($result, $status);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al actualizar la orden',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Eliminar una orden de compra local.
+     * DELETE /api/inventario/ordenes-compra/{id}
+     */
+    public function destroy(string $id): JsonResponse
+    {
+        try {
+            $userId = auth('api')->id();
+            if (!$userId) {
+                return response()->json(['success' => false, 'message' => 'No autenticado'], 401);
+            }
+
+            $result = $this->service->delete((int) $id, (int) $userId);
+            $status = $result['success'] ? 200 : ($result['code'] ?? 400);
+
+            return response()->json($result, $status);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al eliminar la orden',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Listar sucursales disponibles para el usuario autenticado (para el selector de UI).
+     * GET /api/inventario/ordenes-compra/sucursales-disponibles
+     */
+    public function sucursalesDisponibles(): JsonResponse
+    {
+        try {
+            $userId = auth('api')->id() ?? 0;
+            $result = $this->service->getSucursalesDisponibles((int) $userId);
+            return response()->json($result, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener sucursales',
+                'error'   => $e->getMessage(),
+                'data'    => [],
+            ], 500);
+        }
+    }
+
+    /**
      * Cambiar estado de la orden
      * PATCH /api/inventario/ordenes-compra/{id}/estado
      */
     public function cambiarEstado(Request $request, string $id): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'estado' => 'required|string|in:BORRADOR,CONFIRMADO,EN_TRANSITO,RECIBIDA_PARCIAL,RECIBIDA_TOTAL,CANCELADA'
+            'estado' => 'required|string'
         ]);
 
         if ($validator->fails()) {
@@ -152,13 +258,17 @@ class InvOrdenCompraController extends Controller
     public function sync(Request $request, \App\Services\Inventory\Pharmacy\MonitoringService $monitoringService): JsonResponse
     {
         $numero_orden = $request->input('numero_orden');
+        $sucursal_id  = $request->input('sucursal_id');
         
         try {
-            $userId = auth()->user()->id ?? 1;
+            $userId = auth('api')->id() ?? 1;
             
             $options = [];
             if ($numero_orden) {
                 $options['numero_orden'] = $numero_orden;
+            }
+            if ($sucursal_id) {
+                $options['sucursal_id'] = (int) $sucursal_id;
             }
             
             $result = $monitoringService->syncIndigoOrders($userId, $options);

@@ -76,7 +76,7 @@ class InvPedidoService
         DB::beginTransaction();
         try {
             // Generar número de pedido (Ej: FLA-2026-001) usando InvSequenceService (wrapper de SecuenciaNumericaService)
-            $numeroPedido = $this->sequenceService->generateSequence('INVENTARIO', $userId, 'PEDIDO');
+            $numeroPedido = $this->sequenceService->generateSequence('INV', $userId, 'INV-PEDIDO');
 
             // Crear el pedido cabecera
             $pedido = InvPedido::create([

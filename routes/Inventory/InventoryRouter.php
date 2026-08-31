@@ -17,6 +17,8 @@ Route::patch('pedidos/{pedido}/estado', [App\Http\Controllers\Inventory\Pharmacy
 Route::apiResource('pedidos', App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class);
 
 // Órdenes de Compra
+// Las rutas específicas van ANTES del apiResource para que el wildcard {orden} no las capture.
+Route::get('ordenes-compra/sucursales-disponibles', [App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class, 'sucursalesDisponibles']);
 Route::post('ordenes-compra/sync', [App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class, 'sync']);
 Route::patch('ordenes-compra/{orden}/estado', [App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class, 'cambiarEstado']);
 Route::apiResource('ordenes-compra', App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class);

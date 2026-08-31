@@ -28,10 +28,10 @@ class InvRecepcionService
     public function getAll(array $filters = []): array
     {
         $status = $filters['status'] ?? $filters['estado'] ?? '';
+        $requestedStates = $this->normalizeStates($status);
 
         // Si el status contiene estados de OC, devolver compras pendientes de recepción
-        $ocStates = ['confirmado', 'en_sitio', 'parcial', 'en_transito'];
-        $requestedStates = array_map('trim', explode(',', strtolower($status)));
+        $ocStates = ['confirmado', 'en_sitio', 'parcial', 'en_transito', 'en_recepcion'];
         $isOcQuery = !empty($status) && count(array_intersect($requestedStates, $ocStates)) > 0;
 
         if ($isOcQuery) {
@@ -41,8 +41,8 @@ class InvRecepcionService
         // Caso default: listar recepciones históricas
         $query = InvRecepcion::with(['compra', 'recibidoPor']);
 
-        if (!empty($status)) {
-            $query->whereIn('estado', $requestedStates);
+        if (!empty($requestedStates)) {
+            $query->whereIn(DB::raw('LOWER(estado)'), $requestedStates);
         }
 
         if (!empty($filters['compra_id'])) {
@@ -65,10 +65,30 @@ class InvRecepcionService
 
         $total = $query->count();
         $recepciones = $query->offset($offset)->limit($limit)->get();
+        $data = $recepciones->map(function (InvRecepcion $recepcion) {
+            $itemsRecibidos = $recepcion->detalles()
+                ->where('cantidad_recibida', '>', 0)
+                ->count();
+
+            return [
+                'id' => $recepcion->id,
+                'compra_id' => $recepcion->compra_id,
+                'numero_recepcion' => $recepcion->numero_recepcion,
+                'numero_orden_compra' => $recepcion->numero_orden_compra,
+                'oc_indigo' => $recepcion->oc_indigo,
+                'fecha_orden' => $recepcion->fecha_recepcion,
+                'fecha_recepcion' => $recepcion->fecha_recepcion,
+                'proveedor_nombre' => $recepcion->compra?->proveedor_nombre,
+                'estado' => strtolower((string) $recepcion->estado),
+                'creado_por_nombre' => $recepcion->recibidoPor?->name ?? 'Administrador del Sistema',
+                'total_items' => $recepcion->total_items ?: $recepcion->detalles()->count(),
+                'items_recibidos' => $itemsRecibidos,
+            ];
+        })->values();
 
         return [
             'success' => true,
-            'data'    => $recepciones,
+            'data'    => $data,
             'meta'    => [
                 'total'  => $total,
                 'limit'  => $limit,
@@ -84,7 +104,7 @@ class InvRecepcionService
     private function getOrdenesPendientesRecepcion(array $estados, array $filters): array
     {
         $query = InvOrdenCompra::with(['detalles'])
-            ->whereIn('estado', $estados);
+            ->whereIn(DB::raw('LOWER(estado)'), array_unique(array_merge($estados, ['confirmado', 'en_sitio', 'en_transito', 'en_recepcion'])));
 
         if (!empty($filters['search'])) {
             $search = $filters['search'];
@@ -113,6 +133,8 @@ class InvRecepcionService
                 ->distinct('rd.codigo_producto')
                 ->count('rd.codigo_producto');
 
+            $estado = $this->resolveCompraEstado($oc->estado, $itemsRecibidos, $totalItems);
+
             return [
                 'id' => $oc->id,
                 'compra_id' => $oc->id,
@@ -120,7 +142,7 @@ class InvRecepcionService
                 'oc_indigo' => $oc->oc_indigo,
                 'fecha_orden' => $oc->fecha_orden,
                 'proveedor_nombre' => $oc->proveedor_nombre,
-                'estado' => $oc->estado,
+                'estado' => $estado,
                 'creado_por_nombre' => $oc->creado_por_nombre,
                 'total_items' => $totalItems,
                 'items_recibidos' => $itemsRecibidos,
@@ -242,7 +264,21 @@ class InvRecepcionService
     {
         $cantidad = (int) round((float) ($row->cantidad_solicitada_compra ?? 0));
         $codigo = (string) ($row->codigo_producto ?? '');
-        $muestra = $this->pharmacyService->calcularMuestra($cantidad, $codigo);
+
+        $tieneMuestraGuardada = isset($row->muestra_poblacion) && $row->muestra_poblacion !== null && $row->muestra_poblacion != 0;
+
+        if ($tieneMuestraGuardada) {
+            $tamanoMuestra = (int) $row->muestra_poblacion;
+            $muestraExclusion = isset($row->muestra_exclusion) ? ((bool) $row->muestra_exclusion ? 1 : 0) : 0;
+            $muestra = $this->pharmacyService->calcularMuestra($cantidad, $codigo);
+            $muestra['tamano_muestra'] = $tamanoMuestra;
+            $muestra['inspeccion_total'] = (bool) $muestraExclusion;
+        } else {
+            $muestra = $this->pharmacyService->calcularMuestra($cantidad, $codigo);
+            $tamanoMuestra = $muestra['tamano_muestra'];
+            $muestraExclusion = !empty($muestra['inspeccion_total']) ? 1 : 0;
+        }
+
         $clasificacion = strtoupper((string) ($row->clasificacion_vie ?? ''));
 
         return [
@@ -268,8 +304,8 @@ class InvRecepcionService
             'fecha_vencimiento' => $row->fecha_vencimiento ?? '',
             'codigo_sanitario' => $row->codigo_sanitario ?? '',
             'es_medicamento_vital' => str_contains($clasificacion, 'VITAL'),
-            'muestra_poblacion' => $muestra['tamano_muestra'],
-            'muestra_exclusion' => !empty($muestra['inspeccion_total']) ? 1 : 0,
+            'muestra_poblacion' => $tamanoMuestra,
+            'muestra_exclusion' => $muestraExclusion,
             'muestra_info' => $muestra,
         ];
     }
@@ -291,20 +327,46 @@ class InvRecepcionService
 
         try {
             $externalMap = $this->fabricService->findByCodes($codes);
+            $found = count($externalMap);
+            if ($found < count($codes)) {
+                Log::info('[INV-RECEPCION] Enriquecimiento catálogo', [
+                    'solicitados' => count($codes),
+                    'encontrados' => $found,
+                    'vista'       => config('fabric.inventory_products_view'),
+                    'faltantes'   => array_values(array_diff($codes, array_keys($externalMap))),
+                ]);
+            }
         } catch (\Throwable $e) {
             Log::warning('[INV-RECEPCION] Error enriqueciendo productos Fabric: ' . $e->getMessage());
             return $items;
         }
 
+        $sinAtributos = [];
         foreach ($items as &$item) {
             $code = $item['codigo_producto'] ?? '';
             $ext = $externalMap[$code] ?? null;
             if (!$ext) {
+                $sinAtributos[] = $code . ' (no está en catálogo Fabric/local)';
                 continue;
             }
             $item = $this->applyExternalProductFields($item, $ext);
+
+            // Diagnóstico: el catálogo respondió pero sin los atributos de recepción.
+            // Permite distinguir en producción "Fabric caído" de "Fabric responde incompleto".
+            if (trim((string) ($item['forma_farmaceutica'] ?? '')) === ''
+                && trim((string) ($item['concentracion'] ?? '')) === ''
+                && trim((string) ($item['unidad_empaque'] ?? '')) === '') {
+                $sinAtributos[] = $code . ' (catálogo sin presentación/concentración/empaque)';
+            }
         }
         unset($item);
+
+        if (!empty($sinAtributos)) {
+            Log::info('[INV-RECEPCION] Ítems sin atributos de recepción tras enriquecer', [
+                'vista'    => config('fabric.inventory_products_view'),
+                'detalles' => $sinAtributos,
+            ]);
+        }
 
         return $items;
     }
@@ -336,20 +398,32 @@ class InvRecepcionService
         return $item;
     }
 
-    private function resolveMuestraPoblacion(array $item): ?int
+    private function resolveMuestraPoblacion(array $item): array
     {
-        if (isset($item['muestra_poblacion']) && $item['muestra_poblacion'] !== '') {
-            return (int) $item['muestra_poblacion'];
+        $muestraPoblacion = null;
+        $muestraExclusion = 0;
+
+        $valor = $item['muestra_poblacion'] ?? null;
+        $debeRecalcular = $valor === null || $valor === 0 || $valor === '0' || $valor === '';
+
+        if (!$debeRecalcular) {
+            $muestraPoblacion = (int) $valor;
+            $muestraExclusion = isset($item['muestra_exclusion']) ? ((bool) $item['muestra_exclusion'] ? 1 : 0) : 0;
+        } else {
+            $cantidad = (int) round((float) ($item['cantidad_recibida'] ?? $item['cantidad_solicitada'] ?? 0));
+            $codigo = (string) ($item['codigo_producto'] ?? '');
+
+            if ($cantidad > 0 && $codigo !== '') {
+                $resultado = $this->pharmacyService->calcularMuestra($cantidad, $codigo);
+                $muestraPoblacion = $resultado['tamano_muestra'];
+                $muestraExclusion = !empty($resultado['inspeccion_total']) ? 1 : 0;
+            }
         }
 
-        $cantidad = (int) round((float) ($item['cantidad_recibida'] ?? $item['cantidad_solicitada'] ?? 0));
-        $codigo = (string) ($item['codigo_producto'] ?? '');
-
-        if ($cantidad <= 0 || $codigo === '') {
-            return null;
-        }
-
-        return $this->pharmacyService->calcularMuestra($cantidad, $codigo)['tamano_muestra'];
+        return [
+            'muestra_poblacion' => $muestraPoblacion,
+            'muestra_exclusion' => $muestraExclusion,
+        ];
     }
 
     /**
@@ -358,7 +432,7 @@ class InvRecepcionService
     public function getPurchasesForReception(): array
     {
         $compras = InvOrdenCompra::with('detalles')
-                    ->whereIn('estado', ['confirmado', 'en_sitio', 'EN_RECEPCION'])
+                    ->whereIn(DB::raw('LOWER(estado)'), ['confirmado', 'en_sitio', 'en_recepcion'])
                     ->orderBy('id', 'desc')
                     ->get();
         return ['success' => true, 'data' => $compras];
@@ -398,7 +472,7 @@ class InvRecepcionService
             }
 
             // Generar número de recepción (Ej: REC-2024-001)
-            $numeroRecepcion = $this->sequenceService->generateSequence('INVENTARIO', $userId, 'RECEPCION');
+            $numeroRecepcion = $this->sequenceService->generateSequence('INV', $userId, 'INV-RECEPCION');
 
             // Calcular items totales a recepcionar
             $itemsToReceive = array_filter($data['items'] ?? [], function ($item) {
@@ -430,6 +504,9 @@ class InvRecepcionService
                     $rejectedCount++;
                 }
 
+                $muestraData = $this->resolveMuestraPoblacion($item);
+                $mvdPresentacionComercial = $item['mvd_presentacion'] ?? $item['mvd_presentacion_comercial'] ?? null;
+
                 InvRecepcionDetalle::create([
                     'recepcion_id'               => $recepcion->id,
                     'pedido_detalle_id'          => $item['pedido_detalle_id'] ?? null,
@@ -442,7 +519,8 @@ class InvRecepcionService
                     'unidad_empaque'             => $item['unidad_empaque'] ?? null,
                     'cantidad_solicitada'        => $item['cantidad_solicitada'] ?? 0,
                     'cantidad_recibida'          => $item['cantidad_recibida'] ?? 0,
-                    'muestra_poblacion'          => $this->resolveMuestraPoblacion($item),
+                    'muestra_poblacion'          => $muestraData['muestra_poblacion'],
+                    'muestra_exclusion'          => $muestraData['muestra_exclusion'],
                     'numero_lote'                => $item['numero_lote'] ?? null,
                     'fecha_vencimiento'          => $item['fecha_vencimiento'] ?? null,
                     
@@ -451,6 +529,7 @@ class InvRecepcionService
                     'fabricante'                 => $item['fabricante'] ?? null,
                     'vida_util'                  => $item['vida_util'] ?? null,
                     'estado_invima'              => $item['estado_invima'] ?? null,
+                    'invima_observaciones'       => $item['invima_observaciones'] ?? null,
                     'invima_override_manual'     => !empty($item['invima_override_manual']) ? 1 : 0,
                     'aspecto_cumple'             => $item['aspecto_cumple'] ?? null,
                     'embalaje_cumple'            => $item['embalaje_cumple'] ?? null,
@@ -464,7 +543,7 @@ class InvRecepcionService
                     'mvd_solicitante'            => $item['mvd_solicitante'] ?? null,
                     'mvd_principio_activo'       => $item['mvd_principio_activo'] ?? null,
                     'mvd_forma_farmaceutica'     => $item['mvd_forma_farmaceutica'] ?? null,
-                    'mvd_presentacion_comercial' => $item['mvd_presentacion_comercial'] ?? null,
+                    'mvd_presentacion_comercial' => $mvdPresentacionComercial,
                     'mvd_fecha_autorizacion'     => $item['mvd_fecha_autorizacion'] ?? null,
                     
                     'observaciones_recepcion'    => $item['observaciones_recepcion'] ?? null
@@ -485,10 +564,9 @@ class InvRecepcionService
                 }
             }
 
-            // Cambiar estado de la compra temporalmente, 
-            // el confirmador final lo pasará a RECIBIDA_TOTAL / PARCIAL.
-            if ($compra->estado === 'EN_TRANSITO' || $compra->estado === 'BORRADOR') {
-                $compra->update(['estado' => 'EN_RECEPCION']);
+            // Mantener la compra en un estado compatible con el enum real de la tabla.
+            if (in_array(strtolower((string) $compra->estado), ['en_transito', 'confirmado'], true)) {
+                $compra->update(['estado' => 'en_sitio']);
             }
 
             DB::commit();
@@ -550,7 +628,18 @@ class InvRecepcionService
             if ($recepcion->compra_id) {
                 $compra = InvOrdenCompra::find($recepcion->compra_id);
                 if ($compra) {
-                    $compra->update(['estado' => 'RECIBIDA_TOTAL']);
+                    $totalItems = $compra->detalles()->count();
+                    $itemsRecibidos = DB::table('inv_recepcion_detalles as rd')
+                        ->join('inv_recepciones as r', 'r.id', '=', 'rd.recepcion_id')
+                        ->where('r.compra_id', $compra->id)
+                        ->distinct('rd.codigo_producto')
+                        ->count('rd.codigo_producto');
+
+                    $compra->update([
+                        'estado' => $itemsRecibidos >= $totalItems && $totalItems > 0
+                            ? 'recibida'
+                            : 'en_sitio'
+                    ]);
                 }
             }
 
@@ -571,5 +660,32 @@ class InvRecepcionService
                 'error'   => $e->getMessage()
             ];
         }
+    }
+
+    private function normalizeStates(string $status): array
+    {
+        return array_values(array_filter(array_map(
+            static fn ($state) => strtolower(trim((string) $state)),
+            explode(',', $status)
+        )));
+    }
+
+    private function resolveCompraEstado(?string $estado, int $itemsRecibidos, int $totalItems): string
+    {
+        $normalized = strtolower((string) $estado);
+
+        if ($totalItems > 0 && $itemsRecibidos >= $totalItems) {
+            return 'recibida';
+        }
+
+        if ($itemsRecibidos > 0) {
+            return 'parcial';
+        }
+
+        return match ($normalized) {
+            'recibida_total', 'recibida', 'recibido' => 'recibida',
+            'recibida_parcial', 'parcial', 'en_recepcion' => 'parcial',
+            default => $normalized,
+        };
     }
 }

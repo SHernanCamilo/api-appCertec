@@ -52,6 +52,15 @@ class InvRecepcionController extends Controller
     public function show(string $id): JsonResponse
     {
         try {
+            if ($requestSource = request()->query('source')) {
+                if ($requestSource === 'compra') {
+                    $result = $this->service->getItemsForReception((int) $id);
+                    $status = ($result['success'] ?? false) ? 200 : 404;
+
+                    return response()->json($result, $status);
+                }
+            }
+
             $recepcion = $this->service->getById((int) $id);
 
             if ($recepcion) {
@@ -63,10 +72,10 @@ class InvRecepcionController extends Controller
                 ], 200);
             }
 
-            $result = $this->service->getItemsForReception((int) $id);
-            $status = ($result['success'] ?? false) ? 200 : 404;
-
-            return response()->json($result, $status);
+            return response()->json([
+                'success' => false,
+                'message' => 'Recepción no encontrada',
+            ], 404);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,

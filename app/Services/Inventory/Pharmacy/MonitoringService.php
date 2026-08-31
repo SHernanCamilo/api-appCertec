@@ -32,11 +32,23 @@ class MonitoringService
         $fechaDesde = $options['fecha_desde'] ?? now()->subDays(7)->format('Y-m-d');
         $limit = $options['limit'] ?? 2000;
         $numeroOrden = $options['numero_orden'] ?? null;
+        $sucursalId = isset($options['sucursal_id']) ? (int) $options['sucursal_id'] : null;
+
+        // Prefijo de la sucursal elegida (ej. "NVA", "FLA"). Se usa para nombrar la OC
+        // según la sucursal que indicó el usuario, evitando que una compra de una
+        // sucursal quede con el consecutivo/prefijo de otra.
+        $sucursalPrefijo = null;
+        if ($sucursalId) {
+            $sucursal = \App\Models\Sucursal::find($sucursalId);
+            $sucursalPrefijo = $sucursal?->prefijo ? strtoupper(trim($sucursal->prefijo)) : null;
+        }
 
         Log::channel('daily')->info('[INDIGO-SYNC] Iniciando sincronización', [
             'fecha_desde' => $fechaDesde,
             'limit' => $limit,
             'numero_orden' => $numeroOrden,
+            'sucursal_id' => $sucursalId,
+            'sucursal_prefijo' => $sucursalPrefijo,
         ]);
 
         try {
@@ -85,15 +97,26 @@ class MonitoringService
                     $esNueva = false;
 
                     if (!$ordenLocal) {
+                        // Nombre de la OC: se prioriza el consecutivo interno detectado en la
+                        // descripción de Indigo (ej. "FLA-2026-000174"). Si no se pudo extraer,
+                        // se usa el prefijo de la sucursal elegida + el número de Indigo, de modo
+                        // que la OC quede identificada con su sucursal real (no genérica).
+                        if ($numeroPedidoInterno) {
+                            $numeroOrdenCompra = "{$numeroPedidoInterno}-OC";
+                        } elseif ($sucursalPrefijo) {
+                            $numeroOrdenCompra = "{$sucursalPrefijo}-IND-{$numeroOrdenIndigo}";
+                        } else {
+                            $numeroOrdenCompra = "IND-{$numeroOrdenIndigo}";
+                        }
+
                         $ordenLocal = InvOrdenCompra::create([
-                            'numero_orden_compra' => $numeroPedidoInterno
-                                ? "{$numeroPedidoInterno}-OC"
-                                : "IND-{$numeroOrdenIndigo}",
+                            'numero_orden_compra' => $numeroOrdenCompra,
                             'fecha_orden'         => $cabecera['Fecha'] ?? now()->toDateString(),
                             'observaciones'       => $descripcion,
                             'proveedor_nombre'    => $cabecera['Proveedor'] ?? null,
-                            'estado'              => 'EN_TRANSITO',
+                            'estado'              => 'en_transito',
                             'sincronizado_indigo' => true,
+                            'sucursal_id'         => $sucursalId,
                             'creado_por'          => $userId,
                             'oc_indigo'           => $numeroOrdenIndigo,
                         ]);
@@ -104,6 +127,9 @@ class MonitoringService
                             'sincronizado_indigo' => true,
                             'observaciones'       => $descripcion,
                             'proveedor_nombre'    => $cabecera['Proveedor'] ?? $ordenLocal->proveedor_nombre,
+                            // Solo fija la sucursal si aún no tenía una asignada, para no
+                            // sobrescribir una sucursal ya definida en sincronizaciones previas.
+                            'sucursal_id'         => $ordenLocal->sucursal_id ?? $sucursalId,
                         ]);
                         $actualizadas++;
                     }
@@ -345,8 +371,8 @@ class MonitoringService
         
         $totalEnOc = InvOrdenCompraDetalle::where('pedido_detalle_id', $pedidoDetalleId)
                         ->where('estado', '!=', 'cancelada')
-                        ->whereHas('ordenCompra', function($q) {
-                            $q->where('estado', '!=', 'CANCELADA');
+                        ->whereHas('compra', function($q) {
+                            $q->whereRaw('LOWER(estado) != ?', ['cancelada']);
                         })
                         ->sum('cantidad_solicitada_compra');
                         
@@ -371,13 +397,13 @@ class MonitoringService
         
         if ($total > 0 && $cancelados >= $total) {
             $previous = $orden->estado;
-            $orden->update(['estado' => 'CANCELADA']);
+            $orden->update(['estado' => 'cancelada']);
             
             InvCompraAuditoria::create([
                 'compra_id' => $compraId,
                 'campo_modificado' => 'estado',
                 'valor_anterior' => $previous,
-                'valor_nuevo' => 'CANCELADA',
+                'valor_nuevo' => 'cancelada',
                 'motivo_modificacion' => 'Orden de compra devuelta completa desde Indigo',
                 'modificado_por' => $userId
             ]);

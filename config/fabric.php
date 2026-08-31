@@ -49,4 +49,12 @@ return [
     // Email del sistema para requests internos (notificaciones, sync)
     'admin_email' => env('NOTIF_ADMIN_EMAIL', 'sistema@medilaser.com.co'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Catálogo de productos farmacia (recepción técnica, validación CUM)
+    |--------------------------------------------------------------------------
+    */
+    'inventory_products_schema' => env('FABRIC_INVENTORY_PRODUCTS_SCHEMA', 'in'),
+    'inventory_products_view'   => env('FABRIC_INVENTORY_PRODUCTS_VIEW', 'VW_Inventory_Productos'),
+
 ];

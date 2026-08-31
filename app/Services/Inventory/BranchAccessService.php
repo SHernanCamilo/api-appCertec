@@ -31,10 +31,11 @@ class BranchAccessService
                 $branches[] = (int) $user->id_sucursal;
             }
 
-            // Sucursales adicionales por empresa (seg_empresa_user)
+            // Sucursales adicionales por empresa (pivote seg_empresa_user).
+            // La columna real en el pivote es 'id_sucursal' (ver User::empresas()).
             $empresaSucursales = DB::table('seg_empresa_user')
                 ->where('user_id', $userId)
-                ->pluck('sucursal_id')
+                ->pluck('id_sucursal')
                 ->filter()
                 ->map(fn($id) => (int) $id)
                 ->toArray();
@@ -68,8 +69,9 @@ class BranchAccessService
      */
     public function getBranchCode(int $sucursalId): string
     {
-        $sucursal = DB::table('seg_sucursales')->where('id', $sucursalId)->first();
-        return $sucursal->codigo ?? '';
+        // La tabla real de sucursales es config_ubi_sucursales y el código está en 'prefijo'.
+        $sucursal = DB::table('config_ubi_sucursales')->where('id', $sucursalId)->first();
+        return $sucursal->prefijo ?? '';
     }
 
     /**

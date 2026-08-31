@@ -28,7 +28,7 @@ class InvSequenceService
      * @param string|null $codigoProceso  Código del subproceso (ej: 'PEDIDO', 'ORDEN_COMPRA', 'RECEPCION')
      * @return string Consecutivo generado
      */
-    public function generateSequence(string $codigoModulo, int $userId, ?string $codigoProceso = null): string
+    public function generateSequence(string $codigoModulo, int $userId, ?string $codigoProceso = null, ?int $sucursalId = null): string
     {
         $user = User::find($userId);
         if (!$user) {
@@ -41,10 +41,13 @@ class InvSequenceService
             throw new \RuntimeException("El usuario no tiene una empresa asignada.");
         }
 
-        // Resolver sucursal del usuario
-        $sucursalId = $user->id_sucursal;
+        // Resolver sucursal: se prioriza la sucursal explícita (la que el usuario
+        // eligió al sincronizar/crear). Esto evita que una OC de una sucursal quede
+        // con el consecutivo de otra. Si no se indicó, se cae a la sucursal principal
+        // del usuario.
+        $sucursalId = $sucursalId ?: $user->id_sucursal;
         if (!$sucursalId) {
-            throw new \RuntimeException("El usuario no tiene una sucursal asignada. Asigne una sucursal para generar consecutivos.");
+            throw new \RuntimeException("No se indicó sucursal y el usuario no tiene una sucursal asignada. Seleccione una sucursal para generar el consecutivo.");
         }
 
         // Obtener el ID del módulo por su código

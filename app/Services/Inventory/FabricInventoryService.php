@@ -10,20 +10,79 @@ use Illuminate\Support\Facades\Log;
  * a través del GraphFabricGatewayService (reutiliza la infraestructura existente).
  *
  * Vistas de Fabric usadas:
- *   - in.Inventory_Productos          → Catálogo de productos
+ *   - in.VW_Inventory_Productos (configurable) → Catálogo de productos farmacia
  *   - in.INVENTORY_ALMACENES          → Inventario por almacén
  *   - in.Inventory_OrdenesDeCompra_DigiPharma → Órdenes de compra (Indigo)
  */
 class FabricInventoryService
 {
     private const SCHEMA = 'in';
-    private const VIEW_PRODUCTOS = 'Inventory_Productos';
     private const VIEW_ALMACENES = 'INVENTORY_ALMACENES';
     private const VIEW_ORDENES_INDIGO = 'Inventory_OrdenesDeCompra_DigiPharma';
+
+    /** Columnas de código probadas en orden (VW_Inventory_Productos usa Codigo). */
+    private const CODE_FILTER_KEYS = [
+        'Codigo', 'CodProducto', 'CodigoProducto', 'codigo', 'codigo_producto', 'Codigo_Producto',
+    ];
 
     public function __construct(
         private readonly GraphFabricGatewayService $gateway
     ) {}
+
+    private function getProductsSchema(): string
+    {
+        return (string) config('fabric.inventory_products_schema', self::SCHEMA);
+    }
+
+    private function getProductsView(): string
+    {
+        return (string) config('fabric.inventory_products_view', 'VW_Inventory_Productos');
+    }
+
+    /**
+     * Consulta Fabric probando varias columnas de código (vistas legacy vs VW_*).
+     */
+    private function queryProductByCode(string $code, ?int $limit = 1): ?array
+    {
+        $code = trim($code);
+        if ($code === '') {
+            return null;
+        }
+
+        foreach (self::CODE_FILTER_KEYS as $filterKey) {
+            $result = $this->gateway->queryAsSystem($this->getProductsSchema(), $this->getProductsView(), [
+                'filters' => [$filterKey => $code],
+                'limit'   => $limit ?? 1,
+            ]);
+
+            if ($result['success'] && !empty($result['data'][0])) {
+                return $result['data'][0];
+            }
+        }
+
+        return null;
+    }
+
+    private function findLocalNormalized(string $code): ?array
+    {
+        $local = \App\Models\Inventory\InvProducto::where('codigo', $code)->where('activo', true)->first();
+        if (!$local) {
+            return null;
+        }
+
+        return [
+            'codigo'         => $local->codigo,
+            'nombre'         => $local->nombre,
+            'product_type'   => $local->tipo_producto ?? '',
+            'presentation'   => $local->presentacion ?? '',
+            'concentracion'  => $local->concentracion ?? '',
+            'unidad_empaque' => $local->unidad_empaque ?? '',
+            'risk_type'      => $local->tipo_riesgo ?? '',
+            'marca'          => $local->fabricante ?? '',
+            'serie'          => '',
+            'descripcion'    => $local->nombre ?? '',
+        ];
+    }
 
     /**
      * Obtener productos desde Fabric con paginación y filtros.
@@ -33,18 +92,35 @@ class FabricInventoryService
         $limit  = min((int) ($filters['limit'] ?? 200), 5000);
         $offset = (int) ($filters['offset'] ?? 0);
 
+        if (!empty($filters['codigo'])) {
+            // findByCode prueba Codigo, CodProducto, etc.
+            $product = $this->queryProductByCode((string) $filters['codigo']);
+            if ($product) {
+                return [
+                    'success' => true,
+                    'data'    => [$this->normalizeProductRow($product)],
+                    'meta'    => ['total' => 1, 'limit' => 1, 'offset' => 0],
+                ];
+            }
+            $local = $this->findLocalNormalized((string) $filters['codigo']);
+            if ($local) {
+                return [
+                    'success' => true,
+                    'data'    => [$local],
+                    'meta'    => ['total' => 1, 'limit' => 1, 'offset' => 0, 'source' => 'inv_productos'],
+                ];
+            }
+        }
+
         $fabricFilters = [];
         if (!empty($filters['search'])) {
             $fabricFilters['Producto'] = "%{$filters['search']}%";
-        }
-        if (!empty($filters['codigo'])) {
-            $fabricFilters['CodProducto'] = $filters['codigo'];
         }
         if (!empty($filters['estado'])) {
             $fabricFilters['Estado'] = $filters['estado'];
         }
 
-        $result = $this->gateway->queryAsSystem(self::SCHEMA, self::VIEW_PRODUCTOS, [
+        $result = $this->gateway->queryAsSystem($this->getProductsSchema(), $this->getProductsView(), [
             'filters'  => $fabricFilters,
             'limit'    => $limit,
             'offset'   => $offset,
@@ -69,16 +145,21 @@ class FabricInventoryService
      */
     public function findByCode(string $code): ?array
     {
-        $result = $this->gateway->queryAsSystem(self::SCHEMA, self::VIEW_PRODUCTOS, [
-            'filters' => ['CodProducto' => $code],
-            'limit'   => 1,
-        ]);
+        return $this->queryProductByCode($code) ?? $this->findLocalProductRaw($code);
+    }
 
-        if (!$result['success'] || empty($result['data'])) {
+    /** Fila cruda local para compatibilidad con findByCum. */
+    private function findLocalProductRaw(string $code): ?array
+    {
+        $normalized = $this->findLocalNormalized($code);
+        if (!$normalized) {
             return null;
         }
 
-        return $result['data'][0];
+        return array_merge($normalized, [
+            'Codigo'   => $normalized['codigo'],
+            'Producto' => $normalized['nombre'],
+        ]);
     }
 
     /**
@@ -94,7 +175,9 @@ class FabricInventoryService
         foreach (array_unique(array_filter(array_map('trim', $codes))) as $code) {
             $product = $this->findByCode($code);
             if ($product) {
-                $results[$code] = $this->normalizeProductRow($product);
+                $results[$code] = isset($product['codigo'])
+                    ? $product
+                    : $this->normalizeProductRow($product);
             }
         }
 
@@ -117,8 +200,8 @@ class FabricInventoryService
             return $this->formatCumProduct($this->normalizeProductRow($byCode), $cumCode);
         }
 
-        foreach (['CodigoCUM', 'Codigo_CUM', 'CUM', 'CodCUM', 'Codigo CUM', 'codigo_cum'] as $cumField) {
-            $result = $this->gateway->queryAsSystem(self::SCHEMA, self::VIEW_PRODUCTOS, [
+        foreach (['CodigoCUM', 'Codigo_CUM', 'CUM', 'CodCUM', 'Codigo CUM', 'codigo_cum', 'CodigoCum'] as $cumField) {
+            $result = $this->gateway->queryAsSystem($this->getProductsSchema(), $this->getProductsView(), [
                 'filters' => [$cumField => $cumCode],
                 'limit'   => 1,
             ]);
@@ -155,17 +238,17 @@ class FabricInventoryService
     public function normalizeProductRow(array $row): array
     {
         return [
-            'codigo'         => $this->pickField($row, ['CodProducto', 'Codigo', 'codigo', 'code', 'product_code']),
-            'nombre'         => $this->pickField($row, ['Producto', 'Nombre', 'nombre', 'name', 'product_name']),
-            'product_type'   => $this->pickField($row, ['TipoProducto', 'Tipo', 'tipo_producto', 'product_type']),
-            'cum_code'       => $this->pickField($row, ['CodigoCUM', 'Codigo_CUM', 'CUM', 'CodCUM', 'codigo_cum']),
-            'presentation'   => $this->pickField($row, ['Presentacion', 'Presentación', 'presentacion', 'presentation']),
-            'concentracion'  => $this->pickField($row, ['Concentracion', 'Concentración', 'concentracion', 'concentration', 'PrincipioActivo', 'principio_activo']),
-            'unidad_empaque' => $this->pickField($row, ['UnidadEmpaque', 'Unidad de Empaque', 'unidad_empaque', 'unidadempaque', 'empaque']),
-            'risk_type'      => $this->pickField($row, ['TipoRiesgo', 'Tipo_Riesgo', 'tipo_riesgo', 'risk_type', 'Tiporiesgo']),
-            'serie'          => $this->pickField($row, ['Serial', 'Serie', 'serie', 'NumeroSerie', 'manejaSerial']),
-            'descripcion'    => $this->pickField($row, ['Descripcion', 'Descripción', 'descripcion', 'description']),
-            'marca'          => $this->pickField($row, ['Marca', 'marca', 'brand', 'Fabricante', 'fabricante']),
+            'codigo'         => $this->pickField($row, ['Codigo', 'CodProducto', 'CodigoProducto', 'codigo', 'code', 'product_code']),
+            'nombre'         => $this->pickField($row, ['Producto', 'Nombre', 'nombre', 'name', 'product_name', 'Descripcion']),
+            'product_type'   => $this->pickField($row, ['TipoProducto', 'Tipo', 'tipo_producto', 'product_type', 'Tipo_Producto']),
+            'cum_code'       => $this->pickField($row, ['CodigoCUM', 'Codigo_CUM', 'CUM', 'CodCUM', 'codigo_cum', 'CodigoCum']),
+            'presentation'   => $this->pickField($row, ['Presentacion', 'Presentación', 'presentacion', 'presentation', 'FormaFarmaceutica', 'forma_farmaceutica']),
+            'concentracion'  => $this->pickField($row, ['Concentracion', 'Concentración', 'concentracion', 'concentration', 'PrincipioActivo', 'principio_activo', 'Principio_Activo']),
+            'unidad_empaque' => $this->pickField($row, ['UnidadEmpaque', 'Unidad de Empaque', 'unidad_empaque', 'unidadempaque', 'empaque', 'Unidad_Empaque', 'UnidadMedida']),
+            'risk_type'      => $this->pickField($row, ['TipoRiesgo', 'Tipo_Riesgo', 'tipo_riesgo', 'risk_type', 'Tiporiesgo', 'Clasificacion']),
+            'serie'          => $this->pickField($row, ['Serial', 'Serie', 'serie', 'NumeroSerie', 'manejaSerial', 'ManejaSerial']),
+            'descripcion'    => $this->pickField($row, ['Descripcion', 'Descripción', 'descripcion', 'description', 'Desc_Producto']),
+            'marca'          => $this->pickField($row, ['Marca', 'marca', 'brand', 'Fabricante', 'fabricante', 'Laboratorio']),
         ];
     }
 
