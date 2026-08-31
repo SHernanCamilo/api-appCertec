@@ -226,9 +226,15 @@ class InvOrdenCompraService
      */
     public function create(array $data, int $userId): array
     {
+        $sucursalId = isset($data['sucursal_id']) ? (int) $data['sucursal_id'] : null;
+
+        // Control de acceso: el usuario debe tener permiso sobre la sucursal elegida.
+        if ($sucursalId && !$this->usuarioTieneAccesoSucursal($userId, $sucursalId)) {
+            return ['success' => false, 'code' => 403, 'message' => 'No tienes acceso a la sucursal seleccionada.'];
+        }
+
         DB::beginTransaction();
         try {
-            $sucursalId = isset($data['sucursal_id']) ? (int) $data['sucursal_id'] : null;
             $numeroOrden = $this->sequenceService->generateSequence('INV', $userId, 'INV-ORDEN_COMPRA', $sucursalId);
             
             $orden = InvOrdenCompra::create([
@@ -412,20 +418,24 @@ class InvOrdenCompraService
     }
 
     /**
-     * Listar las sucursales disponibles para el selector de inventario.
+     * Listar las sucursales disponibles para el selector de inventario,
+     * RESPETANDO los permisos del usuario en seg_empresa_user.
      *
-     * El módulo de inventario farmacia opera sobre una sola empresa
-     * (Clínica Medilaser). Además, solo tiene sentido ofrecer las sucursales
-     * que YA tienen prefijo/secuencia parametrizada, para no mostrar decenas de
-     * sucursales duplicadas de otras empresas (problema visto en el selector).
+     * Reglas de acceso (pivote seg_empresa_user, empresa de inventario):
+     *   - Fila con id_sucursal = NULL y recursivo = 1  → acceso a TODAS las
+     *     sucursales de la empresa ("Todas las sucursales" recursivo).
+     *   - Filas con id_sucursal = X                    → acceso solo a esas
+     *     sucursales específicas (ej. 3 sucursales asignadas).
+     *
+     * Además, solo se ofrecen sucursales que YA tienen secuencia de inventario
+     * parametrizada (config_sec_detalles con patrón), que son las que pueden
+     * generar consecutivo. El resultado es la intersección: permitidas ∩ con secuencia.
      */
     public function getSucursalesDisponibles(int $userId): array
     {
         $empresaId = (int) config('inventory.empresa_id', 1);
 
-        // Preferir las sucursales que YA tienen secuencia de inventario parametrizada
-        // (existe un config_sec_detalles con patrón para esa sucursal). Es la fuente de
-        // verdad: son exactamente las sucursales que pueden generar consecutivo.
+        // 1. Sucursales del inventario con secuencia parametrizada (fuente de verdad).
         $sucursalIdsConSecuencia = DB::table('config_sec_detalles as d')
             ->join('config_sec_secuencias as s', 's.id', '=', 'd.secuencia_id')
             ->join('seg_modulos as m', 'm.id', '=', 's.modulo_id')
@@ -436,7 +446,7 @@ class InvOrdenCompraService
             ->whereNotNull('d.sucursal_id')
             ->pluck('d.sucursal_id')
             ->unique()
-            ->values()
+            ->map(fn ($id) => (int) $id)
             ->all();
 
         $query = \App\Models\Sucursal::where('id_Empresa', $empresaId);
@@ -448,9 +458,34 @@ class InvOrdenCompraService
             $query->whereNotNull('prefijo')->whereRaw("TRIM(prefijo) <> ''");
         }
 
+        // 2. Filtrar por los permisos del usuario en la empresa.
+        $accesoTotal = false;                 // ¿tiene "Todas las sucursales" recursivo?
+        $sucursalesPermitidas = [];           // ids explícitos permitidos
+
+        $filasAcceso = DB::table('seg_empresa_user')
+            ->where('user_id', $userId)
+            ->where('empresa_id', $empresaId)
+            ->get(['id_sucursal', 'recursivo']);
+
+        foreach ($filasAcceso as $fila) {
+            if ($fila->id_sucursal === null && (int) $fila->recursivo === 1) {
+                $accesoTotal = true;          // acceso a todas las sucursales de la empresa
+                break;
+            }
+            if ($fila->id_sucursal !== null) {
+                $sucursalesPermitidas[] = (int) $fila->id_sucursal;
+            }
+        }
+
+        // Si el usuario NO tiene acceso total, limitar a sus sucursales explícitas.
+        // (Si no tiene ninguna fila de acceso a esta empresa, no ve sucursales.)
+        if (!$accesoTotal) {
+            $query->whereIn('id', $sucursalesPermitidas ?: [0]);
+        }
+
         $sucursales = $query->orderBy('nombre')->get(['id', 'nombre', 'prefijo', 'id_Empresa']);
 
-        // Preseleccionar la sucursal principal del usuario si pertenece a esta empresa.
+        // Preseleccionar la sucursal principal del usuario si está entre las permitidas.
         $user = \App\Models\User::find($userId);
         $principal = (int) ($user->id_sucursal ?? 0);
 
@@ -463,6 +498,42 @@ class InvOrdenCompraService
             ];
         })->values();
 
-        return ['success' => true, 'data' => $data];
+        return [
+            'success' => true,
+            'data'    => $data,
+            'meta'    => [
+                'acceso_total' => $accesoTotal,
+                'total'        => $data->count(),
+            ],
+        ];
+    }
+
+    /**
+     * Verifica si un usuario tiene acceso a una sucursal según seg_empresa_user.
+     * Acceso si: tiene "todas las sucursales" recursivo (id_sucursal NULL + recursivo=1)
+     * en la empresa, o tiene esa sucursal asignada explícitamente.
+     * Se usa como control de seguridad al sincronizar/crear OC (no solo en el selector).
+     */
+    public function usuarioTieneAccesoSucursal(int $userId, int $sucursalId): bool
+    {
+        $empresaId = (int) config('inventory.empresa_id', 1);
+
+        $filas = DB::table('seg_empresa_user')
+            ->where('user_id', $userId)
+            ->where('empresa_id', $empresaId)
+            ->get(['id_sucursal', 'recursivo']);
+
+        foreach ($filas as $fila) {
+            // Acceso total: todas las sucursales de la empresa.
+            if ($fila->id_sucursal === null && (int) $fila->recursivo === 1) {
+                return true;
+            }
+            // Acceso explícito a esta sucursal.
+            if ((int) $fila->id_sucursal === $sucursalId) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

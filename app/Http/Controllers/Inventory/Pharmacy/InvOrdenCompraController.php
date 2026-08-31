@@ -263,6 +263,14 @@ class InvOrdenCompraController extends Controller
         try {
             $userId = auth('api')->id() ?? 1;
             
+            // Control de acceso: si se indica sucursal, el usuario debe tener permiso sobre ella.
+            if ($sucursal_id && !$this->service->usuarioTieneAccesoSucursal((int) $userId, (int) $sucursal_id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No tienes acceso a la sucursal seleccionada.',
+                ], 403);
+            }
+
             $options = [];
             if ($numero_orden) {
                 $options['numero_orden'] = $numero_orden;
