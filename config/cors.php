@@ -26,7 +26,22 @@ return [
        'https://review-dose-reasonable-pointed.trycloudflare.com',
    ],
    'allowed_headers' => ['*'],
-   'exposed_headers' => [],
+
+   // Headers de respuesta legibles desde JavaScript.
+   //
+   // CORS oculta por defecto TODO header personalizado: sin declararlo aqui,
+   // response.headers.get('X-Export-Format') devuelve null en el navegador
+   // aunque el servidor lo envie. El frontend (jade.medilaser.com.co) y esta
+   // API (jade-api.medilaser.com.co) son origenes distintos, asi que aplica.
+   //
+   // Sin esto el viewer de vistas asumia 'xlsx' por defecto y le pasaba el
+   // NDJSON.gz de `?as=data` a SheetJS, que lo leia como texto y pintaba la
+   // grilla con basura binaria.
+   'exposed_headers' => [
+       'X-Export-Format',
+       'X-Export-Rows',
+       'Content-Disposition',
+   ],
    'max_age' => 0,
    'supports_credentials' => true,
 
