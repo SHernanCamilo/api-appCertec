@@ -20,6 +20,16 @@ Route::middleware(['auth:api'])->group(function () {
     require __DIR__ . '/BiGruposRouter.php';
 
     // =========================================================================
+    // Parámetros de formularios BI — bi_form_parametros
+    // =========================================================================
+    Route::prefix('form-parametros')->group(function () {
+        Route::get('/{formulario}', [\App\Http\Controllers\Fabric\BiFormParametrosController::class, 'show'])
+            ->where('formulario', '[A-Za-z0-9_-]+');
+        Route::put('/{formulario}', [\App\Http\Controllers\Fabric\BiFormParametrosController::class, 'upsert'])
+            ->where('formulario', '[A-Za-z0-9_-]+');
+    });
+
+    // =========================================================================
     // Traslado asistencial — bi_from_tras_asistencial
     // =========================================================================
     Route::prefix('traslado-asistencial')->group(function () {

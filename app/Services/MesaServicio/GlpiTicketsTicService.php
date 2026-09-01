@@ -52,7 +52,7 @@ class GlpiTicketsTicService
         $grupoId = max(1, (int) config('glpi.tic_tablero.grupo_id', 29));
         $alertaHoras = max(1, (int) config('glpi.tic_tablero.alerta_horas', 2));
         $ttl = max(15, (int) config('glpi.tic_tablero.cache_segundos', 60));
-        $cacheKey = "mesa_glpi_tablero_tic_v3_{$grupoId}_{$alertaHoras}";
+        $cacheKey = "mesa_glpi_tablero_tic_v4_{$grupoId}_{$alertaHoras}";
 
         if ($forzar) {
             Cache::forget($cacheKey);
@@ -116,6 +116,7 @@ class GlpiTicketsTicService
 
         $ids = [];
         $gruposPorTicket = [];
+        $idsTecnicos = [];
         foreach ($filas as $fila) {
             $id = (int) ($fila['id'] ?? 0);
             if ($id < 1) {
@@ -123,8 +124,12 @@ class GlpiTicketsTicService
             }
             $ids[] = $id;
             $gruposPorTicket[$id] = $this->listaNombres($fila['grupo'] ?? null);
+            foreach ($this->extraerIds($fila['tecnico'] ?? null) as $userId) {
+                $idsTecnicos[] = $userId;
+            }
         }
         $ultimoGrupoPorTicket = $this->consultarUltimoGrupoHistorico($ids, $gruposPorTicket);
+        $nombresTecnicos = $this->resolverNombresUsuarios($idsTecnicos);
 
         foreach ($filas as $fila) {
             $id = (int) ($fila['id'] ?? 0);
@@ -133,7 +138,8 @@ class GlpiTicketsTicService
                 $ahora,
                 $limite,
                 $alertaHoras,
-                $ultimoGrupoPorTicket[$id] ?? null
+                $ultimoGrupoPorTicket[$id] ?? null,
+                $nombresTecnicos
             );
             $tickets[] = $ticket;
             $resumen['abiertos']++;
@@ -229,9 +235,17 @@ class GlpiTicketsTicService
     /**
      * @param  array<string, mixed>  $fila
      * @param  array{nombre: string, nivel: int}|null  $grupoHistorico
+     * @param  array<int, string>  $nombresTecnicos
      * @return array<string, mixed>
      */
-    private function mapearTicket(array $fila, Carbon $ahora, Carbon $limite, int $alertaHoras, ?array $grupoHistorico = null): array
+    private function mapearTicket(
+        array $fila,
+        Carbon $ahora,
+        Carbon $limite,
+        int $alertaHoras,
+        ?array $grupoHistorico = null,
+        array $nombresTecnicos = []
+    ): array
     {
         $prioridadId = $this->entero($fila['prioridad'] ?? null);
         $estadoId = $this->entero($fila['estado'] ?? null);
@@ -269,7 +283,7 @@ class GlpiTicketsTicService
             'estado_id' => $estadoId,
             'estado' => self::ESTADOS[$estadoId] ?? ($this->texto($fila['estado'] ?? null) ?: '—'),
             'solicitante' => $this->texto($fila['solicitante'] ?? null) ?: '—',
-            'tecnico' => $this->texto($fila['tecnico'] ?? null) ?: 'Sin asignar',
+            'tecnico' => $this->nombresTecnicos($fila['tecnico'] ?? null, $nombresTecnicos) ?: 'Sin asignar',
             'categoria' => $this->texto($fila['categoria'] ?? null) ?: '—',
             'grupo' => implode(', ', $grupos),
             'grupos' => $grupos,
@@ -435,6 +449,129 @@ class GlpiTicketsTicService
         }
 
         return $nombres;
+    }
+
+    /**
+     * @param  list<int>  $userIds
+     * @return array<int, string>
+     */
+    private function resolverNombresUsuarios(array $userIds): array
+    {
+        $userIds = array_values(array_unique(array_filter($userIds)));
+        if ($userIds === []) {
+            return [];
+        }
+
+        $nombres = [];
+        try {
+            foreach (array_chunk($userIds, 50) as $chunk) {
+                $params = ['get_hateoas' => false];
+                foreach (array_values($chunk) as $i => $id) {
+                    $params['items['.$i.'][itemtype]'] = 'User';
+                    $params['items['.$i.'][items_id]'] = $id;
+                }
+                $items = $this->glpi->normalizeCollection($this->glpi->get('/getMultipleItems', $params));
+                foreach ($items as $item) {
+                    $id = (int) ($item['id'] ?? 0);
+                    $nombre = $this->nombreUsuario($item);
+                    if ($id > 0 && $nombre !== '') {
+                        $nombres[$id] = $nombre;
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            Log::warning('Tablero TIC: no se pudieron resolver técnicos en lote: '.$e->getMessage());
+        }
+
+        foreach ($userIds as $id) {
+            if (isset($nombres[$id])) {
+                continue;
+            }
+            try {
+                $usuario = $this->glpi->getItem('User', $id);
+                $nombre = $this->nombreUsuario($usuario);
+                if ($nombre !== '') {
+                    $nombres[$id] = $nombre;
+                }
+            } catch (Throwable $e) {
+                // El tablero sigue con el resto de técnicos.
+            }
+        }
+
+        return $nombres;
+    }
+
+    /**
+     * @param  array<string, mixed>  $usuario
+     */
+    private function nombreUsuario(array $usuario): string
+    {
+        $completo = trim(implode(' ', array_filter([
+            trim((string) ($usuario['firstname'] ?? '')),
+            trim((string) ($usuario['realname'] ?? '')),
+        ])));
+        if ($completo !== '') {
+            return $completo;
+        }
+
+        foreach (['completename', 'name'] as $campo) {
+            $valor = trim((string) ($usuario[$campo] ?? ''));
+            if ($valor !== '') {
+                return $valor;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function extraerIds(mixed $valor): array
+    {
+        if ($valor === null || $valor === false || $valor === '') {
+            return [];
+        }
+
+        if (is_array($valor)) {
+            $ids = [];
+            foreach ($valor as $item) {
+                foreach ($this->extraerIds($item) as $id) {
+                    $ids[] = $id;
+                }
+            }
+
+            return array_values(array_unique($ids));
+        }
+
+        $texto = trim((string) $valor);
+        if (preg_match('/^\d+$/', $texto)) {
+            return [(int) $texto];
+        }
+
+        if (preg_match('/^[\d\s,;]+$/', $texto) && preg_match_all('/\d+/', $texto, $matches)) {
+            return array_values(array_unique(array_map('intval', $matches[0])));
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<int, string>  $nombres
+     */
+    private function nombresTecnicos(mixed $valor, array $nombres): string
+    {
+        $ids = $this->extraerIds($valor);
+        if ($ids === []) {
+            return $this->texto($valor);
+        }
+
+        $lista = [];
+        foreach ($ids as $id) {
+            $lista[] = $nombres[$id] ?? (string) $id;
+        }
+
+        return implode(', ', array_unique($lista));
     }
 
     /**

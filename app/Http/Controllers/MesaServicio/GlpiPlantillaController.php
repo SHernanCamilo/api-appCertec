@@ -179,6 +179,65 @@ class GlpiPlantillaController extends Controller
         }
     }
 
+    public function duplicar(int $id): JsonResponse
+    {
+        $origen = GlpiParamPlantilla::with(['ans', 'categorias'])->find($id);
+
+        if (! $origen) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Plantilla no encontrada.',
+            ], 404);
+        }
+
+        try {
+            $copia = DB::transaction(function () use ($origen) {
+                $copia = GlpiParamPlantilla::create([
+                    'codigo' => $this->codigoUnicoCopia((string) $origen->codigo),
+                    'nombre' => $this->nombreCopia((string) $origen->nombre),
+                    'descripcion' => $origen->descripcion,
+                    'id_empresa' => $origen->id_empresa,
+                    'nombre_entidad' => $origen->nombre_entidad,
+                    'grupo_tecnico' => $origen->grupo_tecnico,
+                    'sla_asignacion' => $origen->sla_asignacion,
+                    'prefijo_regla' => $origen->prefijo_regla ?: 'TIC',
+                    'estado' => (bool) $origen->estado,
+                    'created_by' => auth()->id(),
+                ]);
+
+                $ans = $this->ordenarAns($origen->ans)->map(static fn ($fila): array => [
+                    'prioridad' => $fila->prioridad,
+                    'tiempo_asignacion' => $fila->tiempo_asignacion,
+                    'unidad_asignacion' => $fila->unidad_asignacion ?? 'hora',
+                    'tiempo_solucion' => $fila->tiempo_solucion,
+                    'unidad_solucion' => $fila->unidad_solucion ?? 'hora',
+                    'nombre_sla_solucion' => $fila->nombre_sla_solucion,
+                    'nombre_regla' => $fila->nombre_regla,
+                ])->all();
+
+                $this->sincronizarAns($copia, $ans);
+                $this->sincronizarCategorias($copia, $this->construirArbol($origen->categorias ?? collect()));
+
+                return $copia->load(['empresa:id,nombre', 'ans', 'categorias'])->loadCount('categorias');
+            });
+
+            $copia->setRelation('ans', $this->ordenarAns($copia->ans));
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Plantilla duplicada correctamente.',
+                'data' => $this->presentarPlantilla($copia),
+            ], 201);
+        } catch (Throwable $e) {
+            Log::error('Error al duplicar plantilla GLPI: '.$e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al duplicar la plantilla.',
+            ], 500);
+        }
+    }
+
     public function toggleEstado(int $id): JsonResponse
     {
         $plantilla = GlpiParamPlantilla::find($id);
@@ -198,6 +257,46 @@ class GlpiPlantillaController extends Controller
             'message' => $plantilla->estado ? 'Plantilla activada.' : 'Plantilla desactivada.',
             'data' => $plantilla->fresh(['empresa:id,nombre', 'ans', 'categorias']),
         ]);
+    }
+
+    private function codigoUnicoCopia(string $codigo): string
+    {
+        $base = strtoupper(trim($codigo));
+        $max = 40;
+
+        for ($n = 1; $n <= 99; $n++) {
+            $sufijo = $n === 1 ? '-COPIA' : '-C'.$n;
+            $disponible = $max - mb_strlen($sufijo);
+            $candidato = $disponible < 1
+                ? mb_substr($sufijo, 0, $max)
+                : mb_substr($base, 0, $disponible).$sufijo;
+
+            if (! GlpiParamPlantilla::where('codigo', $candidato)->exists()) {
+                return $candidato;
+            }
+        }
+
+        $sufijo = '-'.strtoupper(substr(uniqid(), -4));
+
+        return mb_substr($base, 0, $max - mb_strlen($sufijo)).$sufijo;
+    }
+
+    private function nombreCopia(string $nombre): string
+    {
+        $base = trim($nombre);
+        $sinSufijo = preg_replace('/ \(copia(?: \d+)?\)$/u', '', $base);
+        $base = is_string($sinSufijo) && $sinSufijo !== '' ? $sinSufijo : $base;
+        $max = 150;
+
+        for ($n = 1; $n <= 99; $n++) {
+            $sufijo = $n === 1 ? ' (copia)' : " (copia {$n})";
+            $candidato = mb_substr($base, 0, $max - mb_strlen($sufijo)).$sufijo;
+            if (! GlpiParamPlantilla::where('nombre', $candidato)->exists()) {
+                return $candidato;
+            }
+        }
+
+        return mb_substr($base, 0, $max);
     }
 
     private function cabeceraDesdeRequest(array $validated): array
@@ -270,13 +369,18 @@ class GlpiPlantillaController extends Controller
         $hijas = is_array($nodo['hijas'] ?? null) ? $nodo['hijas'] : [];
         $ansNombre = trim((string) ($nodo['ans_nombre'] ?? ''));
         $prioridad = (string) ($nodo['prioridad'] ?? 'baja');
+        $ansNombre = GlpiParamPlantilla::resolverNombreAns($ansNombre, $prioridad, $plantilla->ans) ?? $ansNombre;
 
         if ($ansNombre !== '') {
-            $ansAsociado = $plantilla->ans->first(
-                fn ($ans) => mb_strtoupper(trim((string) $ans->nombre_regla)) === mb_strtoupper($ansNombre)
-            );
+            $ansAsociado = $plantilla->ans->first(function ($ans) use ($ansNombre): bool {
+                $objetivo = GlpiParamPlantilla::normalizarNombreAns($ansNombre);
+
+                return GlpiParamPlantilla::normalizarNombreAns((string) ($ans->nombre_regla ?? '')) === $objetivo
+                    || GlpiParamPlantilla::normalizarNombreAns((string) ($ans->nombre_sla_solucion ?? '')) === $objetivo;
+            });
             if ($ansAsociado) {
                 $prioridad = (string) $ansAsociado->prioridad;
+                $ansNombre = trim((string) $ansAsociado->nombre_regla) ?: $ansNombre;
             }
         }
 
@@ -307,12 +411,12 @@ class GlpiPlantillaController extends Controller
     private function presentarPlantilla(GlpiParamPlantilla $plantilla): array
     {
         $data = $plantilla->toArray();
-        $data['categorias'] = $this->construirArbol($plantilla->categorias ?? collect());
+        $data['categorias'] = $this->construirArbol($plantilla->categorias ?? collect(), $plantilla->ans);
 
         return $data;
     }
 
-    private function construirArbol($categorias): array
+    private function construirArbol($categorias, $ans = null): array
     {
         $filas = collect($categorias);
         if ($filas->isEmpty()) {
@@ -323,31 +427,40 @@ class GlpiPlantillaController extends Controller
         $idsUnicos = $ids->unique()->count() === $filas->count() && $ids->every(fn ($id) => $id > 0);
 
         if ($idsUnicos) {
-            return $this->arbolDesdeParentId($filas);
+            return $this->arbolDesdeParentId($filas, $ans);
         }
 
-        return $this->arbolDesdeRutaCompleta($filas);
+        return $this->arbolDesdeRutaCompleta($filas, $ans);
     }
 
-    private function arbolDesdeParentId($filas): array
+    private function ansNombreNodo($item, $ans): ?string
+    {
+        return GlpiParamPlantilla::resolverNombreAns(
+            $item->ans_nombre ?? null,
+            $item->prioridad ?? null,
+            $ans
+        );
+    }
+
+    private function arbolDesdeParentId($filas, $ans = null): array
     {
         $porPadre = $filas->groupBy(fn ($item) => (string) ((int) ($item->parent_id ?: 0)));
 
-        $armar = function (int $parentId, array $stack = []) use (&$armar, $porPadre): array {
+        $armar = function (int $parentId, array $stack = []) use (&$armar, $porPadre, $ans): array {
             if (in_array($parentId, $stack, true)) {
                 return [];
             }
             $stack[] = $parentId;
             $key = (string) $parentId;
 
-            return ($porPadre[$key] ?? collect())->map(function ($item) use ($armar, $stack) {
+            return ($porPadre[$key] ?? collect())->map(function ($item) use ($armar, $stack, $ans) {
                 $id = (int) $item->id;
 
                 return [
                     'id' => $id,
                     'nombre' => $item->nombre ?: $item->categoria,
                     'prioridad' => $item->prioridad,
-                    'ans_nombre' => $item->ans_nombre,
+                    'ans_nombre' => $this->ansNombreNodo($item, $ans),
                     'nivel' => (int) $item->nivel,
                     'ruta_completa' => $item->ruta_completa,
                     'hijas' => $id > 0 ? $armar($id, $stack) : [],
@@ -358,7 +471,7 @@ class GlpiPlantillaController extends Controller
         return $armar(0);
     }
 
-    private function arbolDesdeRutaCompleta($filas): array
+    private function arbolDesdeRutaCompleta($filas, $ans = null): array
     {
         $nodos = [];
         foreach ($filas as $fila) {
@@ -370,7 +483,7 @@ class GlpiPlantillaController extends Controller
                 'id' => (int) ($fila->id ?? 0),
                 'nombre' => $fila->nombre ?: $fila->categoria,
                 'prioridad' => $fila->prioridad,
-                'ans_nombre' => $fila->ans_nombre,
+                'ans_nombre' => $this->ansNombreNodo($fila, $ans),
                 'nivel' => (int) ($fila->nivel ?: 1),
                 'ruta_completa' => $ruta,
                 'hijas' => [],

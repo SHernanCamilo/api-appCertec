@@ -56,25 +56,180 @@ class EmpleadoController extends Controller
         }
     }
 
+    public function cargos(): JsonResponse
+    {
+        $cargos = \App\Models\Cargo::query()
+            ->where('estado', true)
+            ->orderBy('nombre_cargo')
+            ->get(['id_cargo', 'nombre_cargo']);
+
+        return response()->json(['success' => true, 'data' => $cargos]);
+    }
+
+    public function porDocumento(Request $request): JsonResponse
+    {
+        $documento = trim((string) $request->input('documento', $request->input('numero_identificacion', '')));
+        $email = strtolower(trim((string) $request->input('email', '')));
+
+        if ($documento === '' && $email === '') {
+            return response()->json([
+                'message' => 'Indique documento o correo',
+            ], 422);
+        }
+
+        $relaciones = ['empresa', 'cargoRelacion', 'usuarioCrea:id,name,email', 'usuarioActualiza:id,name,email', 'usuario:id,name,email,numero_identificacion,tipo_identificacion,telefono,direccion'];
+
+        $personaQuery = Empleado::with($relaciones);
+
+        if ($documento !== '') {
+            $personaQuery->where('numero_identificacion', $documento);
+            if ($request->filled('id_empresa')) {
+                $personaQuery->where('id_empresa', $request->integer('id_empresa'));
+            }
+        } else {
+            $personaQuery->whereRaw('LOWER(TRIM(email)) = ?', [$email]);
+        }
+
+        $persona = $personaQuery->first();
+
+        if (!$persona && $documento !== '' && $request->filled('id_empresa')) {
+            $persona = Empleado::with($relaciones)
+                ->where('numero_identificacion', $documento)
+                ->first();
+        }
+
+        if (!$persona && $email !== '') {
+            $persona = Empleado::with($relaciones)
+                ->whereRaw('LOWER(TRIM(email)) = ?', [$email])
+                ->first();
+        }
+
+        $usuario = null;
+        if ($persona?->id_user) {
+            $usuario = \App\Models\User::query()
+                ->select('id', 'name', 'email', 'numero_identificacion', 'tipo_identificacion', 'telefono', 'direccion', 'estado')
+                ->find($persona->id_user);
+        }
+
+        if (!$usuario && $documento !== '') {
+            $usuario = \App\Models\User::query()
+                ->select('id', 'name', 'email', 'numero_identificacion', 'tipo_identificacion', 'telefono', 'direccion', 'estado')
+                ->where('numero_identificacion', $documento)
+                ->first();
+        }
+
+        if (!$usuario && $email !== '') {
+            $usuario = \App\Models\User::query()
+                ->select('id', 'name', 'email', 'numero_identificacion', 'tipo_identificacion', 'telefono', 'direccion', 'estado')
+                ->whereRaw('LOWER(TRIM(email)) = ?', [$email])
+                ->first();
+        }
+
+        if (!$usuario && $persona?->email) {
+            $usuario = \App\Models\User::query()
+                ->select('id', 'name', 'email', 'numero_identificacion', 'tipo_identificacion', 'telefono', 'direccion', 'estado')
+                ->whereRaw('LOWER(TRIM(email)) = ?', [strtolower(trim($persona->email))])
+                ->first();
+        }
+
+        if (!$persona && !$usuario) {
+            return response()->json([
+                'data' => ['persona' => null, 'usuario' => null],
+            ], 200);
+        }
+
+        return response()->json([
+            'data' => [
+                'persona' => $persona,
+                'usuario' => $usuario,
+            ],
+        ]);
+    }
+
+    public function usuariosLookup(Request $request): JsonResponse
+    {
+
+        $auth = auth('api')->user();
+
+        $esAdmin = method_exists($auth, 'rolesCustom') && $auth->rolesCustom()->where('es_admin', true)->exists();
+
+        $empresaIds = method_exists($auth, 'empresas')
+            ? $auth->empresas()->pluck('ent_empresas.id')->map(fn ($id) => (int) $id)
+            : collect();
+
+        // 4. El usuario ve todo si es admin o si no tiene ninguna empresa asociada.
+        $verTodo = $esAdmin || $empresaIds->isEmpty();
+
+        $query = \App\Models\User::query()
+            ->select('id', 'name', 'email', 'numero_identificacion', 'tipo_identificacion', 'telefono', 'direccion', 'estado', 'cargo')
+            ->orderBy('name');
+
+        if (!$verTodo) {
+            $query->whereHas('empresas', function ($q) use ($empresaIds) {
+                $q->whereIn('ent_empresas.id', $empresaIds);
+            });
+        }
+
+        if ($request->filled('id_empresa')) {
+            $empresaId = $request->integer('id_empresa');
+            if (!$verTodo && !$empresaIds->contains($empresaId)) {
+                return response()->json(['message' => 'Sin permiso sobre esa empresa'], 403);
+            }
+            $query->whereHas('empresas', function ($q) use ($empresaId) {
+                $q->where('ent_empresas.id', $empresaId);
+            });
+        }
+
+        $buscar = trim((string) $request->input('buscar', ''));
+        if (strlen($buscar) >= 2) {
+            $query->where(function ($q) use ($buscar) {
+                $q->where('name', 'like', '%'.$buscar.'%')
+                    ->orWhere('email', 'like', '%'.$buscar.'%')
+                    ->orWhere('numero_identificacion', 'like', $buscar.'%');
+            });
+        }
+
+        $perPage = min(max((int) $request->input('per_page', 25), 5), 100);
+        $usuarios = $query->paginate($perPage);
+
+        return response()->json([
+            'data'  => $usuarios->items(),
+            'meta'  => [
+                'current_page' => $usuarios->currentPage(),
+                'per_page'     => $usuarios->perPage(),
+                'total'        => $usuarios->total(),
+                'last_page'    => $usuarios->lastPage(),
+            ],
+            'scope' => $verTodo ? 'todos' : 'empresas',
+        ]);
+    }
+
+    public function show(string $id): JsonResponse
+    {
+        try {
+            return response()->json([
+                'success' => true,
+                'data'    => $this->empleadoService->obtener((int) $id),
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se encontró el registro',
+            ], 404);
+        }
+    }
+
     public function index(Request $request): JsonResponse
     {
         try {
             $user    = auth('api')->user();
-            $filters = $request->all();
+            $filters = $request->except(['todas_empresas']);
+            $todasEmpresas = filter_var($request->input('todas_empresas'), FILTER_VALIDATE_BOOLEAN);
+            $contexto = UsuarioContexto::where('user_id', $user->id)->first();
 
-            // Si no viene id_empresa en el request, usar el contexto del usuario
-            if (empty($filters['id_empresa'])) {
-                $contexto = UsuarioContexto::where('user_id', $user->id)->first();
-
-                Log::channel('daily')->info('📋 Listado de empleados', [
-                    'user_id'            => $user->id,
-                    'email'              => $user->email,
-                    'id_empresa_request' => $request->input('id_empresa'),
-                    'id_empresa_contexto'=> $contexto?->empresa_id,
-                    'filtros'            => $filters,
-                    'ip'                 => $request->ip(),
-                ]);
-
+            // Si no viene id_empresa, el listado de anticipos usa el contexto.
+            // El CRUD de personas envía todas_empresas=1 para ver toda la tabla.
+            if (empty($filters['id_empresa']) && !$todasEmpresas) {
                 if ($contexto?->empresa_id) {
                     $filters['id_empresa'] = $contexto->empresa_id;
                 } else {
@@ -84,6 +239,16 @@ class EmpleadoController extends Controller
                     ]);
                 }
             }
+
+            Log::channel('daily')->info('📋 Listado de empleados', [
+                'user_id'             => $user->id,
+                'email'               => $user->email,
+                'id_empresa_request'  => $request->input('id_empresa'),
+                'id_empresa_contexto' => $contexto?->empresa_id,
+                'todas_empresas'      => $todasEmpresas,
+                'filtros'             => $filters,
+                'ip'                  => $request->ip(),
+            ]);
 
             $empleados = $this->empleadoService->listar($filters);
 
@@ -183,7 +348,7 @@ class EmpleadoController extends Controller
             ], 404);
         }
 
-        $tercero = Empleado::with(['empresa', 'cargoRelacion'])
+        $tercero = Empleado::with(['empresa', 'cargoRelacion', 'usuarioCrea:id,name,email', 'usuarioActualiza:id,name,email'])
             ->where('numero_identificacion', $user->numero_identificacion)
             ->first();
 

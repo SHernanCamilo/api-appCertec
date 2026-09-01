@@ -1146,7 +1146,13 @@ class GlpiValidadorService
                 'ruta' => (string) ($nodo->ruta_completa ?: $nodo->nombre ?: $nodo->categoria),
                 'nombre' => (string) ($nodo->nombre ?: $nodo->categoria),
             ];
-            $ansNombre = trim((string) ($nodo->ans_nombre ?? ''));
+            $ansNombre = trim((string) (
+                GlpiParamPlantilla::resolverNombreAns(
+                    $nodo->ans_nombre ?? null,
+                    $nodo->prioridad ?? null,
+                    $plantilla->ans
+                ) ?? $nodo->ans_nombre ?? ''
+            ));
             if ($ansNombre !== '') {
                 $usaAsociacion = true;
                 if ($nombresAns !== [] && in_array($this->normalizarTexto($ansNombre), $nombresAns, true)) {
