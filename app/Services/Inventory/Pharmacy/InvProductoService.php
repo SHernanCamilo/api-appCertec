@@ -124,6 +124,100 @@ class InvProductoService
     }
 
     // =========================================================================
+    //  VALIDACIÓN MASIVA (carga de pedidos)
+    // =========================================================================
+
+    /**
+     * Valida un lote de productos contra el catálogo de Fabric (VW_Inventory_Productos).
+     *
+     * Eficiente: consulta el catálogo UNA sola vez (indexado + cacheado en
+     * FabricInventoryService) y valida todo el lote en memoria, en lugar de una
+     * llamada por producto. Los productos se buscan en Fabric (fuente de verdad),
+     * no en la tabla local inv_productos (que puede estar vacía).
+     *
+     * @param array $rows Filas del Excel: [['product_code'=>..., 'quantity'=>..., 'rotation_type'=>...], ...]
+     * @return array{success:bool, data:array, errors:array, warnings:array}
+     */
+    public function validateBulk(array $rows): array
+    {
+        $validRotations = ['bajo', 'baja', 'media', 'alta', 'nula'];
+
+        // 1. Recolectar los códigos del lote para una sola consulta a Fabric.
+        $codigos = [];
+        foreach ($rows as $row) {
+            $code = trim((string) ($row['product_code'] ?? ''));
+            if ($code !== '') {
+                $codigos[] = $code;
+            }
+        }
+
+        // 2. Traer del catálogo de Fabric solo los productos del lote (1 consulta).
+        $catalogo = $this->fabricService->findByCodes($codigos); // [codigoOriginal => filaNormalizada]
+        // Reindexar por código en mayúsculas para comparación robusta.
+        $indice = [];
+        foreach ($catalogo as $prod) {
+            $cod = strtoupper(trim((string) ($prod['codigo'] ?? '')));
+            if ($cod !== '') {
+                $indice[$cod] = $prod;
+            }
+        }
+
+        $validatedItems = [];
+        $errors = [];
+        $warnings = [];
+
+        // 3. Validar cada fila contra el índice en memoria.
+        foreach ($rows as $index => $row) {
+            $rowNum      = $index + 2; // +1 índice base 0, +1 encabezado Excel
+            $productCode = trim((string) ($row['product_code'] ?? ''));
+            $quantity    = (int) ($row['quantity'] ?? 0);
+            $rotation    = strtolower(trim((string) ($row['rotation_type'] ?? 'media')));
+
+            if ($productCode === '') {
+                $errors[] = "Fila {$rowNum}: El código de producto está vacío.";
+                continue;
+            }
+            if ($quantity <= 0) {
+                $errors[] = "Fila {$rowNum}: La cantidad debe ser mayor a 0 (Producto: {$productCode}).";
+                continue;
+            }
+
+            $prod = $indice[strtoupper($productCode)] ?? null;
+            if (!$prod) {
+                $errors[] = "Fila {$rowNum}: Producto no encontrado en el catálogo (código {$productCode}).";
+                continue;
+            }
+
+            if (!in_array($rotation, $validRotations, true)) {
+                $warnings[] = "Fila {$rowNum}: Producto {$productCode} con rotación inválida '{$rotation}'. Se usó 'media'.";
+                $rotation = 'media';
+            }
+
+            $marca = $prod['marca'] ?? $prod['fabricante'] ?? '';
+            if ($marca === '') {
+                $warnings[] = "Fila {$rowNum}: Producto {$productCode} sin fabricante.";
+            }
+
+            $validatedItems[] = [
+                'product_code'  => $prod['codigo'] ?? $productCode,
+                'product_name'  => $prod['nombre'] ?? '',
+                'quantity'      => $quantity,
+                'rotation_type' => $rotation,
+                'brand'         => $marca,
+                'average_cost'  => (float) ($prod['costo_promedio'] ?? $prod['Costo_promedio'] ?? 0),
+                'price'         => (float) ($prod['precio_venta'] ?? $prod['Precio_Venta'] ?? 0),
+            ];
+        }
+
+        return [
+            'success'  => true,
+            'data'     => $validatedItems,
+            'errors'   => $errors,
+            'warnings' => $warnings,
+        ];
+    }
+
+    // =========================================================================
     //  BUSCAR EN INVIMA
     // =========================================================================
 

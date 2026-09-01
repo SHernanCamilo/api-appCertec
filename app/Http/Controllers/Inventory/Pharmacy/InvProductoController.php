@@ -313,61 +313,18 @@ class InvProductoController extends Controller
             return response()->json(['success' => false, 'message' => 'El cuerpo debe ser un array JSON'], 400);
         }
 
-        $validatedItems = [];
-        $errors = [];
-        $warnings = [];
-
-        foreach ($rows as $index => $row) {
-            $rowNum = $index + 2; // +1 for 0-index, +1 for excel header
-            $productCode = $row['product_code'] ?? null;
-            $quantity = (int)($row['quantity'] ?? 0);
-            $rotation = strtolower(trim($row['rotation_type'] ?? 'media'));
-
-            if (!$productCode) {
-                $errors[] = "Fila $rowNum: El código de producto está vacío.";
-                continue;
-            }
-
-            if ($quantity <= 0) {
-                $errors[] = "Fila $rowNum: La cantidad debe ser mayor a 0 (Producto: $productCode).";
-                continue;
-            }
-
-            // Buscar en BD
-            $producto = \App\Models\Inventory\InvProducto::where('codigo', $productCode)->first();
-            if (!$producto) {
-                $errors[] = "Fila $rowNum: Producto no encontrado con el código $productCode.";
-                continue;
-            }
-
-            // Validar rotación
-            $validRotations = ['bajo', 'media', 'alta', 'nula', 'baja'];
-            if (!in_array($rotation, $validRotations)) {
-                $warnings[] = "Fila $rowNum: Producto $productCode con rotación inválida '$rotation'.";
-                $rotation = 'media';
-            }
-            if (!$producto->fabricante) {
-                $warnings[] = "Fila $rowNum: Producto $productCode sin fabricante.";
-            }
-
-            // Mapear item para frontend
-            $validatedItems[] = [
-                'product_code' => $producto->codigo,
-                'product_name' => $producto->nombre,
-                'quantity' => $quantity,
-                'rotation_type' => $rotation,
-                'brand' => $producto->fabricante,
-                'average_cost' => (float)$producto->costo_promedio,
-                'price' => (float)$producto->precio_venta,
-            ];
+        try {
+            $result = $this->service->validateBulk($rows);
+            return response()->json($result, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al validar productos: ' . $e->getMessage(),
+                'data'    => [],
+                'errors'  => [],
+                'warnings' => [],
+            ], 500);
         }
-
-        return response()->json([
-            'success' => true,
-            'data' => $validatedItems,
-            'errors' => $errors,
-            'warnings' => $warnings
-        ], 200);
     }
 
     /**
