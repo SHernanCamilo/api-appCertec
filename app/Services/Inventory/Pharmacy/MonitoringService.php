@@ -88,6 +88,7 @@ class MonitoringService
 
                 $cabecera = $detalles->first();
                 $descripcion = $cabecera['Descripcion_Orden'] ?? $cabecera['Descripcion'] ?? '';
+                $estadoIndigo = trim((string) ($cabecera['Estado_Orden'] ?? ''));
                 $numeroPedidoInterno = null;
                 if (preg_match('/([A-Z]{3}-\d{4}-\d{3,6})/', $descripcion, $matches)) {
                     $numeroPedidoInterno = $matches[1];
@@ -97,6 +98,22 @@ class MonitoringService
                 try {
                     $ordenLocal = InvOrdenCompra::where('oc_indigo', $numeroOrdenIndigo)->first();
                     $esNueva = false;
+
+                    // ── ANULACIÓN desde Indigo ──────────────────────────────────
+                    // Si Indigo reporta la orden como anulada/cancelada, se refleja en el
+                    // aplicativo SOLO si la OC ya está sincronizada localmente. Si no existe,
+                    // no se hace ningún movimiento (no se crea una OC anulada).
+                    if ($this->indigoEstadoEsAnulado($estadoIndigo)) {
+                        if ($ordenLocal) {
+                            $this->anularOrdenDesdeIndigo($ordenLocal, $estadoIndigo, $userId);
+                            $actualizadas++;
+                        } else {
+                            Log::channel('daily')->info("[INDIGO-SYNC] OC {$numeroOrdenIndigo} anulada en Indigo pero no existe localmente. Se ignora.");
+                        }
+                        DB::commit();
+                        $procesadas++;
+                        continue; // No procesar detalles de una orden anulada.
+                    }
 
                     if (!$ordenLocal) {
                         // Generar el número de OC con el generador de secuencias oficial
@@ -307,6 +324,64 @@ class MonitoringService
     }
 
     /**
+     * Determina si el estado reportado por Indigo corresponde a una anulación/cancelación.
+     * Tolerante a variaciones de texto (ANULADA, ANULADO, CANCELADA, CANCELADO, etc.).
+     */
+    private function indigoEstadoEsAnulado(string $estadoIndigo): bool
+    {
+        if ($estadoIndigo === '') {
+            return false;
+        }
+        $e = strtolower($estadoIndigo);
+        return str_contains($e, 'anulad')     // anulada/anulado
+            || str_contains($e, 'cancelad');  // cancelada/cancelado
+    }
+
+    /**
+     * Aplica la anulación de una OC que ya existe localmente, reflejando el estado
+     * de Indigo. Marca la OC y sus detalles como 'cancelada' y deja auditoría.
+     * NO crea la OC si no existe (esa validación se hace antes de llamar aquí).
+     */
+    private function anularOrdenDesdeIndigo(InvOrdenCompra $orden, string $estadoIndigo, int $userId): void
+    {
+        // Idempotente: si ya está cancelada, no repite trabajo ni auditoría.
+        if (strtolower((string) $orden->estado) === 'cancelada') {
+            return;
+        }
+
+        $previo = $orden->estado;
+
+        // Cancelar la cabecera y los detalles.
+        $orden->update([
+            'estado'              => 'cancelada',
+            'sincronizado_indigo' => true,
+        ]);
+        InvOrdenCompraDetalle::where('compra_id', $orden->id)->update(['estado' => 'cancelada']);
+
+        // Recalcular el estado de los pedidos vinculados (por si dependían de esta OC).
+        $detallesPedido = InvOrdenCompraDetalle::where('compra_id', $orden->id)
+            ->whereNotNull('pedido_detalle_id')
+            ->pluck('pedido_detalle_id')
+            ->unique();
+        foreach ($detallesPedido as $pedidoDetalleId) {
+            $this->updatePedidoDetailForReturn((int) $pedidoDetalleId);
+        }
+
+        // Auditoría del cambio.
+        InvCompraAuditoria::create([
+            'compra_id'           => $orden->id,
+            'campo_modificado'    => 'estado',
+            'valor_anterior'      => $previo,
+            'valor_nuevo'         => 'cancelada',
+            'motivo_modificacion' => "Orden anulada en Indigo (Estado_Orden = '{$estadoIndigo}')",
+            'modificado_por'      => $userId,
+        ]);
+
+        $this->registerPurchaseCancellation($orden->id, $orden->numero_orden_compra, "Anulada en Indigo ({$estadoIndigo})", $userId);
+        Log::channel('daily')->info("[INDIGO-SYNC] OC {$orden->numero_orden_compra} anulada por Indigo (estado: {$estadoIndigo}).");
+    }
+
+    /**
      * Procesar devolución de una orden desde Indigo.
      */
     private function processReturn(array $context, int $userId): bool
@@ -315,7 +390,7 @@ class MonitoringService
         if (!$detalleLocal) return false;
 
         $orden = InvOrdenCompra::find($detalleLocal->compra_id);
-        if (!$orden || $orden->estado === 'RECIBIDA') {
+        if (!$orden || strtolower((string) $orden->estado) === 'recibida') {
             return false; // Ya fue recibida
         }
 
