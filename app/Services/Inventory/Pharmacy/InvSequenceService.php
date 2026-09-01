@@ -30,24 +30,22 @@ class InvSequenceService
      */
     public function generateSequence(string $codigoModulo, int $userId, ?string $codigoProceso = null, ?int $sucursalId = null): string
     {
+        // El usuario puede no existir (ej. tareas automáticas del scheduler). En ese
+        // caso se resuelve empresa por configuración y la sucursal debe venir explícita.
         $user = User::find($userId);
-        if (!$user) {
-            throw new \RuntimeException("Usuario con ID {$userId} no encontrado.");
-        }
 
-        // Resolver empresa del usuario (primera empresa asociada o la del pivot)
-        $empresaId = $this->resolveEmpresaId($user);
+        // Resolver empresa: del usuario si existe, o del config de inventario (fallback).
+        $empresaId = $user ? $this->resolveEmpresaId($user) : (int) config('inventory.empresa_id', 1);
         if (!$empresaId) {
-            throw new \RuntimeException("El usuario no tiene una empresa asignada.");
+            throw new \RuntimeException("No se pudo resolver la empresa para generar el consecutivo.");
         }
 
         // Resolver sucursal: se prioriza la sucursal explícita (la que el usuario
         // eligió al sincronizar/crear). Esto evita que una OC de una sucursal quede
-        // con el consecutivo de otra. Si no se indicó, se cae a la sucursal principal
-        // del usuario.
-        $sucursalId = $sucursalId ?: $user->id_sucursal;
+        // con el consecutivo de otra. Si no se indicó, se cae a la sucursal del usuario.
+        $sucursalId = $sucursalId ?: ($user?->id_sucursal);
         if (!$sucursalId) {
-            throw new \RuntimeException("No se indicó sucursal y el usuario no tiene una sucursal asignada. Seleccione una sucursal para generar el consecutivo.");
+            throw new \RuntimeException("No se indicó sucursal y no hay sucursal por defecto. Seleccione una sucursal para generar el consecutivo.");
         }
 
         // Obtener el ID del módulo por su código

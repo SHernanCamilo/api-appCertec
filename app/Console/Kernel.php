@@ -43,7 +43,7 @@ class Kernel extends ConsoleKernel
         // La sucursal 2 = Florencia (FLA), que es la que tiene OC activas en Indigo.
         // Si en el futuro otras sucursales generan OC en Indigo, agregar entradas
         // adicionales con su --sucursal=X.
-        $schedule->command('inventory:sync-indigo --user=1 --sucursal=2')
+        $schedule->command('inventory:sync-indigo --user=17 --sucursal=2')
             ->everyFifteenMinutes()
             ->withoutOverlapping()
             ->runInBackground()
