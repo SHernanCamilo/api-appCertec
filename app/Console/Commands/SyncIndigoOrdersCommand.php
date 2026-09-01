@@ -8,43 +8,46 @@ use App\Services\Inventory\Pharmacy\MonitoringService;
 /**
  * Sincroniza OC desde Indigo ERP hacia la BD local.
  *
- * Uso manual:
+ * Uso manual (desde consola):
  *   php artisan inventory:sync-indigo
- *   php artisan inventory:sync-indigo --sucursal=2
- *   php artisan inventory:sync-indigo --numero-orden=0000133750 --sucursal=2
+ *   php artisan inventory:sync-indigo --numero-orden=0000133750
  *
- * Ejecutado también por el scheduler (Kernel.php) cada N minutos para
- * mantener las órdenes locales actualizadas sin intervención manual.
+ * Ejecutado por el scheduler (Kernel.php) cada N minutos con --auto para
+ * mantener las OC locales actualizadas sin intervención humana.
  *
- * La sucursal determina el prefijo del consecutivo (FLA, NVA, TJA, etc.).
- * Si no se indica, el consecutivo de OC nuevas usará la sucursal del usuario.
+ * La sucursal de cada OC se DEDUCE automáticamente de la propia orden de Indigo
+ * (prefijo del número interno FLA/NVA/TJA... o campo de sucursal de la vista).
+ * --sucursal solo se usa como respaldo si una orden no permite deducirla.
  */
 class SyncIndigoOrdersCommand extends Command
 {
     protected $signature = 'inventory:sync-indigo
-                            {--user=1        : ID del usuario que ejecuta la sincronización}
-                            {--sucursal=     : ID de la sucursal destino (config_ubi_sucursales)}
+                            {--user=1        : ID del usuario (solo para sync manual; en --auto es referencia de sistema)}
+                            {--sucursal=     : (Opcional) Sucursal de respaldo si no se puede deducir de la orden}
                             {--numero-orden= : Sincronizar solo esta orden Indigo}
                             {--fecha-desde=  : Fecha inicial para el rango (YYYY-MM-DD). Default: hoy - 7 días}
-                            {--limit=2000    : Máximo de registros Indigo a procesar}';
+                            {--limit=2000    : Máximo de registros Indigo a procesar}
+                            {--auto          : Marca la ejecución como automática (cron), para auditoría}';
 
     protected $description = 'Sincroniza Órdenes de Compra desde el ERP Indigo hacia la BD local';
 
     public function handle(MonitoringService $monitoringService): int
     {
         $userId     = (int) $this->option('user');
-        $sucursalId = $this->option('sucursal') !== null ? (int) $this->option('sucursal') : null;
+        $sucursalId = $this->option('sucursal') !== null && $this->option('sucursal') !== ''
+            ? (int) $this->option('sucursal')
+            : null;
         $numOrden   = $this->option('numero-orden') ?: null;
         $fechaDesde = $this->option('fecha-desde') ?: null;
         $limit      = (int) $this->option('limit');
+        $esAuto     = (bool) $this->option('auto');
 
-        $this->info('[INDIGO-SYNC] Iniciando sincronización...');
-        $this->line("  → Usuario ID: {$userId}");
-        $this->line("  → Sucursal ID: " . ($sucursalId ?? 'no especificada (se usará sucursal del usuario)'));
+        $this->info('[INDIGO-SYNC] Iniciando sincronización ' . ($esAuto ? '(automática)' : '(manual)') . '...');
+        $this->line("  → Sucursal por orden: se deduce automáticamente" . ($sucursalId ? " (respaldo: {$sucursalId})" : ''));
         if ($numOrden) $this->line("  → Número de orden: {$numOrden}");
         if ($fechaDesde) $this->line("  → Fecha desde: {$fechaDesde}");
 
-        $options = ['limit' => $limit];
+        $options = ['limit' => $limit, 'auto' => $esAuto];
         if ($numOrden)   $options['numero_orden'] = $numOrden;
         if ($fechaDesde) $options['fecha_desde']  = $fechaDesde;
         if ($sucursalId) $options['sucursal_id']  = $sucursalId;

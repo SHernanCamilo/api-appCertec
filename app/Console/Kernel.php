@@ -38,12 +38,12 @@ class Kernel extends ConsoleKernel
 
         // ── Sincronización automática ERP Indigo → BD local ─────────────────
         // Mantiene las OC locales sincronizadas con Indigo sin intervención manual.
-        // Corre cada 15 minutos; actualiza OC existentes (cantidades, devoluciones)
-        // y registra OC nuevas en estado 'pendiente' con el consecutivo correcto.
-        // La sucursal 2 = Florencia (FLA), que es la que tiene OC activas en Indigo.
-        // Si en el futuro otras sucursales generan OC en Indigo, agregar entradas
-        // adicionales con su --sucursal=X.
-        $schedule->command('inventory:sync-indigo --user=17 --sucursal=2')
+        // Corre cada 15 minutos; actualiza OC existentes (cantidades, devoluciones),
+        // refleja anulaciones y registra OC nuevas en estado 'pendiente'.
+        // La sucursal se DEDUCE automáticamente de cada orden (sirve para TODAS las
+        // sucursales, no una fija). --auto marca la ejecución como del sistema para
+        // que la auditoría no la atribuya a una persona.
+        $schedule->command('inventory:sync-indigo --user=17 --auto')
             ->everyFifteenMinutes()
             ->withoutOverlapping()
             ->runInBackground()

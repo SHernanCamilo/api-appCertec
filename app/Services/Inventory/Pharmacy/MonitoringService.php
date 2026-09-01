@@ -34,23 +34,24 @@ class MonitoringService
         $fechaDesde = $options['fecha_desde'] ?? now()->subDays(7)->format('Y-m-d');
         $limit = $options['limit'] ?? 2000;
         $numeroOrden = $options['numero_orden'] ?? null;
-        $sucursalId = isset($options['sucursal_id']) ? (int) $options['sucursal_id'] : null;
 
-        // Prefijo de la sucursal elegida (ej. "NVA", "FLA"). Se usa para nombrar la OC
-        // según la sucursal que indicó el usuario, evitando que una compra de una
-        // sucursal quede con el consecutivo/prefijo de otra.
-        $sucursalPrefijo = null;
-        if ($sucursalId) {
-            $sucursal = \App\Models\Sucursal::find($sucursalId);
-            $sucursalPrefijo = $sucursal?->prefijo ? strtoupper(trim($sucursal->prefijo)) : null;
-        }
+        // ¿Es sincronización automática (cron) o manual (usuario en el aplicativo)?
+        // El origen se registra en la auditoría para no atribuir a una persona lo que
+        // hizo el sistema. En manual, $userId es el usuario real que pulsó "Sincronizar".
+        $esAutomatico = (bool) ($options['auto'] ?? false);
+        $origenLabel = $esAutomatico ? 'Sincronización automática (sistema)' : 'Sincronización manual';
+
+        // Sucursal de RESPALDO (opcional). Ya no es obligatoria ni única para todas:
+        // la sucursal correcta se deduce por cada orden (ver resolverSucursalOrden).
+        // Este valor solo se usa si una orden no permite deducir su sucursal.
+        $sucursalFallbackId = isset($options['sucursal_id']) ? (int) $options['sucursal_id'] : null;
 
         Log::channel('daily')->info('[INDIGO-SYNC] Iniciando sincronización', [
             'fecha_desde' => $fechaDesde,
             'limit' => $limit,
             'numero_orden' => $numeroOrden,
-            'sucursal_id' => $sucursalId,
-            'sucursal_prefijo' => $sucursalPrefijo,
+            'sucursal_fallback_id' => $sucursalFallbackId,
+            'origen' => $origenLabel,
         ]);
 
         try {
@@ -94,6 +95,17 @@ class MonitoringService
                     $numeroPedidoInterno = $matches[1];
                 }
 
+                // Resolver la SUCURSAL de ESTA orden (no una global para todas):
+                //   1) desde el prefijo del número de pedido interno (ej. FLA-... → Florencia)
+                //   2) desde el campo de sucursal/UID que traiga la vista de Indigo
+                //   3) fallback a la sucursal pasada por parámetro (si se indicó)
+                $sucursalId = $this->resolverSucursalOrden($cabecera, $numeroPedidoInterno, $sucursalFallbackId);
+                $sucursalPrefijo = null;
+                if ($sucursalId) {
+                    $suc = \App\Models\Sucursal::find($sucursalId);
+                    $sucursalPrefijo = $suc?->prefijo ? strtoupper(trim($suc->prefijo)) : null;
+                }
+
                 DB::beginTransaction();
                 try {
                     $ordenLocal = InvOrdenCompra::where('oc_indigo', $numeroOrdenIndigo)->first();
@@ -135,6 +147,17 @@ class MonitoringService
                             'creado_por'          => $userId,
                             'oc_indigo'           => $numeroOrdenIndigo,
                         ]);
+
+                        // Auditar el origen (automático vs manual) sin perder trazabilidad.
+                        InvCompraAuditoria::create([
+                            'compra_id'           => $ordenLocal->id,
+                            'campo_modificado'    => 'creacion',
+                            'valor_anterior'      => null,
+                            'valor_nuevo'         => $ordenLocal->numero_orden_compra,
+                            'motivo_modificacion' => "{$origenLabel} desde Indigo (OC {$numeroOrdenIndigo})",
+                            'modificado_por'      => $userId,
+                        ]);
+
                         $nuevas++;
                         $esNueva = true;
                     } else {
@@ -321,6 +344,67 @@ class MonitoringService
                 'stats' => ['procesadas' => 0, 'nuevas' => 0, 'actualizadas' => 0, 'devoluciones' => 0],
             ];
         }
+    }
+
+    /**
+     * Resuelve a qué sucursal pertenece una orden de Indigo.
+     *
+     * Estrategia (en orden de prioridad):
+     *   1. Prefijo del número de pedido interno detectado en la descripción
+     *      (ej. "FLA-2026-000123" → prefijo FLA → sucursal Florencia). Es la fuente
+     *      más confiable porque ese número lo generó nuestro propio sistema.
+     *   2. Campo de sucursal/UID que traiga la vista de Indigo (UID, Sucursal, Sede,
+     *      Bodega, CentroCosto...). Se busca por nombre o prefijo en config_ubi_sucursales.
+     *   3. Fallback: la sucursal pasada por parámetro (si se indicó al ejecutar el sync).
+     *
+     * Devuelve el id de sucursal o null si no se pudo determinar.
+     */
+    private function resolverSucursalOrden(array $cabecera, ?string $numeroPedidoInterno, ?int $sucursalFallbackId): ?int
+    {
+        $empresaId = (int) config('inventory.empresa_id', 1);
+
+        // 1) Por prefijo del número interno (FLA-..., NVA-..., etc.)
+        if ($numeroPedidoInterno && preg_match('/^([A-Z]{2,5})-/', $numeroPedidoInterno, $m)) {
+            $prefijo = strtoupper($m[1]);
+            $suc = \App\Models\Sucursal::where('id_Empresa', $empresaId)
+                ->whereRaw('UPPER(TRIM(prefijo)) = ?', [$prefijo])
+                ->first();
+            if ($suc) {
+                return (int) $suc->id;
+            }
+        }
+
+        // 2) Por algún campo de sucursal/UID que venga en la vista de Indigo.
+        $posiblesCampos = ['UID', 'Sucursal', 'Sede', 'Bodega', 'CentroCosto', 'Centro', 'Almacen', 'UnidadNegocio'];
+        foreach ($posiblesCampos as $campo) {
+            $valor = trim((string) ($cabecera[$campo] ?? ''));
+            if ($valor === '') {
+                continue;
+            }
+            $valorUpper = strtoupper($valor);
+            // Coincidencia por prefijo exacto o por nombre de sucursal contenido.
+            $suc = \App\Models\Sucursal::where('id_Empresa', $empresaId)
+                ->where(function ($q) use ($valorUpper, $valor) {
+                    $q->whereRaw('UPPER(TRIM(prefijo)) = ?', [$valorUpper])
+                      ->orWhereRaw('UPPER(nombre) LIKE ?', ['%' . $valorUpper . '%']);
+                })
+                ->first();
+            if ($suc) {
+                Log::channel('daily')->info("[INDIGO-SYNC] Sucursal deducida por campo '{$campo}'='{$valor}' → sucursal #{$suc->id} ({$suc->prefijo}).");
+                return (int) $suc->id;
+            }
+        }
+
+        // 3) Fallback al parámetro.
+        if ($sucursalFallbackId) {
+            return $sucursalFallbackId;
+        }
+
+        // No se pudo determinar. Log para diagnóstico (deja ver qué campos trae la cabecera).
+        Log::channel('daily')->warning('[INDIGO-SYNC] No se pudo deducir la sucursal de la orden.', [
+            'campos_disponibles' => array_keys($cabecera),
+        ]);
+        return null;
     }
 
     /**
