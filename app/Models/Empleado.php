@@ -22,6 +22,9 @@ class Empleado extends Model
         'unidad',
         'direccion',
         'telefono',
+        'contrato',
+        'fecha_inicio_contrato',
+        'fecha_fin_contrato',
         'estado',
         'caso_glpi',
         'usuario_crea_id',
@@ -29,9 +32,11 @@ class Empleado extends Model
     ];
 
     protected $casts = [
-        'estado'     => 'boolean',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
+        'estado'                 => 'boolean',
+        'fecha_inicio_contrato'  => 'date',
+        'fecha_fin_contrato'     => 'date',
+        'created_at'             => 'datetime',
+        'updated_at'             => 'datetime',
     ];
 
     public function empresa()
@@ -42,6 +47,21 @@ class Empleado extends Model
     public function cargoRelacion()
     {
         return $this->belongsTo(Cargo::class, 'id_cargo', 'id_cargo');
+    }
+
+    public function usuario()
+    {
+        return $this->belongsTo(User::class, 'id_user');
+    }
+
+    public function usuarioCrea()
+    {
+        return $this->belongsTo(User::class, 'usuario_crea_id');
+    }
+
+    public function usuarioActualiza()
+    {
+        return $this->belongsTo(User::class, 'usuario_actualiza_id');
     }
 
     /**

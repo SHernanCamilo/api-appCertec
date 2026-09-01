@@ -20,6 +20,7 @@ Route::get('/plantillas/{id}', [GlpiPlantillaController::class, 'show'])->whereN
 Route::put('/plantillas/{id}', [GlpiPlantillaController::class, 'update'])->whereNumber('id');
 Route::delete('/plantillas/{id}', [GlpiPlantillaController::class, 'destroy'])->whereNumber('id');
 Route::patch('/plantillas/{id}/toggle-estado', [GlpiPlantillaController::class, 'toggleEstado'])->whereNumber('id');
+Route::post('/plantillas/{id}/duplicar', [GlpiPlantillaController::class, 'duplicar'])->whereNumber('id');
 
 Route::get('/tablero-tic', [GlpiTicketsTicController::class, 'index']);
 

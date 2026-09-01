@@ -19,8 +19,10 @@ Route::prefix('solicitudes')->group(function () {
     Route::post('/',       [EventSolicitudController::class, 'store']);
 
     // Acciones de flujo
+    Route::post('/digitalizar-masivo', [EventSolicitudController::class, 'digitalizarMasivo']);
     Route::post('/{id}/aprobar',  [EventSolicitudController::class, 'aprobar']);
     Route::post('/{id}/rechazar', [EventSolicitudController::class, 'rechazar']);
+    Route::post('/{id}/digitalizar', [EventSolicitudController::class, 'digitalizar']);
     Route::get('/{id}/historial', [EventSolicitudController::class, 'historial']);
 
     Route::get('/{id}',    [EventSolicitudController::class, 'show']);

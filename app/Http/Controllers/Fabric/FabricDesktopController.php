@@ -70,7 +70,9 @@ class FabricDesktopController extends Controller
         ], self::TICKET_TTL_SECONDS);
 
         $apiUrl      = rtrim((string) config('app.url'), '/') . '/api';
+        $env         = self::desktopEnvFromAppUrl((string) config('app.url'));
         $protocolUrl = 'jadeone-desktop://open?ticket=' . rawurlencode($ticket)
+            . '&env=' . rawurlencode($env)
             . '&api=' . rawurlencode($apiUrl);
 
         return response()->json([
@@ -80,6 +82,30 @@ class FabricDesktopController extends Controller
             'download_url' => url('/api/fabric/viewer/desktop/download'),
             'expires_in'   => self::TICKET_TTL_SECONDS,
         ]);
+    }
+
+    /**
+     * prod | local. El .exe mapea esto a un host conocido; no usa api= del protocolo.
+     */
+    private static function desktopEnvFromAppUrl(string $appUrl): string
+    {
+        $host = strtolower((string) parse_url($appUrl, PHP_URL_HOST));
+        if ($host === '') {
+            return 'prod';
+        }
+
+        if (in_array($host, ['127.0.0.1', 'localhost', '::1'], true)) {
+            return 'local';
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            $public = filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+            if ($public === false) {
+                return 'local';
+            }
+        }
+
+        return 'prod';
     }
 
     /**

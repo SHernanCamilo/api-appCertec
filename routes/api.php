@@ -25,7 +25,6 @@ Route::group([
     'prefix' => 'auth'
 ], function ($router) {
     // Rutas públicas (sin autenticación)
-    Route::post('/register', [AuthController::class, 'register'])->name('register');
     Route::post('/login', [AuthController::class, 'login'])->name('login');
     
     // Rutas de Microsoft OAuth
@@ -59,91 +58,72 @@ Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     Route::delete('contexto', [App\Http\Controllers\ContextoController::class, 'limpiarContexto']);
     
     // Rutas específicas de usuarios (deben ir antes del apiResource)
-    Route::get('users/tenant/obtener', [App\Http\Controllers\UserController::class, 'obtenerUsuariosTenant']);
-    Route::post('users/tenant/sincronizar', [App\Http\Controllers\UserController::class, 'sincronizarUsuariosTenant']);
-    Route::post('users/check-email', [App\Http\Controllers\UserController::class, 'checkEmail']);
-    Route::get('users-por-empresa/{empresaId}', [App\Http\Controllers\UserController::class, 'porEmpresa']);
-    
-    // 🔍 RUTAS DE DEBUG - REMOVER EN PRODUCCIÓN
-    // Route::get('debug/usuarios', [App\Http\Controllers\DebugPermisosController::class, 'listarUsuariosConPermisos']);
-    // Route::get('debug/usuario/{userId}', [App\Http\Controllers\DebugPermisosController::class, 'debugUsuario']);
-    // Route::get('debug/comparar/{userId1}/{userId2}', [App\Http\Controllers\DebugPermisosController::class, 'compararUsuarios']);
-    
-    // Rutas para gestionar dominios permitidos
-    Route::apiResource('allowed-domains', App\Http\Controllers\AllowedDomainController::class);
-    Route::post('allowed-domains/check-email', [App\Http\Controllers\AllowedDomainController::class, 'checkEmail']);
-    Route::patch('allowed-domains/{id}/toggle-status', [App\Http\Controllers\AllowedDomainController::class, 'toggleStatus']);
-    
-    Route::apiResource('users', App\Http\Controllers\UserController::class);
-    Route::patch('users/{id}/cambiar-estado', [App\Http\Controllers\UserController::class, 'cambiarEstado']);
+        Route::get('users-por-empresa/{empresaId}', [App\Http\Controllers\UserController::class, 'porEmpresa']);
 
-    // Rutas de empleados → routes/Accounting/EmpleadosRouter.php // Rutas de empleados → routes/Accounting/EmpleadosRouter.php
+        Route::middleware('check.admin')->group(function () {
+            Route::get('users/tenant/obtener', [App\Http\Controllers\UserController::class, 'obtenerUsuariosTenant']);
+            Route::post('users/tenant/sincronizar', [App\Http\Controllers\UserController::class, 'sincronizarUsuariosTenant']);
+            Route::post('users/check-email', [App\Http\Controllers\UserController::class, 'checkEmail']);
+            Route::apiResource('users', App\Http\Controllers\UserController::class);
+            Route::patch('users/{id}/cambiar-estado', [App\Http\Controllers\UserController::class, 'cambiarEstado']);
 
-    // Rutas de empresas
-    Route::get('empresas-activas', [App\Http\Controllers\EmpresaController::class, 'activas']);
-    Route::get('empresas/{id}/logo-base64', [App\Http\Controllers\EmpresaController::class, 'logoBase64']);
-    Route::apiResource('empresas', App\Http\Controllers\EmpresaController::class);
-    Route::patch('empresas/{id}/toggle-estado', [App\Http\Controllers\EmpresaController::class, 'toggleEstado']);
-    
-    // Rutas de sucursales
-    Route::apiResource('sucursales', App\Http\Controllers\SucursalController::class);
-    Route::get('sucursales-por-empresa/{empresaId}', [App\Http\Controllers\SucursalController::class, 'porEmpresa']);
-    
-    // Rutas de sedes
-    Route::apiResource('sedes', App\Http\Controllers\SedeController::class);
-    Route::get('sedes-por-sucursal/{sucursalId}', [App\Http\Controllers\SedeController::class, 'porSucursal']);
-    Route::get('sedes-por-empresa/{empresaId}', [App\Http\Controllers\SedeController::class, 'porEmpresa']);
+            Route::apiResource('modulos', App\Http\Controllers\Api\ModuloController::class);
+            Route::get('modulos-tree', [App\Http\Controllers\Api\ModuloController::class, 'tree']);
+            Route::get('modulos-empresa/{idEmpresa}', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'getModulosByEmpresa']);
+            Route::get('empresas-modulo/{idModulo}', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'getEmpresasByModulo']);
+            Route::get('matriz-permisos', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'matrizPermisos']);
+            Route::post('asignar-modulo', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'asignarModulo']);
+            Route::post('remover-modulo', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'removerModulo']);
+            Route::post('actualizar-configuracion-modulo', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'actualizarConfiguracion']);
 
-    // Unidades funcionales (organización)
-    Route::get('unidades-funcionales/buscar', [App\Http\Controllers\UnidadFuncionalController::class, 'buscar']);
-    Route::apiResource('unidades-funcionales', App\Http\Controllers\UnidadFuncionalController::class);
-    
-    // Rutas de módulos
-    Route::apiResource('modulos', App\Http\Controllers\Api\ModuloController::class);
-    Route::get('modulos-tree', [App\Http\Controllers\Api\ModuloController::class, 'tree']);
-    
-    // Rutas de módulos-empresa
-    Route::get('modulos-empresa/{idEmpresa}', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'getModulosByEmpresa']);
-    Route::get('empresas-modulo/{idModulo}', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'getEmpresasByModulo']);
-    Route::get('matriz-permisos', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'matrizPermisos']);
-    Route::post('asignar-modulo', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'asignarModulo']);
-    Route::post('remover-modulo', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'removerModulo']);
-    Route::post('actualizar-configuracion-modulo', [App\Http\Controllers\Api\ModuloEmpresaController::class, 'actualizarConfiguracion']);
-    
-    // Rutas de permisos
-    Route::apiResource('permisos', App\Http\Controllers\PermisoController::class);
-    Route::get('permisos-por-modulo', [App\Http\Controllers\PermisoController::class, 'porModulo']);
-    
-    // Rutas de roles
-    Route::apiResource('roles', App\Http\Controllers\RolController::class);
-    Route::post('roles/{id}/asignar-perfiles', [App\Http\Controllers\RolController::class, 'asignarPerfiles']);
-    Route::get('roles/{id}/permisos', [App\Http\Controllers\RolController::class, 'obtenerPermisos']);
-    Route::get('roles-por-empresa/{idEmpresa}', [App\Http\Controllers\RolController::class, 'porEmpresa']);
-    Route::get('roles-por-empresa-modulos/{idEmpresa}', [App\Http\Controllers\RolController::class, 'rolesPorEmpresaConModulos']);
-    Route::post('roles-por-multiples-empresas', [App\Http\Controllers\RolController::class, 'rolesPorMultiplesEmpresas']);
-    
-    // Rutas de perfiles
-    Route::apiResource('perfiles', App\Http\Controllers\PerfilController::class);
-    Route::get('perfiles-por-modulo', [App\Http\Controllers\PerfilController::class, 'porModulo']);
-    Route::get('perfiles-modulo/{idModulo}', [App\Http\Controllers\PerfilController::class, 'perfilesPorModulo']);
-    Route::get('permisos-disponibles/{idModulo}', [App\Http\Controllers\PerfilController::class, 'permisosDisponibles']);
-    
-    // Rutas de personificación
-    Route::get('personificar/usuarios-disponibles', [App\Http\Controllers\PersonificarController::class, 'getUsuariosDisponibles']);
-    Route::post('personificar/iniciar', [App\Http\Controllers\PersonificarController::class, 'iniciarPersonificacion']);
-    Route::post('personificar/finalizar', [App\Http\Controllers\PersonificarController::class, 'finalizarPersonificacion']);
-    Route::get('personificar/estado', [App\Http\Controllers\PersonificarController::class, 'getEstadoPersonificacion']);
-    Route::get('personificar/historial', [App\Http\Controllers\PersonificarController::class, 'getHistorialPersonificaciones']);
-    
-    // Rutas de relación Perfil-Permiso (seg_perfil_permisos)
-    Route::prefix('perfiles/{idPerfil}/permisos')->group(function () {
-        Route::get('/', [App\Http\Controllers\PerfilPermisoController::class, 'index']); // Listar permisos del perfil
-        Route::post('/', [App\Http\Controllers\PerfilPermisoController::class, 'store']); // Agregar un permiso
-        Route::post('/sync', [App\Http\Controllers\PerfilPermisoController::class, 'sync']); // Sincronizar múltiples
-        Route::get('/disponibles', [App\Http\Controllers\PerfilPermisoController::class, 'disponibles']); // Permisos disponibles
-        Route::delete('/clear', [App\Http\Controllers\PerfilPermisoController::class, 'clear']); // Eliminar todos
-        Route::delete('/{idPermiso}', [App\Http\Controllers\PerfilPermisoController::class, 'destroy']); // Eliminar uno
-    });
+            Route::apiResource('permisos', App\Http\Controllers\PermisoController::class);
+            Route::get('permisos-por-modulo', [App\Http\Controllers\PermisoController::class, 'porModulo']);
+
+            Route::apiResource('roles', App\Http\Controllers\RolController::class);
+            Route::post('roles/{id}/asignar-perfiles', [App\Http\Controllers\RolController::class, 'asignarPerfiles']);
+            Route::get('roles/{id}/permisos', [App\Http\Controllers\RolController::class, 'obtenerPermisos']);
+            Route::get('roles-por-empresa/{idEmpresa}', [App\Http\Controllers\RolController::class, 'porEmpresa']);
+            Route::get('roles-por-empresa-modulos/{idEmpresa}', [App\Http\Controllers\RolController::class, 'rolesPorEmpresaConModulos']);
+            Route::post('roles-por-multiples-empresas', [App\Http\Controllers\RolController::class, 'rolesPorMultiplesEmpresas']);
+
+            Route::apiResource('perfiles', App\Http\Controllers\PerfilController::class);
+            Route::get('perfiles-por-modulo', [App\Http\Controllers\PerfilController::class, 'porModulo']);
+            Route::get('perfiles-modulo/{idModulo}', [App\Http\Controllers\PerfilController::class, 'perfilesPorModulo']);
+            Route::get('permisos-disponibles/{idModulo}', [App\Http\Controllers\PerfilController::class, 'permisosDisponibles']);
+            Route::prefix('perfiles/{idPerfil}/permisos')->group(function () {
+                Route::get('/', [App\Http\Controllers\PerfilPermisoController::class, 'index']);
+                Route::post('/', [App\Http\Controllers\PerfilPermisoController::class, 'store']);
+                Route::post('/sync', [App\Http\Controllers\PerfilPermisoController::class, 'sync']);
+                Route::get('/disponibles', [App\Http\Controllers\PerfilPermisoController::class, 'disponibles']);
+                Route::delete('/clear', [App\Http\Controllers\PerfilPermisoController::class, 'clear']);
+                Route::delete('/{idPermiso}', [App\Http\Controllers\PerfilPermisoController::class, 'destroy']);
+            });
+        });
+
+        Route::apiResource('allowed-domains', App\Http\Controllers\AllowedDomainController::class);
+        Route::post('allowed-domains/check-email', [App\Http\Controllers\AllowedDomainController::class, 'checkEmail']);
+        Route::patch('allowed-domains/{id}/toggle-status', [App\Http\Controllers\AllowedDomainController::class, 'toggleStatus']);
+
+        Route::get('empresas-activas', [App\Http\Controllers\EmpresaController::class, 'activas']);
+        Route::get('empresas/{id}/logo-base64', [App\Http\Controllers\EmpresaController::class, 'logoBase64']);
+        Route::apiResource('empresas', App\Http\Controllers\EmpresaController::class);
+        Route::patch('empresas/{id}/toggle-estado', [App\Http\Controllers\EmpresaController::class, 'toggleEstado']);
+
+        Route::apiResource('sucursales', App\Http\Controllers\SucursalController::class);
+        Route::get('sucursales-por-empresa/{empresaId}', [App\Http\Controllers\SucursalController::class, 'porEmpresa']);
+
+        Route::apiResource('sedes', App\Http\Controllers\SedeController::class);
+        Route::get('sedes-por-sucursal/{sucursalId}', [App\Http\Controllers\SedeController::class, 'porSucursal']);
+        Route::get('sedes-por-empresa/{empresaId}', [App\Http\Controllers\SedeController::class, 'porEmpresa']);
+
+        Route::get('unidades-funcionales/buscar', [App\Http\Controllers\UnidadFuncionalController::class, 'buscar']);
+        Route::apiResource('unidades-funcionales', App\Http\Controllers\UnidadFuncionalController::class);
+
+        Route::get('personificar/usuarios-disponibles', [App\Http\Controllers\PersonificarController::class, 'getUsuariosDisponibles']);
+        Route::post('personificar/iniciar', [App\Http\Controllers\PersonificarController::class, 'iniciarPersonificacion']);
+        Route::post('personificar/finalizar', [App\Http\Controllers\PersonificarController::class, 'finalizarPersonificacion']);
+        Route::get('personificar/estado', [App\Http\Controllers\PersonificarController::class, 'getEstadoPersonificacion']);
+        Route::get('personificar/historial', [App\Http\Controllers\PersonificarController::class, 'getHistorialPersonificaciones']);
 });
 
 // Rutas de Accounting (Empleados) → routes/Accounting/EmpleadosRouter.php
@@ -374,7 +354,8 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('glpi')->group(func
                 'timestamp' => now()->toISOString()
             ]);
         });
-        Route::post('/force-all', [App\Http\Controllers\GLPI\SyncActivosController::class, 'forceSyncAll']);
+        Route::post('/force-all', [App\Http\Controllers\GLPI\SyncActivosController::class, 'forceSyncAll'])
+            ->middleware('check.admin');
         Route::post('/cancel', [App\Http\Controllers\GLPI\SyncActivosController::class, 'cancelSync']);
         Route::get('/status', [App\Http\Controllers\GLPI\SyncActivosController::class, 'getSyncStatus']);
         Route::post('/single-asset', [App\Http\Controllers\GLPI\SyncActivosController::class, 'syncSingleAsset']);

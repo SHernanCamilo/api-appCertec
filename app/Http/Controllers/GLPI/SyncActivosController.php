@@ -3,11 +3,12 @@
 namespace App\Http\Controllers\GLPI;
 
 use App\Http\Controllers\Controller;
+use App\Models\MatrizObsolescencia\MatzobsActivosC;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Log;
-use App\Models\MatrizObsolescencia\MatzobsActivosC;
 use Exception;
 
 class SyncActivosController extends Controller
@@ -17,6 +18,14 @@ class SyncActivosController extends Controller
      */
     public function forceSyncAll(Request $request): JsonResponse
     {
+        $user = auth()->user();
+        if (!$user instanceof User || !$user->esAdministrador()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Solo un administrador puede forzar la sincronización completa.',
+            ], 403);
+        }
+
         try {
             Log::channel('glpi_sync')->info('Iniciando sincronización forzada desde interfaz web', [
                 'user' => auth()->user()->id ?? 'guest',

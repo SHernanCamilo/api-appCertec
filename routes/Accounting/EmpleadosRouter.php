@@ -5,7 +5,11 @@ use App\Http\Controllers\Accounting\EmpleadoController;
 
 Route::middleware(['auth:api', 'check.user.active'])->group(function () {
     Route::get('empleados/opciones', [EmpleadoController::class, 'opciones']);
+    Route::get('empleados/cargos', [EmpleadoController::class, 'cargos']);
+    Route::get('empleados/por-documento', [EmpleadoController::class, 'porDocumento']);
+    Route::get('empleados/usuarios', [EmpleadoController::class, 'usuariosLookup']);
     Route::get('empleados', [EmpleadoController::class, 'index']);
+    Route::get('empleados/{id}', [EmpleadoController::class, 'show'])->whereNumber('id');
     Route::post('empleados', [EmpleadoController::class, 'store']);
     Route::put('empleados/{id}', [EmpleadoController::class, 'update']);
     Route::delete('empleados/{id}', [EmpleadoController::class, 'destroy']);

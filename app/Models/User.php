@@ -191,6 +191,11 @@ class User extends Authenticatable implements JWTSubject
         return $this->estado == 1;
     }
 
+    public function esAdministrador(): bool
+    {
+        return $this->rolesCustom()->where('es_admin', true)->exists();
+    }
+
     /**
      * Activar usuario
      */

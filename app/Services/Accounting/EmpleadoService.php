@@ -9,9 +9,17 @@ use Illuminate\Validation\ValidationException;
 
 class EmpleadoService
 {
+    private const RELACIONES = [
+        'empresa',
+        'cargoRelacion',
+        'usuarioCrea:id,name,email',
+        'usuarioActualiza:id,name,email',
+        'usuario:id,name,email,numero_identificacion,tipo_identificacion,telefono,direccion',
+    ];
+
     public function listar(array $filters = [])
     {
-        $query = Empleado::with(['empresa', 'cargoRelacion']);
+        $query = Empleado::with(self::RELACIONES);
 
         if (! empty($filters['id_empresa'])) {
             $query->where('id_empresa', $filters['id_empresa']);
@@ -26,36 +34,30 @@ class EmpleadoService
         }
 
         $buscar = trim($filters['buscar'] ?? '');
-        $usaFulltext = false;
 
         if (strlen($buscar) >= 3) {
             // Usar FULLTEXT en nombre si está disponible (mucho más rápido que LIKE %...%)
             // Fallback a LIKE solo para número de identificación y email
-            $query->where(function ($q) use ($buscar, &$usaFulltext) {
+            $query->where(function ($q) use ($buscar) {
                 $q->whereRaw('MATCH(nombre) AGAINST(? IN BOOLEAN MODE)', ['"'.$buscar.'"'])
-                    ->orWhere('numero_identificacion', 'like', $buscar.'%')  // sin % al inicio = usa índice
+                    ->orWhere('numero_identificacion', 'like', $buscar.'%')
                     ->orWhere('email', 'like', $buscar.'%');
             });
-            $usaFulltext = true;
         }
 
         $perPage = (int) ($filters['per_page'] ?? 20);
         $perPage = min(max($perPage, 5), 100);
-
-        // simplePaginate evita el COUNT(*) costoso cuando hay búsqueda fulltext
-        // paginate normal cuando no hay búsqueda (el COUNT es rápido con índice)
-        if ($usaFulltext) {
-            return $query->orderBy('created_at', 'desc')->simplePaginate($perPage);
-        }
 
         return $query->orderBy('created_at', 'desc')->paginate($perPage);
     }
 
     public function crear(array $data): Empleado
     {
+        $data = $this->normalizar($data);
+
         $validator = Validator::make($data, [
             'id_empresa' => 'required|exists:ent_empresas,id',
-            'id_cargo' => 'required|exists:config_cargo,id_cargo',
+            'id_cargo' => 'nullable|exists:config_cargo,id_cargo',
             'numero_identificacion' => 'required|string|max:50|unique:config_person_tercero,numero_identificacion',
             'nombre' => 'required|string|max:255',
             'email' => 'nullable|email|max:255|unique:config_person_tercero,email',
@@ -63,10 +65,12 @@ class EmpleadoService
             'unidad' => 'nullable|string|max:100',
             'direccion' => 'nullable|string|max:255',
             'telefono' => 'nullable|string|max:20',
+            'contrato' => 'nullable|string|max:150',
+            'fecha_inicio_contrato' => 'nullable|date',
+            'fecha_fin_contrato' => 'nullable|date|after_or_equal:fecha_inicio_contrato',
             'estado' => 'nullable|boolean',
             'caso_glpi' => 'nullable|string|max:100',
-            'usuario_crea_id' => 'nullable|exists:users,id',
-            'usuario_actualiza_id' => 'nullable|exists:users,id',
+            'id_user' => 'nullable|exists:users,id',
         ]);
 
         if ($validator->fails()) {
@@ -78,8 +82,12 @@ class EmpleadoService
                 $data['tipo_identificacion'] = 'CC';
             }
 
+            $userId = auth('api')->id();
+            $data['usuario_crea_id'] = $userId;
+            $data['usuario_actualiza_id'] = $userId;
+
             $empleado = Empleado::create($data);
-            $empleado->load(['empresa', 'cargoRelacion']);
+            $empleado->load(self::RELACIONES);
 
             return $empleado;
         });
@@ -87,9 +95,11 @@ class EmpleadoService
 
     public function actualizar(int $id, array $data): Empleado
     {
+        $data = $this->normalizar($data);
+
         $validator = Validator::make($data, [
             'id_empresa' => 'sometimes|required|exists:ent_empresas,id',
-            'id_cargo' => 'sometimes|required|exists:config_cargo,id_cargo',
+            'id_cargo' => 'nullable|exists:config_cargo,id_cargo',
             'numero_identificacion' => 'sometimes|required|string|max:50|unique:config_person_tercero,numero_identificacion,'.$id,
             'nombre' => 'sometimes|required|string|max:255',
             'email' => 'nullable|email|max:255|unique:config_person_tercero,email,'.$id,
@@ -97,10 +107,12 @@ class EmpleadoService
             'unidad' => 'nullable|string|max:100',
             'direccion' => 'nullable|string|max:255',
             'telefono' => 'nullable|string|max:20',
+            'contrato' => 'nullable|string|max:150',
+            'fecha_inicio_contrato' => 'nullable|date',
+            'fecha_fin_contrato' => 'nullable|date|after_or_equal:fecha_inicio_contrato',
             'estado' => 'nullable|boolean',
             'caso_glpi' => 'nullable|string|max:100',
-            'usuario_crea_id' => 'nullable|exists:users,id',
-            'usuario_actualiza_id' => 'nullable|exists:users,id',
+            'id_user' => 'nullable|exists:users,id',
         ]);
 
         if ($validator->fails()) {
@@ -114,11 +126,39 @@ class EmpleadoService
                 $data['tipo_identificacion'] = 'CC';
             }
 
+            $data['usuario_actualiza_id'] = auth('api')->id();
+
             $empleado->update($data);
-            $empleado->load(['empresa', 'cargoRelacion']);
+            $empleado->load(self::RELACIONES);
 
             return $empleado;
         });
+    }
+
+    public function obtener(int $id): Empleado
+    {
+        return Empleado::with(self::RELACIONES)->findOrFail($id);
+    }
+
+    private function normalizar(array $data): array
+    {
+        unset($data['usuario_crea_id'], $data['usuario_actualiza_id']);
+
+        foreach (['email', 'contrato', 'unidad', 'direccion', 'telefono', 'caso_glpi'] as $campo) {
+            if (array_key_exists($campo, $data) && $data[$campo] === '') {
+                $data[$campo] = null;
+            }
+        }
+
+        if (array_key_exists('id_cargo', $data) && ($data['id_cargo'] === '' || $data['id_cargo'] === 0)) {
+            $data['id_cargo'] = null;
+        }
+
+        if (array_key_exists('id_user', $data) && ($data['id_user'] === '' || $data['id_user'] === 0)) {
+            $data['id_user'] = null;
+        }
+
+        return $data;
     }
 
     public function eliminar(int $id): void

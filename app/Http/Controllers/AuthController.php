@@ -3,10 +3,13 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\SidebarService;
 use App\Services\Tenant\UserGrupSyncService;
+use Tymon\JWTAuth\JWTGuard;
 use Validator;
 
 
@@ -22,7 +25,7 @@ class AuthController extends Controller
      */
     public function __construct(SidebarService $sidebarService, UserGrupSyncService $userGrupSyncService)
     {
-        $this->middleware('auth:api', ['except' => ['login', 'register']]);
+        $this->middleware('auth:api', ['except' => ['login']]);
         $this->sidebarService = $sidebarService;
         $this->userGrupSyncService = $userGrupSyncService;
     }
@@ -91,24 +94,10 @@ class AuthController extends Controller
      * @return \Illuminate\Http\JsonResponse
      */
     public function register() {
-        //$this->authorize('create', User::class); UserPolicy
-        $validator = Validator::make(request()->all(), [
-            'name' => 'required|string|max:255',
-            'email' => 'required|email|unique:users|max:255',
-            'password' => 'required|string|min:5|',
-        ]);
-
-        if($validator->fails()){
-            return response()->json($validator->errors()->toJson(), 400);
-        }
-
-        $user = new User;
-        $user->name = request()->name;
-        $user->email = request()->email;
-        $user->password = bcrypt(request()->password);
-        $user->save();
-
-        return response()->json($user, 201);
+        return response()->json([
+            'success' => false,
+            'message' => 'El registro público está deshabilitado. Un administrador debe crear la cuenta.',
+        ], 403);
     }
 
 
@@ -130,11 +119,11 @@ class AuthController extends Controller
 
         // Verificar que el usuario esté activo
         $user = auth('api')->user();
-        if (!$user->estaActivo()) {
+        if (!$user instanceof User || !$user->estaActivo()) {
             // Invalidar el token recién creado
             auth('api')->logout();
             
-            \Log::warning('🚫 Intento de login de usuario inactivo:', [
+            Log::warning('🚫 Intento de login de usuario inactivo:', [
                 'user_id' => $user->id,
                 'email' => $user->email,
                 'ip' => request()->ip(),
@@ -147,7 +136,7 @@ class AuthController extends Controller
             ], 403);
         }
 
-        \Log::info('✅ Login exitoso de usuario activo:', [
+        Log::info('✅ Login exitoso de usuario activo:', [
             'user_id' => $user->id,
             'email' => $user->email,
             'ip' => request()->ip()
@@ -165,7 +154,7 @@ class AuthController extends Controller
         {
             $user = auth('api')->user();
 
-            if (!$user->estaActivo()) {
+            if (!$user instanceof User || !$user->estaActivo()) {
                 auth('api')->logout();
                 return response()->json([
                     'error'   => 'Cuenta inactiva',
@@ -229,7 +218,12 @@ class AuthController extends Controller
      */
     public function refresh()
     {
-        return $this->respondWithToken(auth('api')->refresh(), false);
+        $guard = auth('api');
+        if (!$guard instanceof JWTGuard) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        return $this->respondWithToken($guard->refresh(), false);
     }
 
     /**
@@ -241,7 +235,13 @@ class AuthController extends Controller
      */
     protected function respondWithToken($token, bool $syncAzure = true)
         {
-            $user = auth('api')->user();
+            $guard = auth('api');
+            $user = $guard->user();
+
+            if (!$guard instanceof JWTGuard || !$user instanceof User) {
+                return response()->json(['message' => 'Unauthorized'], 401);
+            }
+
             $user->load(['rolesCustom.perfiles.permisos', 'empresas', 'sucursal', 'sede']);
 
             $permisosUnicos = $this->getUserPermissions($user);
@@ -257,12 +257,12 @@ class AuthController extends Controller
             // Obtener sedes según el rol del usuario (4-tier logic)
             $sedes = $this->getSedesForUser($user);
 
-            \Log::info('✅ Login exitoso', ['user_id' => $user->id, 'email' => $user->email]);
+            Log::info('✅ Login exitoso', ['user_id' => $user->id, 'email' => $user->email]);
 
             return response()->json([
                 'access_token' => $token,
                 'token_type'   => 'bearer',
-                'expires_in'   => auth('api')->factory()->getTTL() * 60,
+                'expires_in'   => $guard->factory()->getTTL() * 60,
                 'user'         => [
                     'id'                    => $user->id,
                     'name'                  => $user->name,
@@ -303,7 +303,7 @@ class AuthController extends Controller
 
             if ($isAdmin) {
                 // Super admin ve todas las sedes
-                $sedes = \DB::table('config_ubi_sede')
+                $sedes = DB::table('config_ubi_sede')
                     ->select('id', 'nombre')
                     ->orderBy('nombre')
                     ->get();
@@ -311,14 +311,14 @@ class AuthController extends Controller
             }
 
             // Obtener empresas del usuario
-            $empresasDelUsuario = \DB::table('seg_empresa_user')
+            $empresasDelUsuario = DB::table('seg_empresa_user')
                 ->where('user_id', $user->id)
                 ->pluck('empresa_id')
                 ->toArray();
 
             if (empty($empresasDelUsuario)) {
                 // Transversal ve todas las sedes
-                $sedes = \DB::table('config_ubi_sede')
+                $sedes = DB::table('config_ubi_sede')
                     ->select('id', 'nombre')
                     ->orderBy('nombre')
                     ->get();
@@ -327,7 +327,7 @@ class AuthController extends Controller
 
             // Usuario con empresa asignada: obtener sedes de sus empresas
             // Las sedes están relacionadas con sucursales, que están relacionadas con empresas
-            $sedes = \DB::table('config_ubi_sede')
+            $sedes = DB::table('config_ubi_sede')
                 ->join('config_ubi_sucursales', 'config_ubi_sede.id_Sucursal', '=', 'config_ubi_sucursales.id')
                 ->whereIn('config_ubi_sucursales.id_empresa', $empresasDelUsuario)
                 ->select('config_ubi_sede.id', 'config_ubi_sede.nombre')
