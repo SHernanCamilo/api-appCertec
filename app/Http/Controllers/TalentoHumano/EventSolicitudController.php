@@ -467,6 +467,80 @@ class EventSolicitudController extends Controller
         }
     }
 
+    public function digitalizar(Request $request, int $id): JsonResponse
+    {
+        $request->validate(['comentario' => 'nullable|string|max:500']);
+
+        try {
+            $user = auth('api')->user();
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Usuario no autenticado'], 401);
+            }
+
+            $solicitud = $this->service->digitalizar($id, $user->id, $request->input('comentario'));
+            return response()->json([
+                'success' => true,
+                'message' => 'Evento digitalizado. Nómina puede proceder con el pago.',
+                'data'    => $solicitud,
+            ]);
+        } catch (\RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        } catch (\Exception $e) {
+            return $this->error('Error al digitalizar el evento', $e);
+        }
+    }
+
+    public function digitalizarMasivo(Request $request): JsonResponse
+    {
+        $request->validate([
+            'ids'            => 'nullable|array',
+            'ids.*'          => 'integer',
+            'consecutivos'   => 'nullable|array',
+            'consecutivos.*' => 'string',
+            'comentario'     => 'nullable|string|max:500',
+        ]);
+
+        $ids = $request->input('ids', []);
+        $consecutivos = $request->input('consecutivos', []);
+
+        if (empty($ids) && empty($consecutivos)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Debe enviar al menos un id o consecutivo',
+            ], 422);
+        }
+
+        try {
+            $user = auth('api')->user();
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Usuario no autenticado'], 401);
+            }
+
+            $resultado = $this->service->digitalizarMasivo(
+                $ids,
+                $consecutivos,
+                $user->id,
+                $request->input('comentario')
+            );
+
+            $exitosos = $resultado['exitosos'];
+            $fallidos = $resultado['fallidos'];
+            $severityOk = $exitosos > 0 && empty($fallidos);
+
+            return response()->json([
+                'success' => $exitosos > 0,
+                'message' => $severityOk
+                    ? ($exitosos === 1 ? '1 evento digitalizado' : "{$exitosos} eventos digitalizados")
+                    : ($exitosos > 0
+                        ? "{$exitosos} digitalizados, " . count($fallidos) . ' con error'
+                        : 'Ningún evento se digitalizó'),
+                'data'    => $resultado,
+            ], $exitosos > 0 ? 200 : 422);
+        } catch (\Exception $e) {
+            return $this->error('Error al digitalizar los eventos', $e);
+        }
+    }
+
     public function historial(int $id): JsonResponse
     {
         try {
