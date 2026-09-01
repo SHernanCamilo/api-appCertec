@@ -669,7 +669,10 @@ class FabricViewerController extends Controller
                     }
                 } finally {
                     gzclose($gz);
-                    @unlink($gzPath);
+                    // NO se borra el .gz aqui: el boton "Excel" (ConvertGraph...)
+                    // lo necesita para generar el xlsx. Lo limpia exports:cleanup
+                    // por TTL. Borrarlo aqui causaba "Error al descargar el
+                    // archivo" cuando el otro consumidor pedia el mismo job.
                 }
             },
             200,

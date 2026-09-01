@@ -86,7 +86,10 @@ final class ConvertGraphExportToXlsxJob implements ShouldQueue
                 (int) ($download['rows'] ?? 0),
             );
 
-            @unlink($gzPath); // el .gz ya no se necesita
+            // NO se borra el .gz aqui: la grilla (serveGraphDataForGrid) puede
+            // pedir el mismo job para pintar los datos. Antes cada consumidor
+            // borraba el .gz al terminar y el otro recibia "Error al descargar
+            // el archivo". Ahora la limpieza la hace exports:cleanup por TTL.
 
             if ($result->isEmpty()) {
                 $this->fail($cacheKey, 'El export no devolvio datos.');

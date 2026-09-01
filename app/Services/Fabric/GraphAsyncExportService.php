@@ -189,6 +189,18 @@ final class GraphAsyncExportService
     /**
      * Paso 3: descargar el archivo a disco local (sink, sin cargar en RAM).
      *
+     * IMPORTANTE — descarga UNA SOLA VEZ desde Graph:
+     *   Graph-Fabric entrega cada job una unica vez; el segundo GET al mismo
+     *   /export/download/{jobId} responde 410/404 porque el archivo ya se
+     *   consumio. Pero hay DOS consumidores del mismo job:
+     *     1. serveGraphDataForGrid  → pinta la grilla
+     *     2. ConvertGraphExportToXlsxJob → genera el .xlsx del boton "Excel"
+     *   El que llegaba segundo recibia "Error al descargar el archivo".
+     *
+     *   Solucion: el .gz se baja una vez a disco y se conserva. Si ya existe,
+     *   se reutiliza sin volver a pedirlo a Graph. Ambos consumidores leen de
+     *   esa copia local. El archivo lo limpia exports:cleanup por TTL.
+     *
      * @return array{success:bool, path?:string, filename?:string, rows?:int, format?:string, message?:string, code?:int}
      */
     public function download(string $jobId): array
@@ -199,6 +211,27 @@ final class GraphAsyncExportService
         }
 
         $tmpFile = "{$dir}/download.gz";
+
+        // ── Reutilizar el .gz ya descargado ──────────────────────────────────
+        // Si un consumidor previo (grilla o conversion xlsx) ya lo bajo, se
+        // sirve esa copia sin volver a pedir a Graph, que ya lo habria expirado.
+        if (is_file($tmpFile) && filesize($tmpFile) >= 20) {
+            $ctx    = Cache::get($this->cacheKey($jobId), []);
+            $format = 'ndjson-gzip';
+
+            Log::info('[GraphAsyncExport] reutilizando .gz en disco', [
+                'job_id' => $jobId,
+                'bytes'  => filesize($tmpFile),
+            ]);
+
+            return [
+                'success'  => true,
+                'path'     => $tmpFile,
+                'filename' => $this->buildFilename($ctx, $jobId, $format),
+                'rows'     => (int) ($ctx['rows'] ?? 0),
+                'format'   => $format,
+            ];
+        }
 
         try {
             $response = Http::timeout(300)
@@ -217,6 +250,11 @@ final class GraphAsyncExportService
                     default => $this->errorMessage($response),
                 };
 
+                Log::warning('[GraphAsyncExport] download no exitoso', [
+                    'job_id' => $jobId,
+                    'status' => $response->status(),
+                ]);
+
                 return ['success' => false, 'message' => $message, 'code' => $response->status()];
             }
 
@@ -229,9 +267,15 @@ final class GraphAsyncExportService
             }
 
             $ctx      = Cache::get($this->cacheKey($jobId), []);
-            $rows     = (int) ($response->header('X-Total-Rows') ?? 0);
+            $rows     = (int) ($response->header('X-Total-Rows') ?? $ctx['rows'] ?? 0);
             $format   = (string) ($response->header('X-Format') ?? 'ndjson-gzip');
             $filename = $this->buildFilename($ctx, $jobId, $format);
+
+            // Guardar rows en el contexto para que la reutilizacion del .gz los
+            // conserve (los headers solo llegan en esta primera descarga).
+            if ($rows > 0) {
+                Cache::put($this->cacheKey($jobId), array_merge($ctx, ['rows' => $rows]), self::JOB_CACHE_TTL);
+            }
 
             Log::info('[GraphAsyncExport] descarga OK', [
                 'job_id' => $jobId,
@@ -250,8 +294,20 @@ final class GraphAsyncExportService
             ];
         } catch (\Throwable $e) {
             @unlink($tmpFile);
-            Log::error('[GraphAsyncExport] download excepcion', ['job_id' => $jobId, 'error' => $e->getMessage()]);
-            return ['success' => false, 'message' => 'Error al descargar el archivo.', 'code' => 503];
+            // Log detallado: sin la clase, el archivo y la linea no se puede
+            // saber si fallo la red hacia Graph, el disco, o un timeout.
+            Log::error('[GraphAsyncExport] download excepcion', [
+                'job_id'    => $jobId,
+                'exception' => $e::class,
+                'error'     => $e->getMessage(),
+                'file'      => $e->getFile() . ':' . $e->getLine(),
+                'url'       => $this->url("/api/data/export/download/{$jobId}"),
+            ]);
+            return [
+                'success' => false,
+                'message' => 'Error al descargar el archivo: ' . $e->getMessage(),
+                'code'    => 503,
+            ];
         }
     }
 
