@@ -612,20 +612,143 @@ class FabricViewerController extends Controller
             ], 410);
         }
 
-        // Se sirve el .gz tal cual. 'Content-Encoding: identity' le dice al
-        // navegador que NO descomprima: el body ya es gzip. El frontend lo
-        // descomprime con DecompressionStream y lee el NDJSON.
+        // ── Se descomprime AQUI y se sirve NDJSON plano ──────────────────────
         //
-        // IMPORTANTE: NO usar 'application/gzip' como Content-Type porque algunos
-        // navegadores/proxies lo interpretan como descarga binaria opaca y no
-        // dejan leer el body desde Angular. 'application/octet-stream' es neutro.
-        return response()->download($gzPath, "data_{$jobId}.ndjson.gz", [
-            'Content-Type'     => 'application/octet-stream',
-            'Content-Encoding' => 'identity',
-            'X-Export-Format'  => 'ndjson-gzip',
-            'X-Export-Rows'    => (string) ($download['rows'] ?? 0),
-            'Cache-Control'    => 'no-store, no-cache',
-        ])->deleteFileAfterSend(true);
+        // Antes se entregaba el .gz crudo con 'Content-Encoding: identity' y el
+        // navegador lo descomprimia con DecompressionStream. Eso se rompia en
+        // produccion: algun filtro intermedio (mod_deflate / mod_brotli / el
+        // proxy) recomprimia la respuesta y el `Header unset Content-Encoding`
+        // del .htaccess borraba el aviso, asi que el navegador entregaba a
+        // Angular bytes comprimidos sin decodificar. La grilla terminaba con
+        // nombres de columna binarios tipo "Õÿù¯?þí/ðjõ".
+        //
+        // Servir texto plano quita la ambiguedad: la compresion la negocian
+        // Apache y el navegador por Accept-Encoding / Content-Encoding, que es
+        // el mecanismo estandar y el unico que los proxies respetan bien. El
+        // ancho de banda no se pierde: public/.htaccess mete
+        // application/x-ndjson en mod_deflate.
+        //
+        // Se transmite linea por linea con gzgets: RAM constante, da igual si
+        // el export son 500 filas o 500.000.
+        $rows = (int) ($download['rows'] ?? 0);
+
+        // Guarda: validar que el .gz de verdad contiene NDJSON antes de empezar
+        // a transmitir. Una vez abierto el stream ya no se puede devolver un
+        // error HTTP, y el frontend recibiria basura sin explicacion.
+        $firstLine = $this->peekFirstNdjsonLine($gzPath);
+
+        if ($firstLine === null) {
+            @unlink($gzPath);
+            \Illuminate\Support\Facades\Log::error('[ExportData] el archivo no contiene NDJSON valido', [
+                'job_id'      => $jobId,
+                'bytes'       => (int) @filesize($gzPath),
+                'primeros_16' => $this->hexPreview($gzPath),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Los datos llegaron corruptos del servidor de datos. Reintente la actualizacion.',
+            ], 502);
+        }
+
+        return response()->stream(
+            function () use ($gzPath) {
+                $gz = gzopen($gzPath, 'rb');
+
+                if ($gz === false) {
+                    return;
+                }
+
+                try {
+                    while (($line = gzgets($gz)) !== false) {
+                        if (trim($line) === '') {
+                            continue;
+                        }
+
+                        echo rtrim($line, "\r\n"), "\n";
+                    }
+                } finally {
+                    gzclose($gz);
+                    @unlink($gzPath);
+                }
+            },
+            200,
+            [
+                // application/x-ndjson es el tipo correcto y es texto: Apache lo
+                // puede comprimir y el navegador lo decodifica solo.
+                'Content-Type'      => 'application/x-ndjson; charset=utf-8',
+                'X-Export-Format'   => 'ndjson',
+                'X-Export-Rows'     => (string) $rows,
+                'Cache-Control'     => 'no-store, no-cache',
+                // Sin esto nginx/Apache pueden bufferar la respuesta completa.
+                'X-Accel-Buffering' => 'no',
+            ]
+        );
+    }
+
+    /**
+     * Lee la primera linea util de un .gz y la valida como JSON.
+     *
+     * Devuelve la linea, o null si el archivo no se puede descomprimir o su
+     * primera linea no es un objeto JSON. Sirve para no empezar a transmitir
+     * un stream corrupto, cuando ya es tarde para devolver un error HTTP.
+     */
+    private function peekFirstNdjsonLine(string $gzPath): ?string
+    {
+        $gz = gzopen($gzPath, 'rb');
+
+        if ($gz === false) {
+            return null;
+        }
+
+        try {
+            // Se revisan unas pocas lineas: la primera podria venir vacia.
+            for ($i = 0; $i < 5; $i++) {
+                $line = gzgets($gz);
+
+                if ($line === false) {
+                    return null;
+                }
+
+                $line = trim($line);
+
+                if ($line === '') {
+                    continue;
+                }
+
+                $decoded = json_decode($line, true);
+
+                return is_array($decoded) && $decoded !== [] ? $line : null;
+            }
+        } finally {
+            gzclose($gz);
+        }
+
+        return null;
+    }
+
+    /**
+     * Primeros 16 bytes de un archivo en hex, para los logs de diagnostico.
+     *
+     * Con esto se identifica de un vistazo qué llegó realmente:
+     *   1f8b08... → gzip     504b0304... → zip/xlsx
+     *   7b22...   → JSON     otra cosa   → brotli u otro encoding sin magic
+     */
+    private function hexPreview(string $path): string
+    {
+        $handle = @fopen($path, 'rb');
+
+        if ($handle === false) {
+            return '(ilegible)';
+        }
+
+        $bytes = (string) fread($handle, 16);
+        fclose($handle);
+
+        return implode(' ', array_map(
+            static fn (string $b): string => str_pad(dechex(ord($b)), 2, '0', STR_PAD_LEFT),
+            str_split($bytes) ?: []
+        ));
     }
 
     /**

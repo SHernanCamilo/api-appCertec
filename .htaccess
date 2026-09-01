@@ -14,14 +14,14 @@
 # archivo con Content-Length erróneo y guardarlo cortado -> Excel abre
 # "reparando y quitando el contenido". Esto excluye esos tipos de la compresión.
 # ─────────────────────────────────────────────────────────────────────────────
-<IfModule mod_deflate.c>
+# NOTA: el DocumentRoot de Apache apunta a public/, asi que Apache NO lee este
+# archivo. Las reglas de compresion reales viven en public/.htaccess.
+#
+# Aqui habia un `Header unset Content-Encoding env=no-gzip`. Se quito porque es
+# destructivo: si un filtro (mod_deflate, mod_brotli, el proxy) comprime la
+# respuesta, borrar el Content-Encoding deja al navegador con bytes comprimidos
+# que no sabe decodificar. El body llega ilegible y sin ninguna pista de por que.
+<IfModule mod_setenvif.c>
   SetEnvIfNoCase Request_URI \.(?:xlsx|xls|zip|gz|gzip)$ no-gzip dont-vary
-  # La descarga de export va por /export/download/ sin extensión en la URL:
-  SetEnvIfNoCase Request_URI export/download no-gzip dont-vary
-</IfModule>
-<IfModule mod_headers.c>
-  # Reafirma que el proxy no altere la codificación de esas descargas.
-  <IfModule mod_setenvif.c>
-    Header unset Content-Encoding env=no-gzip
-  </IfModule>
+  SetEnvIfNoCase Request_URI \.(?:xlsx|xls|zip|gz|gzip)$ no-brotli dont-vary
 </IfModule>

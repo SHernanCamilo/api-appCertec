@@ -34,9 +34,42 @@
 
 # Compresión gzip — Power Query y Excel soportan Accept-Encoding: gzip
 # Reduce ~70% el tamaño de las respuestas OData JSON
+#
+# application/x-ndjson es el que usa /export/download?as=data para la grilla.
+# Antes ese endpoint entregaba un .gz crudo y lo descomprimía el navegador;
+# ahora manda texto plano y la compresión la negocian Apache y el navegador con
+# Content-Encoding, que es el único mecanismo que los proxies respetan bien.
 <IfModule mod_deflate.c>
     AddOutputFilterByType DEFLATE application/json
+    AddOutputFilterByType DEFLATE application/x-ndjson
     AddOutputFilterByType DEFLATE text/event-stream
+</IfModule>
+
+# ─────────────────────────────────────────────────────────────────────────────
+# No comprimir descargas que YA vienen comprimidas (xlsx, zip, gz).
+#
+# Un .xlsx es un ZIP: recomprimirlo puede entregarlo con Content-Length errado
+# y Excel lo abre "reparando". Y si un filtro comprime la descarga sin que el
+# navegador lo sepa, el body llega como binario ilegible.
+#
+# no-gzip cubre mod_deflate; no-brotli cubre mod_brotli. Hacen falta LOS DOS:
+# el .htaccess de la raíz del repo solo ponía no-gzip (y además Apache no lo
+# lee, porque el DocumentRoot es public/).
+#
+# OJO: aquí NO va ningún `Header unset Content-Encoding`. Esa línea existía en
+# el .htaccess de la raíz y es destructiva: si un filtro comprime la respuesta,
+# borrar el Content-Encoding deja al navegador con bytes comprimidos que no
+# sabe decodificar. Era la causa de los datos binarios en el viewer de vistas.
+# ─────────────────────────────────────────────────────────────────────────────
+<IfModule mod_setenvif.c>
+    SetEnvIfNoCase Request_URI \.(?:xlsx|xls|zip|gz|gzip)$ no-gzip dont-vary
+    SetEnvIfNoCase Request_URI \.(?:xlsx|xls|zip|gz|gzip)$ no-brotli dont-vary
+
+    # /export/download/{jobId}?as=file entrega el .xlsx y no lleva extensión en
+    # la URL, así que la regla de arriba no lo cubre. ?as=data (NDJSON) sí se
+    # comprime: es texto y ahí el ahorro interesa.
+    SetEnvIf Query_String "as=file" no-gzip dont-vary
+    SetEnvIf Query_String "as=file" no-brotli dont-vary
 </IfModule>
 
 # SSE (Server-Sent Events) — desactivar buffering para export stream
