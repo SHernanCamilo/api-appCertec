@@ -103,18 +103,9 @@ class MonitoringService
                         // (config_sec_detalles por sucursal), que garantiza el consecutivo
                         // correcto (ej. FLA-2026-000179). Ya no se usa el texto de la
                         // descripción de Indigo, que puede traer números cortos o desalineados.
-                        try {
-                            $numeroOrdenCompra = $this->sequenceService->generateSequence(
-                                'INV', $userId, 'INV-ORDEN_COMPRA', $sucursalId
-                            );
-                        } catch (\RuntimeException $e) {
-                            // Si la secuencia no está parametrizada para esta sucursal,
-                            // caemos al prefijo + número Indigo (mejor que un número corto).
-                            Log::warning("[INDIGO-SYNC] Secuencia no disponible para sucursal {$sucursalId}: {$e->getMessage()}. Usando fallback.");
-                            $numeroOrdenCompra = $sucursalPrefijo
-                                ? "{$sucursalPrefijo}-IND-{$numeroOrdenIndigo}"
-                                : "IND-{$numeroOrdenIndigo}";
-                        }
+                        $numeroOrdenCompra = $this->sequenceService->generateSequence(
+                            'INV', $userId, 'INV-ORDEN_COMPRA', $sucursalId
+                        );
 
                         $ordenLocal = InvOrdenCompra::create([
                             'numero_orden_compra' => $numeroOrdenCompra,

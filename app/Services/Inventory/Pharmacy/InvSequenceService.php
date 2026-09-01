@@ -85,6 +85,8 @@ class InvSequenceService
 
     /**
      * Resuelve el ID de empresa del usuario.
+     * Para usuarios admin que no tienen filas en seg_empresa_user, usa el valor
+     * configurado en config('inventory.empresa_id') como empresa del inventario.
      */
     private function resolveEmpresaId(User $user): ?int
     {
@@ -92,6 +94,12 @@ class InvSequenceService
         $empresa = $user->empresas()->first();
         if ($empresa) {
             return $empresa->id;
+        }
+
+        // Fallback para usuarios admin (Super Administrador no tiene filas en el pivote)
+        $configEmpresaId = (int) config('inventory.empresa_id', 1);
+        if ($configEmpresaId > 0) {
+            return $configEmpresaId;
         }
 
         return null;

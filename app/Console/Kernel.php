@@ -36,13 +36,18 @@ class Kernel extends ConsoleKernel
             ->everyFiveMinutes()
             ->withoutOverlapping();
 
-        // ── Sincronización ERP Indigo ────────────────────────────────────────
-        // Sincroniza las órdenes de compra desde la vista de Indigo cada 10 min
-        // INACTIVADO temporalmente por error de driver sqlsrv (pdo_odbc no disponible)
-        // $schedule->command('indigo:sync-orders')
-        //     ->everyTenMinutes()
-        //     ->withoutOverlapping()
-        //     ->appendOutputTo(storage_path('logs/indigo-sync.log'));
+        // ── Sincronización automática ERP Indigo → BD local ─────────────────
+        // Mantiene las OC locales sincronizadas con Indigo sin intervención manual.
+        // Corre cada 15 minutos; actualiza OC existentes (cantidades, devoluciones)
+        // y registra OC nuevas en estado 'pendiente' con el consecutivo correcto.
+        // La sucursal 2 = Florencia (FLA), que es la que tiene OC activas en Indigo.
+        // Si en el futuro otras sucursales generan OC en Indigo, agregar entradas
+        // adicionales con su --sucursal=X.
+        $schedule->command('inventory:sync-indigo --user=1 --sucursal=2')
+            ->everyFifteenMinutes()
+            ->withoutOverlapping()
+            ->runInBackground()
+            ->appendOutputTo(storage_path('logs/indigo-sync.log'));
 
         // ── OData Cache Warmup ───────────────────────────────────────────────
         // Pre-calienta Redis con las vistas OData más consultadas (top 10, 3 páginas)
