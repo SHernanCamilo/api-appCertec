@@ -21,6 +21,14 @@ use Illuminate\Support\Facades\Log;
  */
 class MonitoringService
 {
+    /** Estado inicial de una OC/detalle recién sincronizada (válido en el enum de BD). */
+    private const ESTADO_INICIAL = 'pendiente';
+    private const ESTADO_CANCELADA = 'cancelada';
+
+    /** Código del módulo y proceso de inventario para el generador de secuencias. */
+    private const MODULO_INVENTARIO = 'INV';
+    private const PROCESO_ORDEN_COMPRA = 'INV-ORDEN_COMPRA';
+
     public function __construct(
         private readonly FabricInventoryService $fabricService,
         private readonly InvSequenceService $sequenceService
@@ -133,7 +141,7 @@ class MonitoringService
                         // correcto (ej. FLA-2026-000179). Ya no se usa el texto de la
                         // descripción de Indigo, que puede traer números cortos o desalineados.
                         $numeroOrdenCompra = $this->sequenceService->generateSequence(
-                            'INV', $userId, 'INV-ORDEN_COMPRA', $sucursalId
+                            self::MODULO_INVENTARIO, $userId, self::PROCESO_ORDEN_COMPRA, $sucursalId
                         );
 
                         $ordenLocal = InvOrdenCompra::create([
@@ -141,7 +149,7 @@ class MonitoringService
                             'fecha_orden'         => $cabecera['Fecha'] ?? now()->toDateString(),
                             'observaciones'       => $descripcion,
                             'proveedor_nombre'    => $cabecera['Proveedor'] ?? null,
-                            'estado'              => 'pendiente',
+                            'estado'              => self::ESTADO_INICIAL,
                             'sincronizado_indigo' => true,
                             'sucursal_id'         => $sucursalId,
                             'creado_por'          => $userId,
@@ -239,8 +247,10 @@ class MonitoringService
                                 'cantidad_solicitada_compra' => $cantidadNeta,
                                 'fecha_entrega_estimada'     => $item['FechaEntrega'] ?? null,
                                 'precio_unitario_compra'     => (float) ($item['CostoPromedio'] ?? 0),
-                                'observaciones'              => "Sincronizado de Indigo",
-                                'estado'                     => 'solicitado',
+                                'observaciones'              => 'Sincronizado de Indigo',
+                                // 'solicitado' no existe en el enum de inv_orden_compra_detalles;
+                                // el detalle nace en 'pendiente' igual que la OC.
+                                'estado'                     => self::ESTADO_INICIAL,
                             ]);
                         } else {
                             if ($hasReturnMeta) {
@@ -429,7 +439,7 @@ class MonitoringService
     private function anularOrdenDesdeIndigo(InvOrdenCompra $orden, string $estadoIndigo, int $userId): void
     {
         // Idempotente: si ya está cancelada, no repite trabajo ni auditoría.
-        if (strtolower((string) $orden->estado) === 'cancelada') {
+        if (strtolower((string) $orden->estado) === self::ESTADO_CANCELADA) {
             return;
         }
 
@@ -437,10 +447,10 @@ class MonitoringService
 
         // Cancelar la cabecera y los detalles.
         $orden->update([
-            'estado'              => 'cancelada',
+            'estado'              => self::ESTADO_CANCELADA,
             'sincronizado_indigo' => true,
         ]);
-        InvOrdenCompraDetalle::where('compra_id', $orden->id)->update(['estado' => 'cancelada']);
+        InvOrdenCompraDetalle::where('compra_id', $orden->id)->update(['estado' => self::ESTADO_CANCELADA]);
 
         // Recalcular el estado de los pedidos vinculados (por si dependían de esta OC).
         $detallesPedido = InvOrdenCompraDetalle::where('compra_id', $orden->id)
