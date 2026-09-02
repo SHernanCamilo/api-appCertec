@@ -361,9 +361,14 @@ final class TableroPublicController extends Controller
 
             // Filtrar por sede si el dispositivo tiene filtro configurado
             if ($device->sede_filter && $device->sede_filter !== '' && !empty($allData)) {
+                // Comparacion tolerante: se recorta el espacio de los dos lados.
+                // Con strcasecmp a secas, un " TUNJA " en la vista no casaba con
+                // "TUNJA" guardado en el dispositivo y la TV salia en blanco.
+                $objetivo = strtoupper(trim((string) $device->sede_filter));
+
                 $filtered = array_values(array_filter(
                     $allData,
-                    fn ($row) => strcasecmp((string) ($row['Sede'] ?? ''), $device->sede_filter) === 0
+                    fn ($row) => strtoupper(trim((string) ($row['Sede'] ?? ''))) === $objetivo
                 ));
                 $allData = $filtered;
             }

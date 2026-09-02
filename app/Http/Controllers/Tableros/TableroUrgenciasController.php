@@ -107,11 +107,15 @@ class TableroUrgenciasController extends Controller
 
         $allData = $response->json('data') ?? $response->json('items') ?? [];
 
-        // Filtrar por sede del usuario si aplica
+        // Filtrar por sede del usuario si aplica.
+        // Comparacion tolerante (mayusculas + trim): un " Tunja " en la vista o en
+        // el nombre de la sucursal dejaba el tablero vacio con strcasecmp a secas.
         if ($sucursalFilter && !empty($allData)) {
+            $objetivo = strtoupper(trim($sucursalFilter));
+
             $filtered = array_values(array_filter(
                 $allData,
-                fn ($row) => strcasecmp((string) ($row['Sede'] ?? ''), $sucursalFilter) === 0
+                fn ($row) => strtoupper(trim((string) ($row['Sede'] ?? ''))) === $objetivo
             ));
             return $filtered;
         }
