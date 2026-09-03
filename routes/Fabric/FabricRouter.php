@@ -78,6 +78,10 @@ Route::middleware(['auth:api'])->group(function () {
 
         // Workbook Manager (Mis Excels - CRUD de workbooks multi-vista)
         Route::get('/my-workbooks', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'index']);
+        // Limpieza de duplicados (mismo conjunto de vistas). Va ANTES de
+        // /my-workbook/{id} no por conflicto (el prefijo es distinto) sino para
+        // mantener juntas las rutas de coleccion.
+        Route::post('/my-workbooks/cleanup-duplicates', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'cleanupDuplicates']);
         Route::get('/my-workbook/{id}', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'show'])
             ->where('id', '[0-9]+');
         Route::post('/my-workbook', [\App\Http\Controllers\Fabric\BiWorkbookManagerController::class, 'store']);

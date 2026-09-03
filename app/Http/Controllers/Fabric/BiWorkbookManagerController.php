@@ -113,13 +113,40 @@ class BiWorkbookManagerController extends Controller
             'state'       => 'nullable|array',
         ]);
 
-        $user = auth()->user();
+        $user  = auth()->user();
+        $views = $request->input('views');
+
+        // ── Anti-duplicados ─────────────────────────────────────────────────
+        //
+        // El visor crea el workbook solo al abrir una vista, asi que cada vez que
+        // el usuario entraba a la misma vista nacia OTRO workbook: "Excel Sheets"
+        // acabo con decenas de tarjetas identicas
+        // (VW_Treasury_ComprobantesEgresoTesoreria repetida 20+ veces).
+        //
+        // Si el usuario ya tiene un workbook con EXACTAMENTE el mismo conjunto de
+        // vistas, se reutiliza y se le actualiza el estado. Asi "abrir la vista"
+        // vuelve siempre al mismo Excel, que es lo que espera el usuario.
+        $existing = $this->findByViewSignature($user->id, $views);
+
+        if ($existing) {
+            $existing->update([
+                'state'          => $request->input('state') ?? $existing->state,
+                'last_opened_at' => now(),
+            ]);
+
+            return response()->json([
+                'success'  => true,
+                'data'     => $existing->fresh(),
+                'reused'   => true,
+                'message'  => 'Se reutilizo el workbook existente con las mismas vistas.',
+            ]);
+        }
 
         $workbook = BiWorkbook::create([
             'user_id'        => $user->id,
             'name'           => $request->input('name'),
             'description'    => $request->input('description'),
-            'views'          => $request->input('views'),
+            'views'          => $views,
             'state'          => $request->input('state'),
             'last_opened_at' => now(),
         ]);
@@ -127,8 +154,90 @@ class BiWorkbookManagerController extends Controller
         return response()->json([
             'success' => true,
             'data'    => $workbook,
+            'reused'  => false,
             'message' => 'Workbook creado correctamente.',
         ], 201);
+    }
+
+    /**
+     * Busca un workbook del usuario cuyo conjunto de vistas sea identico.
+     *
+     * La comparacion es por CONJUNTO (schema + viewName), sin importar el orden
+     * ni la etiqueta: abrir las mismas dos vistas en distinto orden es el mismo
+     * Excel para el usuario.
+     */
+    private function findByViewSignature(int $userId, array $views): ?BiWorkbook
+    {
+        $signature = $this->viewSignature($views);
+        if ($signature === '') return null;
+
+        return BiWorkbook::forUser($userId)
+            ->orderByDesc('updated_at')
+            ->get()
+            ->first(fn (BiWorkbook $wb) => $this->viewSignature($wb->views ?? []) === $signature);
+    }
+
+    /** Firma canonica de un conjunto de vistas: "dc|VW_A,dc|VW_B" */
+    private function viewSignature(?array $views): string
+    {
+        if (empty($views)) return '';
+
+        $keys = [];
+        foreach ($views as $v) {
+            $schema = strtolower(trim((string) ($v['schema'] ?? '')));
+            $name   = strtolower(trim((string) ($v['viewName'] ?? $v['view_name'] ?? '')));
+            if ($name === '') continue;
+            $keys[] = $schema . '|' . $name;
+        }
+
+        $keys = array_values(array_unique($keys));
+        sort($keys);
+
+        return implode(',', $keys);
+    }
+
+    /**
+     * Elimina los workbooks duplicados del usuario.
+     *
+     * Duplicado = mismo conjunto de vistas. Se conserva el mas reciente
+     * (last_opened_at, y a falta de eso updated_at) y se borra el resto.
+     *
+     * Existe porque antes de la deduplicacion en `store` ya se habian acumulado
+     * decenas de tarjetas identicas en "Excel Sheets".
+     */
+    public function cleanupDuplicates(): JsonResponse
+    {
+        $user = auth()->user();
+
+        $workbooks = BiWorkbook::forUser($user->id)
+            ->orderByRaw('COALESCE(last_opened_at, updated_at) DESC')
+            ->get();
+
+        $keep    = [];
+        $deleted = 0;
+
+        foreach ($workbooks as $wb) {
+            $signature = $this->viewSignature($wb->views ?? []);
+
+            // Sin vistas no hay forma de saber a que corresponde: se respeta.
+            if ($signature === '') continue;
+
+            if (isset($keep[$signature])) {
+                $wb->delete();
+                $deleted++;
+            } else {
+                $keep[$signature] = $wb->id;
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'deleted' => $deleted,
+            'kept'    => count($keep),
+            'message' => $deleted > 0
+                ? "Se eliminaron {$deleted} workbooks duplicados."
+                : 'No habia duplicados.',
+        ]);
     }
 
     /**
