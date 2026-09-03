@@ -80,6 +80,32 @@ class FabricViewerController extends Controller
         return response()->json($result);
     }
 
+    /**
+     * Filas conocidas por vista y umbral a partir del cual la vista deja de
+     * abrirse en el navegador y se manda a JadeOne Desktop.
+     *
+     * GET /api/fabric/viewer/views/row-counts
+     *
+     * Response:
+     * {
+     *   "success": true,
+     *   "threshold": 250000,
+     *   "counts": { "dc.vw_censo_cmi": 98, "gd.vw_glosa_x": 1480000 },
+     *   "desktop_only": ["df.vw_billing_x"]
+     * }
+     */
+    public function viewRowCounts(): JsonResponse
+    {
+        $sizes = $this->gateway->getViewSizeMap();
+
+        return response()->json([
+            'success'      => true,
+            'threshold'    => (int) config('fabric.web_max_rows', 250000),
+            'counts'       => (object) $sizes['counts'],
+            'desktop_only' => $sizes['desktop_only'],
+        ]);
+    }
+
     // =========================================================================
     // COLUMNAS DE UNA VISTA
     // =========================================================================

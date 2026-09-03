@@ -36,6 +36,13 @@ return [
     // ese volumen el export monopoliza un carril de Python varios minutos.
     'max_export_rows' => (int) env('FABRIC_MAX_EXPORT_ROWS', 1000000),
 
+    // Máximo de filas que se abren en el visor web. Por encima de este volumen
+    // la vista se abre en JadeOne Desktop: el navegador no sostiene el dataset.
+    'web_max_rows' => (int) env('FABRIC_WEB_MAX_ROWS', 250000),
+
+    // TTL del mapa de filas por vista que alimenta la decisión web/desktop (segundos)
+    'row_counts_cache_ttl' => (int) env('FABRIC_ROW_COUNTS_CACHE_TTL', 900),
+
     // Chunk size para exports paginados (filas por request)
     // Graph-Fabric acepta máximo 20000 filas por request (validación FastAPI)
     'export_chunk' => (int) env('FABRIC_EXPORT_CHUNK', 20000),

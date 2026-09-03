@@ -2543,6 +2543,85 @@ class GraphFabricGatewayService
     }
 
     /**
+     * Tamaño de cada vista en un solo request a Graph-Fabric.
+     *
+     * Sale de la metadata de los parquets (R2), así que no cuesta ningún COUNT
+     * contra Fabric. Las vistas sin parquet quedan fuera del mapa: el llamador
+     * debe tratar la ausencia como "tamaño desconocido", no como cero.
+     *
+     * Las marcadas `too_big` no tienen parquet justamente por su volumen, así
+     * que se reportan aparte: son las que nunca deben abrirse en el navegador.
+     *
+     * @return array{counts: array<string,int>, desktop_only: string[]} claves "schema.view" en minúsculas
+     */
+    public function getViewSizeMap(): array
+    {
+        $cacheKey = 'fabric_view_size_map';
+        $cached   = Cache::get($cacheKey);
+
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $counts      = [];
+        $desktopOnly = [];
+
+        foreach (['/api/r2/schedule', '/api/r2/status'] as $endpoint) {
+            try {
+                $response = Http::timeout(20)
+                    ->connectTimeout(5)
+                    ->acceptJson()
+                    ->get($this->baseUrl . $endpoint, ['token' => $this->tokenAdmin]);
+
+                if ($response->failed()) {
+                    continue;
+                }
+
+                $views = $response->json('views') ?: $response->json('data.views') ?: [];
+
+                foreach ($views as $view) {
+                    $schema = strtolower(trim((string) ($view['schema'] ?? '')));
+                    $name   = strtolower(trim((string) ($view['view'] ?? '')));
+
+                    if ($schema === '' || $name === '') {
+                        continue;
+                    }
+
+                    $key  = "{$schema}.{$name}";
+                    $rows = (int) ($view['row_count'] ?? 0);
+
+                    if ($rows > 0) {
+                        $counts[$key] = max($counts[$key] ?? 0, $rows);
+                    }
+
+                    if (($view['status'] ?? '') === 'too_big'
+                        || ($view['cooldown_reason'] ?? '') === 'too_big') {
+                        $desktopOnly[$key] = true;
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::warning('GraphFabricGateway getViewSizeMap error', [
+                    'endpoint' => $endpoint,
+                    'error'    => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $result = [
+            'counts'       => $counts,
+            'desktop_only' => array_keys($desktopOnly),
+        ];
+
+        // Un resultado vacío significa que Graph-Fabric no respondió: no se
+        // cachea para no dejar 15 min sin criterio de tamaño.
+        if ($counts !== [] || $desktopOnly !== []) {
+            Cache::put($cacheKey, $result, (int) config('fabric.row_counts_cache_ttl', 900));
+        }
+
+        return $result;
+    }
+
+    /**
      * Construir filtros en formato esperado por la API Python.
      *
      * @param array $filters [['field' => 'Edad', 'operator' => 'gt', 'value' => 18], ...]

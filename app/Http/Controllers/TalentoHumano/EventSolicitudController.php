@@ -373,6 +373,39 @@ class EventSolicitudController extends Controller
         }
     }
 
+    public function digitalizados(Request $request): JsonResponse
+    {
+        $request->validate([
+            'fecha_desde' => 'required|date',
+            'fecha_hasta' => 'required|date',
+            'empresa_id'  => 'nullable|integer',
+            'sucursal_id' => 'nullable|integer',
+            'search'      => 'nullable|string',
+            'per_page'    => 'nullable|integer',
+        ]);
+
+        try {
+            $user = auth('api')->user();
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Usuario no autenticado'], 401);
+            }
+
+            $paginado = $this->service->listarDigitalizados($user->id, $request->all());
+            return response()->json([
+                'success'      => true,
+                'data'         => $paginado->items(),
+                'total'        => $paginado->total(),
+                'current_page' => $paginado->currentPage(),
+                'per_page'     => $paginado->perPage(),
+                'last_page'    => $paginado->lastPage(),
+            ]);
+        } catch (\RuntimeException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        } catch (\Exception $e) {
+            return $this->error('Error al listar eventos digitalizados', $e);
+        }
+    }
+
     public function gestionados(Request $request): JsonResponse
     {
         try {

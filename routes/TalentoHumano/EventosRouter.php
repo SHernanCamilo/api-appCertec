@@ -14,6 +14,7 @@ use App\Http\Controllers\TalentoHumano\WfGrupoUfController;
 Route::prefix('solicitudes')->group(function () {
     Route::get('/',        [EventSolicitudController::class, 'index']);
     Route::get('/pendientes', [EventSolicitudController::class, 'pendientes']);
+    Route::get('/digitalizados', [EventSolicitudController::class, 'digitalizados']);
     Route::get('/gestionados', [EventSolicitudController::class, 'gestionados']);
     Route::get('/solapamiento', [EventSolicitudController::class, 'solapamiento']);
     Route::post('/',       [EventSolicitudController::class, 'store']);

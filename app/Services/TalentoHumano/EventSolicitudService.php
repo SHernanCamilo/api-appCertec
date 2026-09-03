@@ -5,6 +5,7 @@ namespace App\Services\TalentoHumano;
 use App\Models\TalentoHumano\EventMotRechazo;
 use App\Models\Empleado;
 use App\Models\Modulo;
+use App\Models\User;
 use App\Models\Config\ConfigUnidadFuncional;
 use App\Models\TalentoHumano\EventHoraExtra;
 use App\Models\TalentoHumano\EventNovedad;
@@ -435,28 +436,23 @@ class EventSolicitudService
             ->whereHas('modulo', fn($q) => $q->where('codigo', 'eventos'))
             ->get();
 
-        // Mapa record_id => instancia, solo de los que el usuario puede aprobar
-        $autorizadas = $instancias->filter(
-            fn(WfInstancia $i) => $this->workflowNotifier->esUsuarioAutorizado($userId, $i)
+        $paso = !empty($filters['paso']) ? strtolower(trim((string) $filters['paso'])) : null;
+        $candidatas = $paso
+            ? $instancias->filter(fn (WfInstancia $i) => $this->coincidePaso($i, $paso))
+            : $instancias;
+
+        $autorizadas = $candidatas->filter(
+            fn (WfInstancia $i) => $this->usuarioPuedeGestionarPendiente($userId, $i, $paso)
         );
 
-        if (!empty($filters['paso'])) {
-            $paso = strtolower(trim((string) $filters['paso']));
-            $autorizadas = $autorizadas->filter(
-                fn (WfInstancia $i) => $this->coincidePaso($i, $paso)
-            );
-        }
-
-        $recordIds = $autorizadas->pluck('modulo_record_id')->all();
         $perPage = min(max((int) ($filters['per_page'] ?? 50), 5), 500);
+        $eventosIds = $this->resolverIdsEventosDeInstancias($autorizadas);
 
-        if (empty($recordIds)) {
+        if (empty($eventosIds)) {
             return EventHoraExtra::whereRaw('1 = 0')->paginate($perPage);
         }
 
-        $pasoPorRecord = $autorizadas->mapWithKeys(
-            fn(WfInstancia $i) => [$i->modulo_record_id => optional($i->pasoActual)->nombre_paso]
-        );
+        $pasoPorEvento = $this->mapearPasoActualPorEvento($autorizadas, $eventosIds);
 
         $query = EventHoraExtra::with([
             'empleado:id,nombre,numero_identificacion,id_empresa',
@@ -471,11 +467,22 @@ class EventSolicitudService
               'uf.id_empresa as empresa_id',
               'uf.id_sucursal as sucursal_id'
           )
-          ->whereIn('event_horas_extra.id', $recordIds)
+          ->whereIn('event_horas_extra.id', $eventosIds)
           ->where('event_horas_extra.estado', '!=', EventoEstadoMapper::ANULADO);
 
+        if ($paso && $this->esFiltroDigitalizar($paso)) {
+            $query->where('event_horas_extra.estado', EventoEstadoMapper::AUTORIZADO);
+        }
+
         if (!empty($filters['empresa_id'])) {
-            $query->where('uf.id_empresa', (int) $filters['empresa_id']);
+            $empresaId = (int) $filters['empresa_id'];
+            $query->where(function ($q) use ($empresaId) {
+                $q->where('uf.id_empresa', $empresaId)
+                  ->orWhere(function ($inner) use ($empresaId) {
+                      $inner->whereNull('event_horas_extra.id_unidad_funcional')
+                            ->whereHas('empleado', fn ($e) => $e->where('id_empresa', $empresaId));
+                  });
+            });
         }
 
         if (!empty($filters['sucursal_id'])) {
@@ -493,13 +500,111 @@ class EventSolicitudService
         $paginado = $query->orderBy('event_horas_extra.fecha_solicitud', 'desc')
             ->paginate($perPage);
 
-        // Anexar el nombre del paso actual a cada item
-        $paginado->getCollection()->transform(function ($evento) use ($pasoPorRecord) {
-            $evento->paso_actual = $pasoPorRecord[$evento->id] ?? null;
+        $paginado->getCollection()->transform(function ($evento) use ($pasoPorEvento) {
+            $evento->paso_actual = $pasoPorEvento[$evento->id] ?? null;
             return $evento;
         });
 
         return $paginado;
+    }
+
+    /**
+     * Eventos ya digitalizados. Exige rango de fechas (digitalización o inicio de novedad).
+     */
+    public function listarDigitalizados(int $userId, array $filters = [])
+    {
+        if (!$this->usuarioPuedeDigitalizarPorPermiso($userId)) {
+            throw new \RuntimeException('No tiene permiso para consultar eventos digitalizados.');
+        }
+
+        $desde = $this->normalizarFechaInicio($filters['fecha_desde'] ?? null);
+        $hasta = $this->normalizarFechaFin($filters['fecha_hasta'] ?? null);
+
+        if (!$desde || !$hasta) {
+            throw new \RuntimeException('Debe indicar un rango de fechas (desde y hasta).');
+        }
+
+        if ($desde > $hasta) {
+            throw new \RuntimeException('La fecha desde no puede ser posterior a la fecha hasta.');
+        }
+
+        $perPage = min(max((int) ($filters['per_page'] ?? 50), 5), 500);
+
+        $query = EventHoraExtra::with([
+            'empleado:id,nombre,numero_identificacion,id_empresa',
+            'novedad:id,codigo,descripcion',
+            'empleadoCubre:id,nombre,numero_identificacion',
+            'motivoRechazo:id,codigo,descriocion',
+        ])->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'event_horas_extra.id_unidad_funcional')
+          ->select(
+              'event_horas_extra.*',
+              'uf.nombre as unidad_funcional',
+              'uf.codigo as unidad_funcional_codigo',
+              'uf.id_empresa as empresa_id',
+              'uf.id_sucursal as sucursal_id'
+          )
+          ->where('event_horas_extra.estado', EventoEstadoMapper::DIGITALIZADO)
+          ->whereRaw(
+              'COALESCE(event_horas_extra.fecha_digitalizacion, event_horas_extra.fecha_nov_ini) BETWEEN ? AND ?',
+              [$desde, $hasta]
+          );
+
+        if (!empty($filters['empresa_id'])) {
+            $empresaId = (int) $filters['empresa_id'];
+            $query->where(function ($q) use ($empresaId) {
+                $q->where('uf.id_empresa', $empresaId)
+                  ->orWhere(function ($inner) use ($empresaId) {
+                      $inner->whereNull('event_horas_extra.id_unidad_funcional')
+                            ->whereHas('empleado', fn ($e) => $e->where('id_empresa', $empresaId));
+                  });
+            });
+        }
+
+        if (!empty($filters['sucursal_id'])) {
+            $query->where('uf.id_sucursal', (int) $filters['sucursal_id']);
+        }
+
+        if (!empty($filters['search'])) {
+            $term = $filters['search'];
+            $query->where(function ($q) use ($term) {
+                $q->whereHas('empleado', fn ($sub) => $sub->where('nombre', 'like', "%{$term}%"))
+                  ->orWhere('event_horas_extra.consecutivo', 'like', "%{$term}%");
+            });
+        }
+
+        return $query->orderBy('event_horas_extra.fecha_digitalizacion', 'desc')
+            ->orderBy('event_horas_extra.fecha_solicitud', 'desc')
+            ->paginate($perPage);
+    }
+
+    private function normalizarFechaInicio(mixed $valor): ?string
+    {
+        $fecha = $this->soloFecha($valor);
+        return $fecha ? "{$fecha} 00:00:00" : null;
+    }
+
+    private function normalizarFechaFin(mixed $valor): ?string
+    {
+        $fecha = $this->soloFecha($valor);
+        return $fecha ? "{$fecha} 23:59:59" : null;
+    }
+
+    private function soloFecha(mixed $valor): ?string
+    {
+        if ($valor === null || $valor === '') {
+            return null;
+        }
+
+        $texto = trim((string) $valor);
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})/', $texto, $m)) {
+            return $m[1];
+        }
+
+        try {
+            return (new \DateTimeImmutable($texto))->format('Y-m-d');
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**
@@ -584,9 +689,9 @@ class EventSolicitudService
     /**
      * Aprueba el paso actual del evento y avanza el flujo.
      */
-    public function aprobar(int $id, int $userId, ?string $comentario = null): EventHoraExtra
+    public function aprobar(int $id, int $userId, ?string $comentario = null, bool $omitirValidacionAutorizacion = false): EventHoraExtra
     {
-        return DB::transaction(function () use ($id, $userId, $comentario) {
+        return DB::transaction(function () use ($id, $userId, $comentario, $omitirValidacionAutorizacion) {
             $solicitud = EventHoraExtra::findOrFail($id);
 
             if ((int) $solicitud->estado === EventoEstadoMapper::ANULADO) {
@@ -600,7 +705,13 @@ class EventSolicitudService
             $instanciaActual = WfInstancia::with('pasoActual')->find($solicitud->wf_instancia_id);
             $rolPaso = strtolower((string) optional($instanciaActual?->pasoActual)->rol_aprobador);
 
-            $instancia = $this->workflowExecutor->aprobar($solicitud->wf_instancia_id, $userId, $comentario);
+            $instancia = $this->workflowExecutor->aprobar(
+                $solicitud->wf_instancia_id,
+                $userId,
+                $comentario,
+                null,
+                $omitirValidacionAutorizacion
+            );
             $instancia->load('pasoActual');
             $intervinientes = $this->workflowNotifier->resolverAprobadores($instancia);
 
@@ -648,20 +759,21 @@ class EventSolicitudService
             throw new \RuntimeException('El evento fue anulado y no puede digitalizarse.');
         }
 
-        if (!$solicitud->wf_instancia_id) {
-            throw new \RuntimeException('El evento no tiene un flujo de aprobación asociado.');
-        }
-
-        $instancia = WfInstancia::with('pasoActual')->find($solicitud->wf_instancia_id);
+        $instancia = $this->resolverInstanciaDeEvento($solicitud);
         if (!$instancia || !$this->esPasoDigitalizar($instancia)) {
             throw new \RuntimeException('El evento no está pendiente de digitalización. Solo se digitalizan eventos autorizados.');
         }
 
-        if (!$this->workflowNotifier->esUsuarioAutorizado($userId, $instancia)) {
+        if (!$this->usuarioPuedeGestionarPendiente($userId, $instancia, 'digitalizar')) {
             throw new \RuntimeException('No tiene permiso para digitalizar este evento.');
         }
 
-        return $this->aprobar($id, $userId, $comentario);
+        if ((int) $solicitud->wf_instancia_id !== (int) $instancia->id) {
+            $solicitud->wf_instancia_id = $instancia->id;
+            $solicitud->save();
+        }
+
+        return $this->aprobar($id, $userId, $comentario, true);
     }
 
     /**
@@ -736,6 +848,11 @@ class EventSolicitudService
         return $this->coincidePaso($instancia, 'digitalizar');
     }
 
+    private function esFiltroDigitalizar(string $paso): bool
+    {
+        return in_array($paso, ['digitalizar', 'digitalizador'], true);
+    }
+
     private function coincidePaso(WfInstancia $instancia, string $paso): bool
     {
         $rol = strtolower((string) optional($instancia->pasoActual)->rol_aprobador);
@@ -746,6 +863,128 @@ class EventSolicitudService
         }
 
         return str_starts_with($nombre, $paso) || $rol === $paso;
+    }
+
+    /**
+     * Inbox: solo intervinientes del paso. Cola de digitalización: también
+     * administradores y usuarios con permiso digi-evento (alcance empresa).
+     */
+    private function usuarioPuedeGestionarPendiente(int $userId, WfInstancia $instancia, ?string $paso): bool
+    {
+        if ($this->workflowNotifier->esUsuarioAutorizado($userId, $instancia)) {
+            return true;
+        }
+
+        return $paso
+            && $this->esPasoDigitalizar($instancia)
+            && $this->usuarioPuedeDigitalizarPorPermiso($userId);
+    }
+
+    private function usuarioPuedeDigitalizarPorPermiso(int $userId): bool
+    {
+        $user = User::find($userId);
+        if (!$user || !$user->estaActivo()) {
+            return false;
+        }
+
+        if ($user->esAdministrador()) {
+            return true;
+        }
+
+        return User::conPermiso('digi-evento')
+            ->where('users.id', $userId)
+            ->exists();
+    }
+
+    private function resolverInstanciaDeEvento(EventHoraExtra $solicitud): ?WfInstancia
+    {
+        if ($solicitud->wf_instancia_id) {
+            $instancia = WfInstancia::with('pasoActual')->find($solicitud->wf_instancia_id);
+            if ($instancia) {
+                return $instancia;
+            }
+        }
+
+        if ($solicitud->consecutivo) {
+            $porConsecutivo = WfInstancia::with('pasoActual')
+                ->where('consecutivo', $solicitud->consecutivo)
+                ->whereHas('modulo', fn ($q) => $q->where('codigo', 'eventos'))
+                ->first();
+            if ($porConsecutivo) {
+                return $porConsecutivo;
+            }
+        }
+
+        return WfInstancia::with('pasoActual')
+            ->where('modulo_record_id', $solicitud->id)
+            ->whereHas('modulo', fn ($q) => $q->where('codigo', 'eventos'))
+            ->first();
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, WfInstancia>  $instancias
+     * @return list<int>
+     */
+    private function resolverIdsEventosDeInstancias($instancias): array
+    {
+        if ($instancias->isEmpty()) {
+            return [];
+        }
+
+        $recordIds = $instancias->pluck('modulo_record_id')->filter()->unique()->values()->all();
+        $instanciaIds = $instancias->pluck('id')->filter()->unique()->values()->all();
+        $consecutivos = $instancias->pluck('consecutivo')->filter()->unique()->values()->all();
+
+        return EventHoraExtra::query()
+            ->where(function ($q) use ($recordIds, $instanciaIds, $consecutivos) {
+                if (!empty($recordIds)) {
+                    $q->orWhereIn('id', $recordIds);
+                }
+                if (!empty($instanciaIds)) {
+                    $q->orWhereIn('wf_instancia_id', $instanciaIds);
+                }
+                if (!empty($consecutivos)) {
+                    $q->orWhereIn('consecutivo', $consecutivos);
+                }
+            })
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, WfInstancia>  $instancias
+     * @param  list<int>  $eventosIds
+     * @return array<int, string|null>
+     */
+    private function mapearPasoActualPorEvento($instancias, array $eventosIds): array
+    {
+        if ($instancias->isEmpty() || empty($eventosIds)) {
+            return [];
+        }
+
+        $eventos = EventHoraExtra::query()
+            ->whereIn('id', $eventosIds)
+            ->get(['id', 'consecutivo', 'wf_instancia_id']);
+
+        $porId = $eventos->keyBy('id');
+        $porInstancia = $eventos->keyBy('wf_instancia_id');
+        $porConsecutivo = $eventos->keyBy('consecutivo');
+        $mapa = [];
+
+        foreach ($instancias as $instancia) {
+            $evento = $porId->get($instancia->modulo_record_id)
+                ?? $porInstancia->get($instancia->id)
+                ?? $porConsecutivo->get($instancia->consecutivo);
+
+            if ($evento) {
+                $mapa[(int) $evento->id] = optional($instancia->pasoActual)->nombre_paso;
+            }
+        }
+
+        return $mapa;
     }
 
     /**

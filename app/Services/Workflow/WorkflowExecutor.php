@@ -100,17 +100,17 @@ class WorkflowExecutor
         int $instanciaId,
         int $userId,
         ?string $comentario = null,
-        ?float $montoAutorizado = null
+        ?float $montoAutorizado = null,
+        bool $omitirValidacionAutorizacion = false
     ): WfInstancia {
-        return DB::transaction(function () use ($instanciaId, $userId, $comentario, $montoAutorizado) {
+        return DB::transaction(function () use ($instanciaId, $userId, $comentario, $montoAutorizado, $omitirValidacionAutorizacion) {
             $instancia = WfInstancia::with(['pasoActual', 'definicion', 'solicitante'])->findOrFail($instanciaId);
 
             if (!$instancia->estaEnProgreso()) {
                 throw new \Exception("La instancia no está en progreso");
             }
 
-            // Validar que el usuario esté autorizado para aprobar este paso
-            if (!$this->notifier->esUsuarioAutorizado($userId, $instancia)) {
+            if (!$omitirValidacionAutorizacion && !$this->notifier->esUsuarioAutorizado($userId, $instancia)) {
                 throw new \Exception("No estás autorizado para aprobar este paso");
             }
 
