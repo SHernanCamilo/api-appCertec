@@ -86,8 +86,11 @@ class TableroUrgenciasController extends Controller
      */
     private function queryFromPython($user, ?string $sucursalFilter): ?array
     {
-        $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-        $token = env('TOKEN_ADMIN', '');
+        // config() y no env(): con la config cacheada en produccion, env() dentro
+        // del controlador devuelve null y la peticion no llegaba a Graph-Fabric.
+        $url    = rtrim((string) config('fabric.url', 'http://127.0.0.1:8001'), '/');
+        $token  = (string) config('fabric.token_admin', '');
+        $apiKey = (string) config('fabric.api_key', '');
 
         // Timeouts holgados + un reintento: la vista de urgencias puede tardar
         // varios segundos bajo carga y un corte de 20s dejaba la pantalla vacia.
@@ -95,7 +98,7 @@ class TableroUrgenciasController extends Controller
             ->connectTimeout(10)
             ->retry(2, 1500, throw: false)
             ->acceptJson()
-            ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
+            ->withHeaders(['X-API-Key' => $apiKey])
             ->post($url . '/api/urgencias/tablero', [
                 'token' => $token,
             ]);

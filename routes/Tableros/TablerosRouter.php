@@ -22,6 +22,8 @@ Route::prefix('tokens')->group(function () {
     // Sedes reales que trae la vista del tablero (alimenta el desplegable del
     // administrador). Va antes de las rutas con {id} para que no la capture.
     Route::get('/sedes', [TableroTokenController::class, 'sedes']);
+    // Diagnostico de conexion a Graph-Fabric (para confirmar URL/clave en prod).
+    Route::get('/diagnostico', [TableroTokenController::class, 'diagnostico']);
     Route::post('/', [TableroTokenController::class, 'store']);
     Route::post('/{id}/regenerate-code', [TableroTokenController::class, 'regenerateCode']);
     Route::patch('/{id}/revoke', [TableroTokenController::class, 'revoke']);

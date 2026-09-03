@@ -331,8 +331,14 @@ final class TableroPublicController extends Controller
      */
     private function fetchData(TableroDevice $device): array
     {
-        $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-        $token = env('TOKEN_ADMIN', '');
+        // config() y no env(): en produccion la config se cachea con
+        // `php artisan config:cache`, y entonces env() dentro del controlador
+        // devuelve null → la URL caia al default 127.0.0.1:8001 y la peticion no
+        // llegaba a Graph-Fabric (que ademas rechaza sin X-API-Key). config/fabric.php
+        // resuelve la URL, el token y la api_key con sus fallbacks.
+        $url   = rtrim((string) config('fabric.url', 'http://127.0.0.1:8001'), '/');
+        $token = (string) config('fabric.token_admin', '');
+        $apiKey = (string) config('fabric.api_key', '');
 
         // Clave del ultimo dato bueno en cache, por sede (o global si no filtra).
         // Es la red de seguridad contra los picos de latencia de Python: si una
@@ -352,16 +358,18 @@ final class TableroPublicController extends Controller
                 ->connectTimeout(10)
                 ->retry(2, 1500, throw: false)
                 ->acceptJson()
-                ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
+                ->withHeaders(['X-API-Key' => $apiKey])
                 ->post($url . '/api/urgencias/tablero', [
                     'token' => $token,
                 ]);
 
             if ($response->failed()) {
                 Log::warning('TableroPublic: endpoint urgencias fallo', [
-                    'device' => $device->id,
-                    'status' => $response->status(),
-                    'body'   => substr($response->body(), 0, 200),
+                    'device'  => $device->id,
+                    'url'     => $url . '/api/urgencias/tablero',
+                    'status'  => $response->status(),
+                    'has_key' => $apiKey !== '',
+                    'body'    => substr($response->body(), 0, 200),
                 ]);
                 $motivo = 'python_http_' . $response->status();
                 return $this->fallbackFromCache($device, $cacheKey, $motivo);

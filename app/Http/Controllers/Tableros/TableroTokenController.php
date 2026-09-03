@@ -102,13 +102,14 @@ final class TableroTokenController extends Controller
     private function fetchSedesFromView(): array
     {
         try {
-            $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
-            $token = env('TOKEN_ADMIN', '');
+            $url    = rtrim((string) config('fabric.url', 'http://127.0.0.1:8001'), '/');
+            $token  = (string) config('fabric.token_admin', '');
+            $apiKey = (string) config('fabric.api_key', '');
 
             $response = Http::timeout(20)
                 ->connectTimeout(8)
                 ->acceptJson()
-                ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
+                ->withHeaders(['X-API-Key' => $apiKey])
                 ->post($url . '/api/urgencias/tablero', ['token' => $token]);
 
             if ($response->failed()) {
@@ -131,6 +132,69 @@ final class TableroTokenController extends Controller
             Log::warning('TableroTokens/sedes: ' . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * GET /api/tableros/tokens/diagnostico — Diagnostico de la conexion a Graph-Fabric
+     *
+     * Sirve para confirmar en produccion, sin adivinar, si el tablero llega o no
+     * a Graph-Fabric: muestra a QUE URL apunta Laravel, si lleva X-API-Key, el
+     * status que devuelve Python y cuantas filas trae. Requiere auth:api (admin).
+     *
+     * No expone secretos: solo indica si estan presentes y su longitud.
+     */
+    public function diagnostico(): JsonResponse
+    {
+        $url    = rtrim((string) config('fabric.url', 'http://127.0.0.1:8001'), '/');
+        $token  = (string) config('fabric.token_admin', '');
+        $apiKey = (string) config('fabric.api_key', '');
+        $endpoint = $url . '/api/urgencias/tablero';
+
+        // Aviso si la config esta cacheada con env vacio: la causa clasica de que
+        // "no llega ninguna peticion a Graph-Fabric".
+        $configCacheada = app()->configurationIsCached();
+
+        $out = [
+            'success'          => true,
+            'url'              => $url,
+            'endpoint'         => $endpoint,
+            'apuntando_local'  => str_contains($url, '127.0.0.1') || str_contains($url, 'localhost'),
+            'x_api_key'        => $apiKey !== '' ? 'presente (' . strlen($apiKey) . ' chars)' : 'FALTA',
+            'token_admin'      => $token !== '' ? 'presente (' . strlen($token) . ' chars)' : 'FALTA',
+            'config_cacheada'  => $configCacheada,
+        ];
+
+        try {
+            $t0 = microtime(true);
+            $response = Http::timeout(20)
+                ->connectTimeout(8)
+                ->acceptJson()
+                ->withHeaders(['X-API-Key' => $apiKey])
+                ->post($endpoint, ['token' => $token]);
+            $ms = (int) round((microtime(true) - $t0) * 1000);
+
+            $rows = $response->json('data') ?? $response->json('items') ?? [];
+
+            $out['python'] = [
+                'status'    => $response->status(),
+                'ok'        => $response->successful(),
+                'elapsed_ms'=> $ms,
+                'x_source'  => $response->header('X-Source'),
+                'filas'     => is_array($rows) ? count($rows) : 0,
+                'sedes'     => is_array($rows)
+                    ? collect($rows)->pluck('Sede')->unique()->values()->all()
+                    : [],
+                'body_muestra' => substr($response->body(), 0, 200),
+            ];
+        } catch (\Throwable $e) {
+            $out['python'] = [
+                'error' => get_class($e),
+                'mensaje' => $e->getMessage(),
+                'pista'   => 'No se pudo conectar. Revisar que ' . $url . ' sea alcanzable desde este servidor.',
+            ];
+        }
+
+        return response()->json($out);
     }
 
     /**
