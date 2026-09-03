@@ -91,6 +91,9 @@ Route::middleware(['auth:api'])->group(function () {
         // Vistas de Fabric que el usuario puede ver
         Route::post('/views', [FabricViewerController::class, 'views']);
 
+        // Filas por vista + umbral web/desktop (metadata de parquets, sin COUNT)
+        Route::get('/views/row-counts', [FabricViewerController::class, 'viewRowCounts']);
+
         // Columnas de una vista específica
         Route::post('/columns', [FabricViewerController::class, 'columns']);
 
