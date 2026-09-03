@@ -89,8 +89,11 @@ class TableroUrgenciasController extends Controller
         $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token = env('TOKEN_ADMIN', '');
 
-        $response = Http::timeout(30)
+        // Timeouts holgados + un reintento: la vista de urgencias puede tardar
+        // varios segundos bajo carga y un corte de 20s dejaba la pantalla vacia.
+        $response = Http::timeout(40)
             ->connectTimeout(10)
+            ->retry(2, 1500, throw: false)
             ->acceptJson()
             ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
             ->post($url . '/api/urgencias/tablero', [

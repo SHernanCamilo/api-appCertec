@@ -334,9 +334,23 @@ final class TableroPublicController extends Controller
         $url   = rtrim(env('GRAPHQL_URL', 'http://127.0.0.1:8001'), '/');
         $token = env('TOKEN_ADMIN', '');
 
+        // Clave del ultimo dato bueno en cache, por sede (o global si no filtra).
+        // Es la red de seguridad contra los picos de latencia de Python: si una
+        // peticion falla, la TV sigue mostrando el ultimo dato en vez de ponerse
+        // en rojo con la tabla vacia (igual que Excel Online mantiene lo ultimo).
+        $cacheKey = 'tablero_urgencias_last_ok:' . strtoupper(trim((string) ($device->sede_filter ?: 'ALL')));
+
+        // Diagnostico de por que fallo, para el frontend/log. No se muestra en TV.
+        $motivo = null;
+
         try {
-            $response = Http::timeout(20)
-                ->connectTimeout(5)
+            // Timeouts mas holgados: la vista de urgencias puede tardar varios
+            // segundos bajo carga. Antes 20s de read y 5s de connect cortaban
+            // peticiones legitimas y dejaban la TV en rojo de forma intermitente.
+            // Un reintento cubre el fallo puntual (Python arrancando una query).
+            $response = Http::timeout(40)
+                ->connectTimeout(10)
+                ->retry(2, 1500, throw: false)
                 ->acceptJson()
                 ->withHeaders(['X-API-Key' => env('GRAPHQL_API_KEY', '')])
                 ->post($url . '/api/urgencias/tablero', [
@@ -344,17 +358,13 @@ final class TableroPublicController extends Controller
                 ]);
 
             if ($response->failed()) {
-                Log::warning('TableroPublic: endpoint urgencias falló', [
+                Log::warning('TableroPublic: endpoint urgencias fallo', [
                     'device' => $device->id,
                     'status' => $response->status(),
+                    'body'   => substr($response->body(), 0, 200),
                 ]);
-
-                return [
-                    'success'   => false,
-                    'data'      => [],
-                    'sede'      => $device->sede_filter,
-                    'timestamp' => now()->toIso8601String(),
-                ];
+                $motivo = 'python_http_' . $response->status();
+                return $this->fallbackFromCache($device, $cacheKey, $motivo);
             }
 
             $allData = $response->json('data') ?? $response->json('items') ?? [];
@@ -373,7 +383,7 @@ final class TableroPublicController extends Controller
                 $allData = $filtered;
             }
 
-            return [
+            $payload = [
                 'success'   => true,
                 'data'      => $allData,
                 'sede'      => $device->sede_filter,
@@ -381,16 +391,48 @@ final class TableroPublicController extends Controller
                 'source'    => $response->header('X-Source') ?? 'LH_INTEGRATIONS',
                 'elapsed'   => $response->header('X-Elapsed-Ms'),
             ];
+
+            // Guardar como "ultimo dato bueno" 10 min. Solo si trajo filas: una
+            // respuesta vacia legitima (sin pacientes) no debe pisar un cache util.
+            if (!empty($allData)) {
+                Cache::put($cacheKey, $payload, now()->addMinutes(10));
+            }
+
+            return $payload;
         } catch (\Throwable $e) {
             Log::warning('TableroPublic: error', ['device' => $device->id, 'error' => $e->getMessage()]);
-
-            return [
-                'success'   => false,
-                'data'      => [],
-                'sede'      => $device->sede_filter,
-                'timestamp' => now()->toIso8601String(),
-            ];
+            $motivo = 'exception';
+            return $this->fallbackFromCache($device, $cacheKey, $motivo);
         }
+    }
+
+    /**
+     * Cuando Python no responde, sirve el ultimo dato bueno cacheado en vez de
+     * vaciar la pantalla. Marca `stale:true` para que el frontend sepa que no es
+     * fresco, pero success:true para que la TV NO se ponga en rojo por un pico.
+     *
+     * Solo si no hay cache se devuelve success:false (arranque en frio con
+     * Python caido): ahi el frontend reintenta con backoff.
+     */
+    private function fallbackFromCache(TableroDevice $device, string $cacheKey, ?string $motivo): array
+    {
+        $last = Cache::get($cacheKey);
+
+        if (is_array($last) && !empty($last['data'])) {
+            return array_merge($last, [
+                'stale'     => true,
+                'reason'    => $motivo,
+                'timestamp' => now()->toIso8601String(),
+            ]);
+        }
+
+        return [
+            'success'   => false,
+            'data'      => [],
+            'sede'      => $device->sede_filter,
+            'reason'    => $motivo,
+            'timestamp' => now()->toIso8601String(),
+        ];
     }
 
     private function sendSseEvent(string $event, array $data): void
