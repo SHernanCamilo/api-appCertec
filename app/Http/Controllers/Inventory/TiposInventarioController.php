@@ -9,6 +9,7 @@ use App\Models\TipoInventario;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 /**
@@ -62,6 +63,7 @@ class TiposInventarioController extends Controller
                 'nombre'                  => $tipo->nombre,
                 'periodicidad'            => $tipo->periodicidad,
                 'periodicidad_nombre'     => $tipo->periodicidad_nombre,
+                'regla_validacion'        => $tipo->regla_validacion,
                 'descripcion_restriccion' => $tipo->descripcion_restriccion,
                 'activo'                  => $tipo->activo,
                 'descripcion'             => $tipo->descripcion,
@@ -91,10 +93,11 @@ class TiposInventarioController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validado = $request->validate([
-            'nombre'       => 'required|string|max:100|unique:inv_tipos_inventario,nombre',
-            'periodicidad' => 'required|string|in:anual,mensual,semestral,trimestral,semanal,ninguna',
-            'descripcion'  => 'nullable|string|max:500',
-            'activo'       => 'nullable|boolean',
+            'nombre'           => 'required|string|max:100|unique:inv_tipos_inventario,nombre',
+            'periodicidad'     => 'required|string|in:anual,mensual,semestral,trimestral,semanal,ninguna',
+            'regla_validacion' => 'nullable|array',
+            'descripcion'      => 'nullable|string|max:500',
+            'activo'           => 'nullable|boolean',
         ], [
             'nombre.unique'        => 'Ya existe un tipo de inventario con este nombre.',
             'periodicidad.in'      => 'La periodicidad debe ser: anual, mensual, semestral, trimestral, semanal o ninguna.',
@@ -105,11 +108,14 @@ class TiposInventarioController extends Controller
 
         try {
             $tipo = TipoInventario::create([
-                'nombre'       => $validado['nombre'],
-                'periodicidad' => $validado['periodicidad'],
-                'descripcion'  => $validado['descripcion'] ?? null,
-                'activo'       => $validado['activo'] ?? true,
+                'nombre'           => $validado['nombre'],
+                'periodicidad'     => $validado['periodicidad'],
+                'regla_validacion' => $validado['regla_validacion'] ?? null,
+                'descripcion'      => $validado['descripcion'] ?? null,
+                'activo'           => $validado['activo'] ?? true,
             ]);
+
+            $this->auditar('creado', $tipo, ['valores_nuevos' => $tipo->only(['nombre', 'periodicidad', 'activo'])]);
 
             DB::commit();
 
@@ -121,6 +127,7 @@ class TiposInventarioController extends Controller
                     'nombre'                  => $tipo->nombre,
                     'periodicidad'            => $tipo->periodicidad,
                     'periodicidad_nombre'     => $tipo->periodicidad_nombre,
+                    'regla_validacion'        => $tipo->regla_validacion,
                     'descripcion_restriccion' => $tipo->descripcion_restriccion,
                     'activo'                  => $tipo->activo,
                     'descripcion'             => $tipo->descripcion,
@@ -166,9 +173,10 @@ class TiposInventarioController extends Controller
                 'max:100',
                 Rule::unique('inv_tipos_inventario', 'nombre')->ignore($tipo->id),
             ],
-            'periodicidad' => 'required|string|in:anual,mensual,semestral,trimestral,semanal,ninguna',
-            'descripcion'  => 'nullable|string|max:500',
-            'activo'       => 'nullable|boolean',
+            'periodicidad'     => 'required|string|in:anual,mensual,semestral,trimestral,semanal,ninguna',
+            'regla_validacion' => 'nullable|array',
+            'descripcion'      => 'nullable|string|max:500',
+            'activo'           => 'nullable|boolean',
         ], [
             'nombre.unique'        => 'Ya existe otro tipo de inventario con este nombre.',
             'periodicidad.in'      => 'La periodicidad debe ser: anual, mensual, semestral, trimestral, semanal o ninguna.',
@@ -178,11 +186,19 @@ class TiposInventarioController extends Controller
         DB::beginTransaction();
 
         try {
+            $valoresAnteriores = $tipo->only(['nombre', 'periodicidad', 'regla_validacion', 'descripcion', 'activo']);
+
             $tipo->update([
-                'nombre'       => $validado['nombre'],
-                'periodicidad' => $validado['periodicidad'],
-                'descripcion'  => $validado['descripcion'] ?? $tipo->descripcion,
-                'activo'       => $validado['activo'] ?? $tipo->activo,
+                'nombre'           => $validado['nombre'],
+                'periodicidad'     => $validado['periodicidad'],
+                'regla_validacion' => $request->has('regla_validacion') ? $validado['regla_validacion'] : $tipo->regla_validacion,
+                'descripcion'      => $validado['descripcion'] ?? $tipo->descripcion,
+                'activo'           => $validado['activo'] ?? $tipo->activo,
+            ]);
+
+            $this->auditar('actualizado', $tipo, [
+                'valores_anteriores' => $valoresAnteriores,
+                'valores_nuevos'     => $tipo->only(['nombre', 'periodicidad', 'regla_validacion', 'descripcion', 'activo']),
             ]);
 
             DB::commit();
@@ -195,6 +211,7 @@ class TiposInventarioController extends Controller
                     'nombre'                  => $tipo->nombre,
                     'periodicidad'            => $tipo->periodicidad,
                     'periodicidad_nombre'     => $tipo->periodicidad_nombre,
+                    'regla_validacion'        => $tipo->regla_validacion,
                     'descripcion_restriccion' => $tipo->descripcion_restriccion,
                     'activo'                  => $tipo->activo,
                     'descripcion'             => $tipo->descripcion,
@@ -241,6 +258,7 @@ class TiposInventarioController extends Controller
         DB::beginTransaction();
 
         try {
+            $this->auditar('eliminado', $tipo);
             $tipo->delete();
 
             DB::commit();
@@ -299,9 +317,11 @@ class TiposInventarioController extends Controller
                 $tipo->toggleEstado();
             }
 
-            DB::commit();
-
             $accion = $tipo->activo ? 'activado' : 'desactivado';
+
+            $this->auditar("estado {$accion}", $tipo);
+
+            DB::commit();
 
             return response()->json([
                 'success' => true,
@@ -320,5 +340,22 @@ class TiposInventarioController extends Controller
                 'message' => 'Error al cambiar el estado: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Registro de auditoría (No funcional): deja traza de quién, cuándo y qué
+     * cambió en la parametrización de tipos de inventario.
+     *
+     * @param array<string, mixed> $contexto
+     */
+    private function auditar(string $accion, TipoInventario $tipo, array $contexto = []): void
+    {
+        Log::info("TiposInventario: {$accion}", array_merge([
+            'tipo_id'   => $tipo->id,
+            'nombre'    => $tipo->nombre,
+            'user_id'   => auth()->id(),
+            'user'      => auth()->user()?->email,
+            'timestamp' => now()->toIso8601String(),
+        ], $contexto));
     }
 }

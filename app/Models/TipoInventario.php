@@ -30,12 +30,14 @@ class TipoInventario extends Model
     protected $fillable = [
         'nombre',
         'periodicidad',
+        'regla_validacion',
         'activo',
         'descripcion',
     ];
 
     protected $casts = [
         'activo' => 'boolean',
+        'regla_validacion' => 'array',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
@@ -46,6 +48,17 @@ class TipoInventario extends Model
     public function trazabilidades(): HasMany
     {
         return $this->hasMany(TrazabilidadActivo::class, 'tipo_inventario_id');
+    }
+
+    /**
+     * Alias de trazabilidades().
+     *
+     * El controller usa $tipo->registros() para contar cuántas tomas de
+     * inventario referencian este tipo (validación previa a eliminar).
+     */
+    public function registros(): HasMany
+    {
+        return $this->trazabilidades();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -143,6 +156,14 @@ class TipoInventario extends Model
      */
     public function calcularRangoPeriodicidad(\Carbon\Carbon $fecha): array
     {
+        // Req. 5: si hay una regla configurable definida, prevalece sobre la
+        // periodicidad estándar. Permite comportamiento futuro (campaña,
+        // personalizada) sin quemar lógica en código.
+        $rangoRegla = $this->rangoDesdeReglaValidacion($fecha);
+        if ($rangoRegla !== null) {
+            return $rangoRegla;
+        }
+
         return match ($this->periodicidad) {
             'anual' => [
                 $fecha->copy()->startOfYear(),
@@ -200,6 +221,51 @@ class TipoInventario extends Model
             'semanal' => 'Máximo 1 registro por activo a la semana',
             'ninguna' => 'Sin restricción de frecuencia',
             default => 'Periodicidad personalizada',
+        };
+    }
+
+    /**
+     * Calcula el rango de restricción a partir de una regla configurable (Req. 5).
+     *
+     * Formatos soportados en regla_validacion (JSON):
+     *   {"tipo":"campana","desde":"2026-01-01","hasta":"2026-03-31"}
+     *       → una única ventana fija (por campaña).
+     *   {"tipo":"personalizada","meses":4}
+     *       → ventana móvil de N meses hacia atrás desde la fecha de referencia.
+     *   {"tipo":"personalizada","dias":45}
+     *       → ventana móvil de N días.
+     *
+     * @return array{0: \Carbon\Carbon, 1: \Carbon\Carbon}|null
+     */
+    public function rangoDesdeReglaValidacion(\Carbon\Carbon $fecha): ?array
+    {
+        $regla = $this->regla_validacion;
+
+        if (!is_array($regla) || empty($regla['tipo'])) {
+            return null;
+        }
+
+        return match ($regla['tipo']) {
+            'campana' => (isset($regla['desde'], $regla['hasta']))
+                ? [
+                    \Carbon\Carbon::parse($regla['desde'])->startOfDay(),
+                    \Carbon\Carbon::parse($regla['hasta'])->endOfDay(),
+                ]
+                : null,
+
+            'personalizada' => match (true) {
+                !empty($regla['meses']) => [
+                    $fecha->copy()->subMonths((int) $regla['meses'])->startOfDay(),
+                    $fecha->copy()->endOfDay(),
+                ],
+                !empty($regla['dias']) => [
+                    $fecha->copy()->subDays((int) $regla['dias'])->startOfDay(),
+                    $fecha->copy()->endOfDay(),
+                ],
+                default => null,
+            },
+
+            default => null,
         };
     }
 }

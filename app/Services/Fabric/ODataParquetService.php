@@ -184,6 +184,98 @@ final class ODataParquetService
         ];
     }
 
+    /**
+     * Filtra directamente sobre el parquet local vía DuckDB (endpoint dedicado
+     * de Graph-Fabric). Filtra en el servidor (~90 ms) sin traer la vista
+     * completa a memoria.
+     *
+     * Formatos de filtro soportados por el endpoint:
+     *   ['Placa' => '021106']                  → igualdad exacta
+     *   ['Responsable' => '%CABRERA%']          → parcial ILIKE (case-insensitive)
+     *   ['Fecha' => ['2026-01-01','2026-01-31']]→ rango BETWEEN
+     *   ['Estado' => ['Confirmado','Baja']]     → lista IN
+     *
+     * @param  array<string, mixed> $filters
+     * @param  array{columns?: list<string>, sort_col?: string, sort_dir?: string, count?: bool} $opciones
+     * @return array{
+     *     success: bool, status: int, value?: list<array<string,mixed>>,
+     *     count?: int|null, returned?: int, has_next?: bool,
+     *     source?: string, elapsed_ms?: int|null, message?: string
+     * }
+     */
+    public function filter(
+        string $schema,
+        string $view,
+        array $filters,
+        int $limit = 50,
+        int $offset = 0,
+        array $opciones = []
+    ): array {
+        $query = [
+            'token'      => $this->token(),
+            'grupos'     => 'GG-BD-' . strtoupper($schema) . ',GG-BD-ADMIN',
+            'department' => 'NAL',
+            'filters'    => json_encode($filters === [] ? new \stdClass() : $filters),
+            'limit'      => max(1, min($limit, self::MAX_TOP)),
+            'offset'     => max(0, $offset),
+            'count'      => ($opciones['count'] ?? true) ? 'true' : 'false',
+        ];
+
+        if (!empty($opciones['columns'])) {
+            $query['columns'] = implode(',', $opciones['columns']);
+        }
+        if (!empty($opciones['sort_col'])) {
+            $query['sort_col'] = (string) $opciones['sort_col'];
+            $query['sort_dir'] = strtolower((string) ($opciones['sort_dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
+        }
+
+        try {
+            $response = Http::timeout(60)
+                ->connectTimeout(10)
+                ->acceptJson()
+                ->get($this->url("/api/data/parquet-filter/{$schema}/{$view}"), $query);
+        } catch (\Throwable $e) {
+            Log::warning('[ODataParquet] filter: error de conexion', [
+                'view'  => "{$schema}.{$view}",
+                'error' => $e->getMessage(),
+            ]);
+
+            return ['success' => false, 'status' => 503, 'message' => 'No se pudo conectar con el servicio de datos.'];
+        }
+
+        // 409 = la vista aún no tiene parquet local generado.
+        if ($response->status() === 409) {
+            return ['success' => false, 'status' => 409, 'message' => 'La vista aún no tiene parquet local.'];
+        }
+
+        if (!$response->successful()) {
+            Log::warning('[ODataParquet] filter: respuesta no exitosa', [
+                'view'   => "{$schema}.{$view}",
+                'status' => $response->status(),
+                'body'   => substr($response->body(), 0, 300),
+            ]);
+
+            return [
+                'success' => false,
+                'status'  => $response->status() >= 500 ? 502 : $response->status(),
+                'message' => 'El servicio de datos respondió HTTP ' . $response->status() . '.',
+            ];
+        }
+
+        $json = $response->json() ?? [];
+
+        return [
+            'success'    => (bool) ($json['success'] ?? false),
+            'status'     => 200,
+            'value'      => is_array($json['value'] ?? null) ? $json['value'] : [],
+            'count'      => isset($json['count']) ? (int) $json['count'] : null,
+            'returned'   => (int) ($json['returned'] ?? count($json['value'] ?? [])),
+            'has_next'   => (bool) ($json['has_next'] ?? false),
+            'source'     => (string) ($json['source'] ?? 'parquet-local'),
+            'elapsed_ms' => isset($json['elapsed_ms']) ? (int) $json['elapsed_ms'] : null,
+        ];
+    }
+
     private function url(string $path): string
     {
         return rtrim((string) config('fabric.url', 'http://127.0.0.1:8001'), '/') . $path;

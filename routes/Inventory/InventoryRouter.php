@@ -46,6 +46,8 @@ Route::prefix('activos-fijos')->group(function () {
     Route::get('trazabilidad', [$controller, 'trazabilidad']);
 
     Route::get('exportar', [$controller, 'exportar']);
+    Route::get('exportar-csv', [$controller, 'exportarCsv']);
+    Route::get('exportar-pdf', [$controller, 'exportarPdf']);
     Route::get('localizaciones', [$controller, 'localizaciones']);
     Route::get('responsables', [$controller, 'responsables']);
     Route::get('validar-periodicidad', [$controller, 'validarPeriodicidad']);
@@ -56,6 +58,7 @@ Route::prefix('activos-fijos')->group(function () {
     Route::post('novedad', [$controller, 'registrarNovedad']);
     Route::post('novedad-externa', [$controller, 'registrarNovedadExterna']);
 
+    Route::get('{placa}/exportar', [$controller, 'exportarHistorialActivo'])->where('placa', '[A-Za-z0-9\-_.]+');
     Route::get('{placa}/historial', [$controller, 'historial'])->where('placa', '[A-Za-z0-9\-_.]+');
     Route::get('{placa}', [$controller, 'show'])->where('placa', '[A-Za-z0-9\-_.]+');
 });

@@ -160,12 +160,18 @@ class InvActivoFijoController extends Controller
             'desde'               => 'nullable|date',
             'hasta'               => 'nullable|date|after_or_equal:desde',
             'tipo_inventario_id'  => 'nullable|integer|exists:inv_tipos_inventario,id',
+            'responsable'         => 'nullable|string|max:255',
+            'localizacion'        => 'nullable|string|max:255',
+            'resultado'           => 'nullable|string|in:con_novedades,sin_novedades,externo',
             'es_externo'          => 'nullable|boolean',
             'per_page'            => 'nullable|integer|min:1|max:100',
         ]);
 
         $resultado = $this->activos->listar(
-            $request->only(['placa', 'estado_fisico', 'usuario_id', 'desde', 'hasta', 'tipo_inventario_id', 'es_externo']),
+            $request->only([
+                'placa', 'estado_fisico', 'usuario_id', 'desde', 'hasta',
+                'tipo_inventario_id', 'responsable', 'localizacion', 'resultado', 'es_externo',
+            ]),
             (int) $request->input('per_page', 25)
         );
 
@@ -199,18 +205,78 @@ class InvActivoFijoController extends Controller
      */
     public function exportar(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse
     {
+        $filtros = $this->validarFiltrosReporte($request);
+
+        return $this->activos->exportarExcel($filtros);
+    }
+
+    /**
+     * GET /api/inventory/activos-fijos/exportar-csv
+     *
+     * Exporta el reporte consolidado a CSV (Req. 7).
+     */
+    public function exportarCsv(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $filtros = $this->validarFiltrosReporte($request);
+
+        return $this->activos->exportarCsv($filtros);
+    }
+
+    /**
+     * GET /api/inventory/activos-fijos/exportar-pdf
+     *
+     * Exporta el reporte consolidado a PDF (Req. 7).
+     */
+    public function exportarPdf(Request $request): \Symfony\Component\HttpFoundation\Response
+    {
+        $filtros = $this->validarFiltrosReporte($request);
+
+        return $this->activos->exportarPdf($filtros);
+    }
+
+    /**
+     * GET /api/inventory/activos-fijos/{placa}/exportar
+     *
+     * Exporta el historial (línea de tiempo) de UN activo concreto en Excel.
+     * Acepta filtros opcionales de periodo (desde/hasta) y tipo de inventario.
+     */
+    public function exportarHistorialActivo(Request $request, string $placa): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $request->validate([
+            'tipo_inventario_id' => 'nullable|integer|exists:inv_tipos_inventario,id',
+            'desde'              => 'nullable|date',
+            'hasta'              => 'nullable|date|after_or_equal:desde',
+        ]);
+
+        return $this->activos->exportarHistorialActivo(
+            $placa,
+            $request->only(['tipo_inventario_id', 'desde', 'hasta'])
+        );
+    }
+
+    /**
+     * Valida y normaliza los filtros comunes de los exportadores (XLSX/CSV/PDF).
+     *
+     * @return array<string, mixed>
+     */
+    private function validarFiltrosReporte(Request $request): array
+    {
         $request->validate([
             'tipo_inventario_id' => 'nullable|integer|exists:inv_tipos_inventario,id',
             'placa'              => 'nullable|string|max:100',
             'estado_fisico'      => 'nullable|string|in:' . implode(',', InvTrazActivo::ESTADOS_FISICOS),
             'desde'              => 'nullable|date',
             'hasta'              => 'nullable|date|after_or_equal:desde',
+            'responsable'        => 'nullable|string|max:255',
+            'localizacion'       => 'nullable|string|max:255',
+            'resultado'          => 'nullable|string|in:con_novedades,sin_novedades,externo',
             'es_externo'         => 'nullable|boolean',
         ]);
 
-        return $this->activos->exportarExcel(
-            $request->only(['tipo_inventario_id', 'placa', 'estado_fisico', 'desde', 'hasta', 'es_externo'])
-        );
+        return $request->only([
+            'tipo_inventario_id', 'placa', 'estado_fisico', 'desde', 'hasta',
+            'responsable', 'localizacion', 'resultado', 'es_externo',
+        ]);
     }
 
     // =========================================================================
@@ -260,6 +326,78 @@ class InvActivoFijoController extends Controller
             'message' => 'Activo externo registrado correctamente.',
             'data'    => $resultado['data'],
         ], 201);
+    }
+
+    // =========================================================================
+    // CATÁLOGOS (localizaciones, responsables) y VALIDACIÓN DE PERIODICIDAD
+    // =========================================================================
+
+    /**
+     * GET /api/inventory/activos-fijos/localizaciones?busqueda=BODEGA&limit=300
+     *
+     * Localizaciones desde la vista de Indigo para el select de nueva localización.
+     * Contrato: { valor: string }.
+     */
+    public function localizaciones(Request $request): JsonResponse
+    {
+        $request->validate([
+            'busqueda' => 'nullable|string|max:150',
+            'limit'    => 'nullable|integer|min:1|max:1000',
+        ]);
+
+        $resultado = $this->activos->localizaciones(
+            auth()->user(),
+            (string) $request->input('busqueda', ''),
+            (int) $request->input('limit', 300)
+        );
+
+        return response()->json($resultado);
+    }
+
+    /**
+     * GET /api/inventory/activos-fijos/responsables?busqueda=MARIA&limit=50
+     *
+     * Responsables desde la vista de Indigo para el autocomplete de responsable.
+     * Contrato: { valor: string }.
+     */
+    public function responsables(Request $request): JsonResponse
+    {
+        $request->validate([
+            'busqueda' => 'nullable|string|max:150',
+            'limit'    => 'nullable|integer|min:1|max:200',
+        ]);
+
+        $resultado = $this->activos->responsables(
+            auth()->user(),
+            (string) $request->input('busqueda', ''),
+            (int) $request->input('limit', 50)
+        );
+
+        return response()->json($resultado);
+    }
+
+    /**
+     * GET /api/inventory/activos-fijos/validar-periodicidad?placa=021106&tipo_inventario_id=1
+     *
+     * Verificación preventiva (Req. 4): indica si el activo puede registrarse
+     * con el tipo de inventario dado sin violar la periodicidad configurada.
+     */
+    public function validarPeriodicidad(Request $request): JsonResponse
+    {
+        $validado = $request->validate([
+            'placa'              => 'required|string|max:100',
+            'tipo_inventario_id' => 'required|integer|exists:inv_tipos_inventario,id',
+        ]);
+
+        $resultado = $this->activos->validarPeriodicidad(
+            $validado['placa'],
+            (int) $validado['tipo_inventario_id']
+        );
+
+        return response()->json([
+            'success' => true,
+            'data'    => $resultado,
+        ]);
     }
 
     // =========================================================================

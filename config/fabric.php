@@ -53,6 +53,16 @@ return [
     // TTL de cache para queries repetidas (segundos)
     'query_cache_ttl' => (int) env('FABRIC_QUERY_CACHE_TTL', 30),
 
+    // Activos fijos: usar el carril Parquet/DuckDB (rápido) para buscar activos,
+    // con fallback automático a la vista SQL en vivo si el parquet no está listo.
+    // Poner en false para forzar siempre la vista SQL.
+    'activos_parquet' => filter_var(env('FABRIC_ACTIVOS_PARQUET', true), FILTER_VALIDATE_BOOLEAN),
+
+    // TTL (segundos) del caché local de búsqueda de activos. El maestro de Indigo
+    // cambia poco; cachear evita el golpe de ~20 s de la vista SQL en búsquedas
+    // repetidas. 0 = desactivar caché. Default 30 min.
+    'activos_busqueda_ttl' => (int) env('FABRIC_ACTIVOS_BUSQUEDA_TTL', 1800),
+
     // Email del sistema para requests internos (notificaciones, sync)
     'admin_email' => env('NOTIF_ADMIN_EMAIL', 'sistema@medilaser.com.co'),
 

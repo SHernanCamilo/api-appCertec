@@ -54,6 +54,7 @@ class InvTrazActivo extends Model
 
     protected $fillable = [
         'placa',
+        'tipo_inventario_id',
         'serie',
         'articulo_codigo',
         'articulo_nombre',
@@ -66,9 +67,11 @@ class InvTrazActivo extends Model
         'novedad_serie',
         'novedad_responsable',
         'novedad_localizacion',
+        'localizacion_original',
         'novedad_tipo_inventario',
         'novedad_sucursal',
         'novedad_estado_fisico',
+        'resultado_inventario',
         'observacion',
         'sucursal_origen',
         'es_externo',
@@ -76,18 +79,39 @@ class InvTrazActivo extends Model
         'id_empresa',
         'id_sucursal',
         'registrado_por',
+        'actualizado_por',
     ];
 
     protected $casts = [
-        'valores_origen' => 'array',
-        'es_externo'     => 'boolean',
-        'created_at'     => 'datetime',
-        'updated_at'     => 'datetime',
+        'valores_origen'    => 'array',
+        'es_externo'        => 'boolean',
+        'tipo_inventario_id' => 'integer',
+        'created_at'        => 'datetime',
+        'updated_at'        => 'datetime',
     ];
 
+    /** Usuario que registró la toma (relación semántica). */
     public function usuario(): BelongsTo
     {
         return $this->belongsTo(User::class, 'registrado_por');
+    }
+
+    /** Alias de usuario() usado por el service/frontend. */
+    public function registrador(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'registrado_por');
+    }
+
+    /** Usuario que modificó por última vez el registro (auditoría). */
+    public function actualizador(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'actualizado_por');
+    }
+
+    /** Tipo de inventario con el que se realizó la toma. */
+    public function tipoInventario(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\TipoInventario::class, 'tipo_inventario_id');
     }
 
     // =========================================================================
@@ -99,9 +123,36 @@ class InvTrazActivo extends Model
         return $query->where('placa', $placa);
     }
 
+    /** Alias de scopeDePlaca usado por el service. */
+    public function scopePorPlaca(Builder $query, string $placa): Builder
+    {
+        return $query->where('placa', $placa);
+    }
+
     public function scopeRecientesPrimero(Builder $query): Builder
     {
         return $query->orderByDesc('created_at')->orderByDesc('id');
+    }
+
+    /** Alias de scopeRecientesPrimero usado por el service. */
+    public function scopeRecientes(Builder $query): Builder
+    {
+        return $query->orderByDesc('created_at')->orderByDesc('id');
+    }
+
+    public function scopePorTipoInventario(Builder $query, int $tipoInventarioId): Builder
+    {
+        return $query->where('tipo_inventario_id', $tipoInventarioId);
+    }
+
+    public function scopePorEstadoFisico(Builder $query, string $estadoFisico): Builder
+    {
+        return $query->where('novedad_estado_fisico', $estadoFisico);
+    }
+
+    public function scopeEntreFechas(Builder $query, $desde, $hasta): Builder
+    {
+        return $query->whereBetween('created_at', [$desde, $hasta]);
     }
 
     /** Solo las novedades que piden dar de baja el activo. */
@@ -114,6 +165,12 @@ class InvTrazActivo extends Model
     public function scopeExternos(Builder $query): Builder
     {
         return $query->where('es_externo', true);
+    }
+
+    /** Solo los activos que sí existen en el maestro de Indigo. */
+    public function scopeDelMaestro(Builder $query): Builder
+    {
+        return $query->where('es_externo', false);
     }
 
     // =========================================================================
@@ -152,6 +209,53 @@ class InvTrazActivo extends Model
     public function tieneCambios(): bool
     {
         return $this->cambios() !== [];
+    }
+
+    /**
+     * Cuenta cuántos campos de novedad traen valor (excluye la observación).
+     */
+    public function contarNovedades(): int
+    {
+        $contador = 0;
+        foreach (array_keys(self::CAMPOS_NOVEDAD) as $campo) {
+            if (!empty($this->{$campo})) {
+                $contador++;
+            }
+        }
+
+        return $contador;
+    }
+
+    /**
+     * Resumen etiqueta => valor de las novedades con valor.
+     *
+     * @return array<string, string>
+     */
+    public function getResumenNovedadesAttribute(): array
+    {
+        $novedades = [];
+        foreach (self::CAMPOS_NOVEDAD as $campo => $etiqueta) {
+            if (!empty($this->{$campo})) {
+                $novedades[$etiqueta] = (string) $this->{$campo};
+            }
+        }
+
+        return $novedades;
+    }
+
+    /**
+     * Clasifica el resultado de la toma (Req. 7):
+     *   - externo:        activo no existe en el maestro de Indigo
+     *   - con_novedades:  hay al menos un campo de novedad reportado
+     *   - sin_novedades:  coincide con el maestro (solo observación / consulta)
+     */
+    public function resultadoInventario(): string
+    {
+        if ($this->es_externo) {
+            return 'externo';
+        }
+
+        return $this->contarNovedades() > 0 ? 'con_novedades' : 'sin_novedades';
     }
 
     /**
