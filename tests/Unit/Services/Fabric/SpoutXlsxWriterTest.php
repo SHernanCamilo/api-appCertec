@@ -344,6 +344,54 @@ final class SpoutXlsxWriterTest extends TestCase
     // =========================================================================
 
     /**
+     * PRUEBA DE INTEGRIDAD END-TO-END del texto largo.
+     *
+     * Por qué existe: se reportó varias veces que el campo "Analisis" (notas de
+     * historia clínica) salía cortado en el Excel. Se midió el NDJSON que entrega
+     * Graph-Fabric y el texto YA venía truncado a 8.000 caracteres desde el
+     * origen (limitación del SQL Analytics Endpoint de Fabric, que expone las
+     * columnas como VARCHAR(8000) porque Parquet no impone longitudes).
+     *
+     * Este test fija que la generación del xlsx NO añade ningún recorte propio:
+     * un texto de 8.000 caracteres entra por el NDJSON y sale ÍNTEGRO del .xlsx,
+     * leído de vuelta con el mismo lector que usaría Excel. Si algún día alguien
+     * vuelve a meter un límite en el writer, este test lo caza.
+     */
+    public function test_el_texto_largo_sobrevive_intacto_el_viaje_al_xlsx(): void
+    {
+        // 8.000 caracteres: el tamaño exacto que llega de Fabric en el peor caso.
+        // Se construye con contenido variado (no un solo carácter repetido) para
+        // que un corte parcial sea detectable y no quede oculto.
+        $nota = '';
+        $i    = 0;
+        while (mb_strlen($nota) < 8000) {
+            $nota .= "PARRAFO {$i}: EVOLUCION MEDICA CON HALLAZGOS RELEVANTES Y PLAN TERAPEUTICO. ";
+            $i++;
+        }
+        $nota = mb_substr($nota, 0, 8000);
+
+        $this->assertSame(8000, mb_strlen($nota), 'Precondicion: la nota de prueba mide 8000');
+
+        $gz = $this->writeGz([
+            ['Analisis' => $nota, 'Codigo' => 'I872'],
+        ]);
+
+        $result = SpoutXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_HC');
+        $this->assertNotNull($result);
+
+        $celda = (string) $this->readRows($result->path)[1][0];
+
+        // Lo esencial: NI UN CARACTER perdido en el camino.
+        $this->assertSame(
+            8000,
+            mb_strlen($celda),
+            'El xlsx debe conservar los 8000 caracteres; si mide menos, el writer trunca'
+        );
+        $this->assertSame($nota, $celda, 'El texto del xlsx debe ser identico al del NDJSON');
+        $this->assertStringNotContainsString('…', $celda, 'No debe aparecer marcador de corte');
+    }
+
+    /**
      * Regresión: una nota de historia clínica con párrafos hacía que la fila
      * ocupara toda la pantalla al conservar los saltos de línea. Se colapsan a
      * un espacio, pero el CONTENIDO debe salir completo (antes se cortaba a 300

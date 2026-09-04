@@ -173,6 +173,42 @@ final class FastXlsxWriterTest extends TestCase
         $this->assertSame('007112233', (string) $rows[2][0]);
     }
 
+    /**
+     * PRUEBA DE INTEGRIDAD END-TO-END del texto largo (writer rápido).
+     *
+     * Es el camino que corre para las vistas grandes (historia clínica), así que
+     * es el que de verdad genera el Excel que descarga el usuario.
+     *
+     * Contexto: se reportó que el campo "Analisis" salía cortado. Se midió el
+     * NDJSON de Graph-Fabric y el texto ya llegaba truncado a 8.000 caracteres
+     * desde el origen (límite del SQL Analytics Endpoint de Fabric). Este test
+     * fija que el writer NO agrega recorte propio: lo que entra, sale.
+     */
+    public function test_el_texto_largo_sobrevive_intacto_el_viaje_al_xlsx(): void
+    {
+        $nota = '';
+        $i    = 0;
+        while (mb_strlen($nota) < 8000) {
+            $nota .= "PARRAFO {$i}: EVOLUCION MEDICA CON HALLAZGOS Y PLAN TERAPEUTICO. ";
+            $i++;
+        }
+        $nota = mb_substr($nota, 0, 8000);
+
+        $gz = $this->writeNdjsonGz([['Analisis' => $nota]]);
+
+        $result = FastXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_HC');
+        $this->assertNotNull($result);
+
+        $celda = (string) $this->readRows($result->path)[1][0];
+
+        $this->assertSame(
+            8000,
+            mb_strlen($celda),
+            'El writer rapido debe conservar los 8000 caracteres del NDJSON'
+        );
+        $this->assertSame($nota, $celda, 'El texto del xlsx debe ser identico al del NDJSON');
+    }
+
     public function test_los_numeros_salen_como_numero_para_poder_sumarlos(): void
     {
         $gz = $this->writeNdjsonGz([

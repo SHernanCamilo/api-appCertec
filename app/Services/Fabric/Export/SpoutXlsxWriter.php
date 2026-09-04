@@ -328,7 +328,9 @@ final class SpoutXlsxWriter
      *      de historia clínica con párrafos estira la fila hasta ocupar toda la
      *      pantalla, que es lo que hacía la hoja ilegible.
      *   3. Colapsa espacios repetidos, que quedan al unir los párrafos.
-     *   4. Recorta a MAX_TEXT_LENGTH y marca el corte con “…”.
+     *   4. NO recorta por longitud de negocio: el texto sale íntegro. El único
+     *      corte posible es el tope físico de Excel (32.767 caracteres), que
+     *      aplica sanitize() para no corromper el .xlsx.
      */
     private static function cellText(string $value): string
     {
@@ -438,9 +440,10 @@ final class SpoutXlsxWriter
     /**
      * Ancho estimado por columna, en caracteres.
      *
-     * Se mide sobre el texto YA normalizado (saltos colapsados y recortado a
-     * MAX_TEXT_LENGTH), porque medir el texto crudo daba anchos absurdos para
-     * las notas de historia clínica. El tope real lo aplica el llamador con
+     * Se mide sobre el texto YA normalizado (saltos colapsados), porque medir el
+     * texto crudo daba anchos absurdos para las notas de historia clínica. Ojo:
+     * esto solo afecta el ANCHO de la columna, nunca el contenido de la celda,
+     * que va completo. El tope real lo aplica el llamador con
      * MAX_COL_WIDTH; aquí se usa la mediana en vez del máximo para que un valor
      * atípico no ensanche toda la columna.
      *
