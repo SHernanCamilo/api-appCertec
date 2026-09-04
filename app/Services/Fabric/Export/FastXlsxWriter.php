@@ -123,6 +123,21 @@ final class FastXlsxWriter
     private const STYLE_TITLE = 4;
     private const STYLE_INFO  = 5;
 
+    /** Estilo de las celdas de texto largo: ajustar texto + alineado arriba. */
+    private const STYLE_LONGTEXT = 6;
+
+    /**
+     * Ancho de las columnas de texto largo (notas de historia clínica).
+     *
+     * Con el tope general de 50 la celda mostraba solo el principio del párrafo
+     * y el usuario lo leía como "el Excel corta el texto", aunque el dato
+     * estuviera completo. Con 90 y wrapText se ve un bloque legible.
+     */
+    private const LONG_TEXT_COL_WIDTH = 90;
+
+    /** Desde cuántos caracteres se considera que una columna es de texto largo. */
+    private const LONG_TEXT_THRESHOLD = 300;
+
     /**
      * Genera el .xlsx a partir de un NDJSON gzipeado.
      *
@@ -157,6 +172,16 @@ final class FastXlsxWriter
         $types = $layout['types'];
         /** @var array<int,int> $widths */
         $widths = $layout['widths'];
+
+        // Columnas de notas largas (Analisis, Observacion...): se declaran
+        // anchas y sus celdas llevan wrapText, para que el párrafo se pueda leer
+        // completo en Excel en vez de quedar recortado a una línea.
+        $longTextCols = [];
+        foreach ($widths as $i => $len) {
+            if ($len >= self::LONG_TEXT_THRESHOLD && ($types[$i] ?? 'text') === 'text') {
+                $longTextCols[$i] = true;
+            }
+        }
 
         $colCount  = count($headers);
         $sheetXml  = "{$targetDir}/{$baseName}.sheet.xml";
@@ -258,7 +283,16 @@ final class FastXlsxWriter
                     }
 
                     // Texto (y todo lo que no encajó como fecha o número).
-                    $buffer .= '<c r="' . $ref . '" t="inlineStr"><is><t xml:space="preserve">'
+                    //
+                    // Las columnas de notas largas llevan el estilo con
+                    // wrapText: así el párrafo se ve completo al autoajustar el
+                    // alto de fila, en vez de una línea recortada que parece
+                    // dato truncado. El contenido va íntegro en ambos casos.
+                    $styleAttr = isset($longTextCols[$i])
+                        ? ' s="' . self::STYLE_LONGTEXT . '"'
+                        : '';
+
+                    $buffer .= '<c r="' . $ref . '"' . $styleAttr . ' t="inlineStr"><is><t xml:space="preserve">'
                         . self::xmlText((string) $value)
                         . '</t></is></c>';
                 }
@@ -710,7 +744,12 @@ final class FastXlsxWriter
         if ($widths !== []) {
             $xml .= '<cols>';
             foreach ($widths as $i => $len) {
-                $width = max(9, min(50, $len + 3));
+                // Las columnas de notas largas se declaran anchas: con el tope
+                // general solo se veía el principio del párrafo.
+                $width = $len >= self::LONG_TEXT_THRESHOLD
+                    ? self::LONG_TEXT_COL_WIDTH
+                    : max(9, min(50, $len + 3));
+
                 $xml .= '<col min="' . ($i + 1) . '" max="' . ($i + 1)
                     . '" width="' . $width . '" customWidth="1"/>';
             }
@@ -1049,6 +1088,7 @@ final class FastXlsxWriter
      *
      * fonts:   0 normal · 1 encabezado (blanco, negrita) · 2 título (grande, negrita) · 3 info (gris, cursiva)
      * cellXfs: 0 general · 1 encabezado · 2 fecha · 3 fecha y hora · 4 título · 5 info
+     *          6 texto largo (ajustar texto + alineado arriba)
      */
     private static function stylesXml(): string
     {
@@ -1071,7 +1111,7 @@ final class FastXlsxWriter
             . '</fills>'
             . '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
             . '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-            . '<cellXfs count="6">'
+            . '<cellXfs count="7">'
             . '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
             . '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1">'
             . '<alignment horizontal="center" vertical="center" wrapText="1"/></xf>'
@@ -1080,6 +1120,10 @@ final class FastXlsxWriter
             . '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1">'
             . '<alignment horizontal="left" vertical="center"/></xf>'
             . '<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>'
+            // 6: columnas de notas largas. wrapText deja ver el párrafo completo
+            // al autoajustar el alto de fila; vertical="top" lo alinea arriba.
+            . '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1">'
+            . '<alignment vertical="top" wrapText="1"/></xf>'
             . '</cellXfs>'
             . '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
             . '</styleSheet>';

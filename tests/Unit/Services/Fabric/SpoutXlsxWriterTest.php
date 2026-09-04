@@ -438,15 +438,49 @@ final class SpoutXlsxWriterTest extends TestCase
         // Alto de fila declarado (evita que Excel las estire)
         $this->assertMatchesRegularExpression('/defaultRowHeight="15/', $sheet);
 
-        // Los anchos se declaran y ninguno pasa del tope
+        // Los anchos se declaran y quedan dentro de los topes previstos.
+        //
+        // Hay DOS topes a propósito: 45 para columnas normales y 90 para las de
+        // texto largo (notas clínicas). Con 45 la nota se veía recortada a una
+        // línea y el usuario lo interpretaba como dato truncado.
         $this->assertMatchesRegularExpression('/<cols>/', $sheet);
         preg_match_all('/width="([\d.]+)"/', $sheet, $m);
         $this->assertNotEmpty($m[1], 'Debe declarar anchos de columna');
 
         foreach ($m[1] as $w) {
-            $this->assertLessThanOrEqual(45.0, (float) $w, 'Ninguna columna debe pasar el ancho máximo');
+            $this->assertLessThanOrEqual(90.0, (float) $w, 'Ninguna columna debe pasar el ancho de texto largo');
             $this->assertGreaterThanOrEqual(10.0, (float) $w, 'Ninguna columna debe quedar más angosta que el mínimo');
         }
+
+        // La columna "Larga" (500 chars) debe recibir el ancho de texto largo
+        $anchos = array_map('floatval', $m[1]);
+        $this->assertContains(90.0, $anchos, 'La columna de texto largo debe declararse ancha');
+    }
+
+    /**
+     * Las notas largas se marcan con "ajustar texto" para que el usuario pueda
+     * ver el párrafo completo en Excel (autoajustando el alto de fila), en vez
+     * de una línea cortada que parece pérdida de datos.
+     */
+    public function test_las_columnas_de_texto_largo_llevan_ajustar_texto(): void
+    {
+        $gz = $this->writeGz([
+            ['Codigo' => 'A1', 'Analisis' => str_repeat('NOTA CLINICA EXTENSA. ', 40)],
+        ]);
+
+        $result = SpoutXlsxWriter::fromNdjsonGz($gz, $this->tmpDir, 'export', 'VW_HC');
+        $this->assertNotNull($result);
+
+        $zip = new ZipArchive();
+        $zip->open($result->path);
+        $styles = (string) $zip->getFromName('xl/styles.xml');
+        $zip->close();
+
+        $this->assertStringContainsString(
+            'wrapText="1"',
+            $styles,
+            'Debe existir un estilo con ajuste de texto para las notas largas'
+        );
     }
 
     public function test_maneja_mas_de_26_columnas(): void

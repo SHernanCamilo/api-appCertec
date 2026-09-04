@@ -70,6 +70,20 @@ final class SpoutXlsxWriter
     private const MIN_COL_WIDTH = 10;
     private const MAX_COL_WIDTH = 45;
 
+    /**
+     * Ancho para las columnas de texto largo (notas de historia clínica).
+     *
+     * Estas columnas traen párrafos de miles de caracteres. Con el tope normal de
+     * 45 la celda mostraba ~45 caracteres y el resto quedaba oculto: el usuario
+     * lo leía como "el Excel me corta el texto", aunque el dato estuviera
+     * completo. Con 90 y "ajustar texto" activado se ve un bloque legible y, al
+     * autoajustar el alto de fila, el contenido entero.
+     */
+    private const LONG_TEXT_COL_WIDTH = 90;
+
+    /** Desde cuántos caracteres se considera que una columna es de texto largo. */
+    private const LONG_TEXT_THRESHOLD = 300;
+
     /** Alto fijo de las filas de datos, para que ninguna se estire. */
     private const DATA_ROW_HEIGHT = 15.0;
 
@@ -126,13 +140,32 @@ final class SpoutXlsxWriter
         // garantiza que ninguna fila se estire por una nota larga.
         $options->DEFAULT_ROW_HEIGHT = self::DATA_ROW_HEIGHT;
 
-        // Anchos de columna (OpenSpout los aplica al ensamblar la hoja)
+        // ── Anchos de columna ────────────────────────────────────────────────
+        //
+        // Las columnas de texto largo (notas clínicas) reciben un ancho mayor:
+        // con el tope normal de 45 caracteres solo se veía el principio del
+        // párrafo y parecía que el Excel había cortado el dato.
+        $longTextCols = [];
+
         foreach ($widths as $i => $len) {
+            $esTextoLargo = ($types[$i] ?? 'text') === 'text'
+                && $len >= self::LONG_TEXT_THRESHOLD;
+
+            if ($esTextoLargo) {
+                $longTextCols[$i] = true;
+                $options->setColumnWidth((float) self::LONG_TEXT_COL_WIDTH, $i + 1);
+                continue;
+            }
+
             $options->setColumnWidth(
                 (float) max(self::MIN_COL_WIDTH, min(self::MAX_COL_WIDTH, $len + 2)),
                 $i + 1
             );
         }
+
+        // Estilo con "ajustar texto" para las celdas de texto largo: deja el
+        // contenido visible al autoajustar el alto de fila, en vez de recortado.
+        $wrapStyle = $longTextCols === [] ? null : (new Style())->setShouldWrapText(true);
 
         $writer   = new Writer($options);
         $dataRows = 0;
@@ -225,7 +258,12 @@ final class SpoutXlsxWriter
                         }
                     }
 
-                    $cells[] = StringCell::fromValue(self::cellText((string) $value));
+                    // Las notas largas van con "ajustar texto": así el usuario ve
+                    // el párrafo completo al autoajustar el alto de la fila, en
+                    // vez de una línea recortada que parece dato truncado.
+                    $cells[] = isset($longTextCols[$i])
+                        ? StringCell::fromValue(self::cellText((string) $value), $wrapStyle)
+                        : StringCell::fromValue(self::cellText((string) $value));
                 }
 
                 $writer->addRow(new Row($cells));
