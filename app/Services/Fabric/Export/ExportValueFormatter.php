@@ -156,14 +156,14 @@ final class ExportValueFormatter
     /**
      * Máximo de caracteres que se escriben en una celda de texto.
      *
-     * Es el límite duro de Excel/XLSX: una celda no admite más de 32.767
-     * caracteres. Pasar de ese valor corrompe el archivo (Excel abre
-     * "reparando y quitando contenido"), así que el recorte se mantiene como
-     * salvaguarda contra corrupción, NO para acortar por legibilidad.
+     * Tope FÍSICO de Excel/XLSX: una celda no admite más de 32.767 caracteres.
+     * No es un límite de negocio (no se acorta por legibilidad): es el máximo
+     * que el formato soporta. Escribir más corrompe el archivo (Excel abre
+     * "reparando y quitando contenido").
      *
-     * Antes estaba en 300, lo que cortaba las notas de historia clínica
+     * Historia: estuvo en 300, lo que cortaba las notas de historia clínica
      * (Analisis, Observacion, Diagnostico) y las dejaba con "…". Ahora se
-     * escribe el texto completo salvo que supere el máximo real del formato.
+     * exporta el texto COMPLETO; solo se recorta si supera este tope físico.
      */
     public const MAX_CELL_TEXT = 32767;
 
@@ -178,8 +178,9 @@ final class ExportValueFormatter
      *   3. Elimina los codepoints que XML prohíbe (ver xmlSafe): un .xlsx es XML
      *      comprimido, y un carácter ilegal hace que Excel abra el archivo
      *      "reparando y quitando el contenido".
-     *   4. Recorta a MAX_CELL_TEXT SOLO si supera el límite duro de Excel
-     *      (32.767 caracteres), como salvaguarda contra corrupción del .xlsx.
+     *   4. Recorta SOLO si supera el tope físico de Excel (32.767 caracteres),
+     *      sin marcador, para no corromper el .xlsx. Texto por debajo de eso
+     *      (el caso normal, incluidas notas de 1.000+ caracteres) sale íntegro.
      *
      * Vive aquí, y no en cada writer, para que el resultado sea IDÉNTICO por los
      * dos caminos de export (el clásico y el de OpenSpout). Tener reglas
@@ -202,9 +203,14 @@ final class ExportValueFormatter
 
         $value = trim(self::xmlSafe($value));
 
-        // mb_* para no cortar un carácter multibyte por la mitad
+        // Sin límite de negocio: se exporta el texto completo. El ÚNICO corte es
+        // el tope físico de Excel (32.767 caracteres por celda). Pasarse de ahí
+        // corrompe el .xlsx, así que en ese caso extremo se recorta al máximo
+        // exacto, sin marcador, para conservar la mayor cantidad de texto
+        // posible. Un campo de 1.000, 5.000 o 30.000 caracteres sale íntegro.
+        // mb_* para no cortar un carácter multibyte por la mitad.
         if (mb_strlen($value) > self::MAX_CELL_TEXT) {
-            $value = mb_substr($value, 0, self::MAX_CELL_TEXT - 1) . '…';
+            $value = mb_substr($value, 0, self::MAX_CELL_TEXT);
         }
 
         return $value;

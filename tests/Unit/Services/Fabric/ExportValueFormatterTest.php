@@ -335,13 +335,14 @@ final class ExportValueFormatterTest extends TestCase
     public function test_recorta_solo_al_superar_el_limite_de_excel(): void
     {
         // Excel no admite más de 32.767 caracteres por celda: pasarse corrompe
-        // el .xlsx. El recorte queda solo como salvaguarda contra eso.
+        // el .xlsx. El recorte queda solo como salvaguarda contra eso, y se
+        // corta EXACTO al tope, sin marcador, para conservar el máximo texto.
         $largo = str_repeat('A', ExportValueFormatter::MAX_CELL_TEXT + 500);
 
         $result = (string) ExportValueFormatter::sanitize($largo);
 
         $this->assertSame(ExportValueFormatter::MAX_CELL_TEXT, mb_strlen($result));
-        $this->assertStringEndsWith('…', $result);
+        $this->assertStringNotContainsString('…', $result);
     }
 
     public function test_no_toca_el_texto_que_ya_cabe(): void
