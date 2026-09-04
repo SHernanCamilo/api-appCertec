@@ -320,9 +320,23 @@ final class ExportValueFormatterTest extends TestCase
         );
     }
 
-    public function test_recorta_el_texto_largo_y_marca_el_corte(): void
+    public function test_no_recorta_notas_largas_que_caben_en_una_celda(): void
     {
+        // Notas de historia clínica (Analisis, Observacion): párrafos enteros.
+        // Deben salir COMPLETOS mientras no superen el límite duro de Excel.
         $largo = str_repeat('A', 1000);
+
+        $result = (string) ExportValueFormatter::sanitize($largo);
+
+        $this->assertSame(1000, mb_strlen($result));
+        $this->assertStringNotContainsString('…', $result);
+    }
+
+    public function test_recorta_solo_al_superar_el_limite_de_excel(): void
+    {
+        // Excel no admite más de 32.767 caracteres por celda: pasarse corrompe
+        // el .xlsx. El recorte queda solo como salvaguarda contra eso.
+        $largo = str_repeat('A', ExportValueFormatter::MAX_CELL_TEXT + 500);
 
         $result = (string) ExportValueFormatter::sanitize($largo);
 
@@ -339,8 +353,11 @@ final class ExportValueFormatterTest extends TestCase
 
     public function test_recorta_sin_partir_caracteres_multibyte(): void
     {
-        // 400 emojis: si se cortara por bytes, quedaría un carácter roto
-        $result = (string) ExportValueFormatter::sanitize(str_repeat('😀', 400));
+        // Emojis suficientes para pasar el límite: si se cortara por bytes,
+        // quedaría un carácter roto al final.
+        $result = (string) ExportValueFormatter::sanitize(
+            str_repeat('😀', ExportValueFormatter::MAX_CELL_TEXT + 100)
+        );
 
         $this->assertSame(ExportValueFormatter::MAX_CELL_TEXT, mb_strlen($result));
         $this->assertTrue(mb_check_encoding($result, 'UTF-8'), 'El recorte debe dejar UTF-8 válido');

@@ -156,15 +156,16 @@ final class ExportValueFormatter
     /**
      * Máximo de caracteres que se escriben en una celda de texto.
      *
-     * Las notas de historia clínica (Analisis, Observacion, Diagnostico) traen
-     * párrafos enteros. Una celda con 4.000 caracteres estira la fila hasta
-     * ocupar toda la pantalla y vuelve la hoja imposible de leer. Se recorta y
-     * se marca con “…” para que se vea que hay más contenido.
+     * Es el límite duro de Excel/XLSX: una celda no admite más de 32.767
+     * caracteres. Pasar de ese valor corrompe el archivo (Excel abre
+     * "reparando y quitando contenido"), así que el recorte se mantiene como
+     * salvaguarda contra corrupción, NO para acortar por legibilidad.
      *
-     * El dato completo sigue estando en la vista y en el visor web: el Excel es
-     * para analizar y filtrar, no para leer historias clínicas enteras.
+     * Antes estaba en 300, lo que cortaba las notas de historia clínica
+     * (Analisis, Observacion, Diagnostico) y las dejaba con "…". Ahora se
+     * escribe el texto completo salvo que supere el máximo real del formato.
      */
-    public const MAX_CELL_TEXT = 300;
+    public const MAX_CELL_TEXT = 32767;
 
     /**
      * Normaliza un valor de celda para que la hoja quede legible y válida.
@@ -177,7 +178,8 @@ final class ExportValueFormatter
      *   3. Elimina los codepoints que XML prohíbe (ver xmlSafe): un .xlsx es XML
      *      comprimido, y un carácter ilegal hace que Excel abra el archivo
      *      "reparando y quitando el contenido".
-     *   4. Recorta a MAX_CELL_TEXT marcando el corte.
+     *   4. Recorta a MAX_CELL_TEXT SOLO si supera el límite duro de Excel
+     *      (32.767 caracteres), como salvaguarda contra corrupción del .xlsx.
      *
      * Vive aquí, y no en cada writer, para que el resultado sea IDÉNTICO por los
      * dos caminos de export (el clásico y el de OpenSpout). Tener reglas

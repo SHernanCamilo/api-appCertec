@@ -345,9 +345,11 @@ final class SpoutXlsxWriterTest extends TestCase
 
     /**
      * Regresión: una nota de historia clínica con párrafos hacía que la fila
-     * ocupara toda la pantalla y la hoja fuera ilegible.
+     * ocupara toda la pantalla al conservar los saltos de línea. Se colapsan a
+     * un espacio, pero el CONTENIDO debe salir completo (antes se cortaba a 300
+     * caracteres y dejaba "…", perdiendo el texto clínico).
      */
-    public function test_las_notas_largas_no_estiran_la_fila(): void
+    public function test_las_notas_largas_salen_completas_y_sin_saltos(): void
     {
         $nota = "PRIMERA LINEA DE LA NOTA\nSEGUNDA LINEA\nTERCERA LINEA\n" . str_repeat('detalle clinico ', 100);
 
@@ -361,9 +363,12 @@ final class SpoutXlsxWriterTest extends TestCase
 
         $celda = (string) $this->readRows($result->path)[1][0];
 
+        // Se esperan los mismos caracteres que la nota tras colapsar los saltos.
+        $esperado = trim(preg_replace('/\s+/', ' ', $nota));
+
         $this->assertStringNotContainsString("\n", $celda, 'Sin saltos: la fila no debe crecer');
-        $this->assertLessThanOrEqual(300, mb_strlen($celda), 'El texto debe venir recortado');
-        $this->assertStringEndsWith('…', $celda, 'El corte se marca para que se sepa que hay más');
+        $this->assertStringNotContainsString('…', $celda, 'Ya no se recorta: el texto sale completo');
+        $this->assertSame($esperado, $celda, 'La nota debe salir íntegra');
     }
 
     public function test_declara_alto_de_fila_fijo_y_anchos_topados(): void
