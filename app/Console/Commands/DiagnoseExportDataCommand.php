@@ -33,7 +33,8 @@ final class DiagnoseExportDataCommand extends Command
         {schema : Esquema de la vista, ej: pt}
         {view : Nombre de la vista, ej: VW_Treasury_ComprobantesEgresoTesoreria}
         {--user= : Email del usuario con el que se ejecuta (por defecto, el primer admin)}
-        {--timeout=300 : Segundos maximos de espera del export}';
+        {--timeout=300 : Segundos maximos de espera del export}
+        {--measure-col= : Mide la longitud MAXIMA de esta columna en el NDJSON crudo (ej: Analisis) para saber si Graph-Fabric ya la trunca}';
 
     protected $description = 'Verifica de punta a punta el NDJSON.gz que alimenta la grilla del viewer de vistas';
 
@@ -124,9 +125,9 @@ final class DiagnoseExportDataCommand extends Command
         $this->line('  Identificado como : ' . $this->identify($hex));
 
         $result = $this->inspectNdjson($path);
-        @unlink($path);
 
         if ($result === null) {
+            @unlink($path);
             $this->newLine();
             $this->error('FALLO: el archivo no contiene NDJSON valido.');
             $this->line('El problema esta ANTES de Laravel: en Graph-Fabric o en la descarga.');
@@ -146,6 +147,54 @@ final class DiagnoseExportDataCommand extends Command
             $this->line(sprintf('    %-28s %s', $key, mb_strimwidth((string) $value, 0, 60, '...')));
         }
 
+        // ── 4b. Medir la longitud real de una columna (diagnostico truncamiento) ──
+        $measureCol = (string) ($this->option('measure-col') ?? '');
+        if ($measureCol !== '') {
+            $this->newLine();
+            $this->info("[extra] Midiendo longitud de la columna '{$measureCol}' en el NDJSON CRUDO...");
+
+            $stats = $this->measureColumn($path, $measureCol);
+
+            if ($stats === null) {
+                $this->warn("  La columna '{$measureCol}' no existe en el NDJSON. Columnas: "
+                    . implode(', ', array_slice($columns, 0, 15)));
+            } else {
+                [$maxLen, $maxRowSample, $filasMedidas, $filasNoVacias, $distribucion] = $stats;
+                $this->line('  Filas medidas       : ' . number_format($filasMedidas));
+                $this->line('  Filas con contenido : ' . number_format($filasNoVacias));
+                $this->line('  Longitud MAXIMA     : ' . number_format($maxLen) . ' caracteres');
+                $this->newLine();
+                $this->line('  Distribucion de longitudes (cuantas filas caen en cada rango):');
+                foreach ($distribucion as $rango => $cuenta) {
+                    if ($cuenta > 0) {
+                        $this->line(sprintf('    %-14s %s', $rango, number_format($cuenta)));
+                    }
+                }
+                $this->newLine();
+                $this->line('  Valor mas largo encontrado (ultimos 80 chars):');
+                $this->line('    ...' . mb_substr($maxRowSample, max(0, mb_strlen($maxRowSample) - 80)));
+                $this->newLine();
+
+                // Veredicto automatico sobre el punto de truncamiento
+                if (in_array($maxLen, [255, 256, 1000, 4000, 8000], true)
+                    || ($maxLen >= 250 && $maxLen <= 256)
+                    || ($maxLen >= 3990 && $maxLen <= 4000)
+                    || ($maxLen >= 7990 && $maxLen <= 8000)) {
+                    $this->error("  >> El maximo cae JUSTO en un limite clasico de SQL/ODBC ({$maxLen}).");
+                    $this->error('  >> El truncamiento OCURRE EN GRAPH-FABRIC (SQL/ODBC), no en Laravel.');
+                    $this->line('  >> Revisar en Graph-Fabric: CAST/CONVERT/LEFT sobre la columna, un');
+                    $this->line('     VARCHAR(n)/NVARCHAR(n) de longitud fija en la vista, o el driver');
+                    $this->line('     ODBC/pyodbc que trunca long-data. Cast explicito a VARCHAR(MAX).');
+                } elseif ($maxLen > 8000) {
+                    $this->info("  >> El NDJSON YA trae textos largos (> 8000). El dato NO viene truncado de Graph.");
+                    $this->line('  >> Si el Excel sale corto, el problema esta en Laravel o en el visor.');
+                } else {
+                    $this->warn("  >> Maximo {$maxLen}. Si esperabas mas, el corte esta en Graph-Fabric.");
+                    $this->line('  >> Compara este numero con lo que ves en la BD directamente.');
+                }
+            }
+        }
+
         $this->newLine();
         $this->info('OK: el archivo del servidor esta correcto.');
         $this->newLine();
@@ -157,7 +206,97 @@ final class DiagnoseExportDataCommand extends Command
         $this->line('     respuesta (brotli/deflate) sin dejar el Content-Encoding. Revise');
         $this->line('     public/.htaccess y que no exista un "Header unset Content-Encoding".');
 
+        @unlink($path);
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Recorre TODO el NDJSON y mide la longitud de una columna de texto.
+     *
+     * Sirve para probar de forma objetiva si el dato ya viene truncado desde
+     * Graph-Fabric: si el maximo cae en 255/4000/8000, el corte es de SQL/ODBC.
+     *
+     * @return array{0:int,1:string,2:int,3:int,4:array<string,int>}|null
+     */
+    private function measureColumn(string $path, string $column): ?array
+    {
+        $gz = gzopen($path, 'rb');
+        if ($gz === false) {
+            return null;
+        }
+
+        $maxLen        = 0;
+        $maxSample     = '';
+        $filasMedidas  = 0;
+        $filasNoVacias = 0;
+        $existe        = false;
+
+        // Rangos para ver dónde se acumulan las longitudes (detecta el "techo").
+        $distribucion = [
+            '0'          => 0,
+            '1-100'      => 0,
+            '101-255'    => 0,
+            '256-1000'   => 0,
+            '1001-4000'  => 0,
+            '4001-8000'  => 0,
+            '8001-32767' => 0,
+            '>32767'     => 0,
+        ];
+
+        try {
+            while (($line = gzgets($gz)) !== false) {
+                $line = trim($line);
+                if ($line === '') {
+                    continue;
+                }
+
+                $row = json_decode($line, true);
+                if (!is_array($row)) {
+                    continue;
+                }
+
+                if (!array_key_exists($column, $row)) {
+                    // La columna no está: se confirma en la primera fila y se sale.
+                    if ($filasMedidas === 0) {
+                        return null;
+                    }
+                    continue;
+                }
+
+                $existe = true;
+                $filasMedidas++;
+
+                $value = (string) ($row[$column] ?? '');
+                $len   = mb_strlen($value);
+
+                if ($len > 0) {
+                    $filasNoVacias++;
+                }
+
+                if ($len > $maxLen) {
+                    $maxLen    = $len;
+                    $maxSample = $value;
+                }
+
+                $distribucion[match (true) {
+                    $len === 0     => '0',
+                    $len <= 100    => '1-100',
+                    $len <= 255    => '101-255',
+                    $len <= 1000   => '256-1000',
+                    $len <= 4000   => '1001-4000',
+                    $len <= 8000   => '4001-8000',
+                    $len <= 32767  => '8001-32767',
+                    default        => '>32767',
+                }]++;
+            }
+        } finally {
+            gzclose($gz);
+        }
+
+        return $existe
+            ? [$maxLen, $maxSample, $filasMedidas, $filasNoVacias, $distribucion]
+            : null;
     }
 
     private function resolveUser(): ?User
