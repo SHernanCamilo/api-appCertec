@@ -205,11 +205,14 @@ final class VerifyXlsxColumnCommand extends Command
             return self::FAILURE;
         }
 
-        [$max, $filas, $sample, $conMarcador, $distribucion] = $medida;
+        [$max, $filas, $sample, $cortesReales, $puntosLegitimos, $distribucion] = $medida;
 
-        $this->line('  Filas de datos   : ' . number_format($filas));
-        $this->line('  Longitud MAXIMA  : ' . number_format($max) . ' caracteres');
-        $this->line('  Celdas con "…"   : ' . number_format($conMarcador));
+        $this->line('  Filas de datos          : ' . number_format($filas));
+        $this->line('  Longitud MAXIMA         : ' . number_format($max) . ' caracteres');
+        $this->line('  Cortes del codigo viejo : ' . number_format($cortesReales)
+            . '  ("…" al final + longitud ~300)');
+        $this->line('  "…" dentro del texto     : ' . number_format($puntosLegitimos)
+            . '  (puntos suspensivos del medico, NO son corte)');
         $this->newLine();
         $this->line('  Distribucion de longitudes:');
         foreach ($distribucion as $rango => $cuenta) {
@@ -223,15 +226,23 @@ final class VerifyXlsxColumnCommand extends Command
         $this->newLine();
 
         // ── Veredicto ────────────────────────────────────────────────────────
-        if ($conMarcador > 0) {
-            $this->error("  >> Este archivo tiene {$conMarcador} celdas con el marcador de corte '…'.");
-            $this->line('  >> Fue generado con la version ANTIGUA del codigo (limite de 300 chars).');
+        if ($cortesReales > 0) {
+            $this->error("  >> Este archivo tiene {$cortesReales} celdas cortadas por el codigo viejo (limite 300).");
             $this->line('  >> Solucion: limpiar cache y regenerar:');
             $this->line('       php artisan exports:cleanup --hours=0');
             $this->line('       php artisan cache:clear');
             $this->line('     Luego "Actualizar todo" en el visor y descargar de nuevo.');
 
             return self::FAILURE;
+        }
+
+        if ($puntosLegitimos > 0) {
+            $this->line(sprintf(
+                '  Nota: %s celdas tienen "…" en el texto, pero son puntos suspensivos que',
+                number_format($puntosLegitimos)
+            ));
+            $this->line('  escribio el medico (no cortes). El dato esta integro.');
+            $this->newLine();
         }
 
         if ($max <= 320) {
@@ -328,18 +339,23 @@ final class VerifyXlsxColumnCommand extends Command
      * Se busca la fila de encabezados (el writer puede poner portada arriba) y
      * desde ahi se recorre la columna midiendo cada celda.
      *
-     * @return array{0:int,1:int,2:string,3:int,4:array<string,int>}|null
+     * Distingue un corte del código viejo ("…" al final + longitud ~300) de un
+     * "…" legítimo escrito por el médico dentro de la nota. Contar cualquier "…"
+     * daba falsos positivos en notas largas e íntegras.
+     *
+     * @return array{0:int,1:int,2:string,3:int,4:int,5:array<string,int>}|null
      */
     private function measureXlsx(string $path, string $column): ?array
     {
         $reader = new Reader();
         $reader->open($path);
 
-        $colIndex    = null;
-        $max         = 0;
-        $filas       = 0;
-        $sample      = '';
-        $conMarcador = 0;
+        $colIndex        = null;
+        $max             = 0;
+        $filas           = 0;
+        $sample          = '';
+        $cortesReales    = 0;
+        $puntosLegitimos = 0;
 
         $distribucion = [
             '0'          => 0,
@@ -376,9 +392,13 @@ final class VerifyXlsxColumnCommand extends Command
                     $sample = $value;
                 }
 
-                // El marcador antiguo de corte: delata un archivo pre-fix
                 if (str_contains($value, '…')) {
-                    $conMarcador++;
+                    $esCorteViejo = str_ends_with($value, '…') && $len >= 295 && $len <= 305;
+                    if ($esCorteViejo) {
+                        $cortesReales++;
+                    } else {
+                        $puntosLegitimos++;
+                    }
                 }
 
                 $distribucion[match (true) {
@@ -397,6 +417,8 @@ final class VerifyXlsxColumnCommand extends Command
 
         $reader->close();
 
-        return $colIndex === null ? null : [$max, $filas, $sample, $conMarcador, $distribucion];
+        return $colIndex === null
+            ? null
+            : [$max, $filas, $sample, $cortesReales, $puntosLegitimos, $distribucion];
     }
 }

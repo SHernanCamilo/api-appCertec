@@ -155,19 +155,38 @@ final class BuildXlsxSampleCommand extends Command
             if ($medida === null) {
                 $this->warn("  No se encontro la columna '{$col}' en el archivo.");
             } else {
-                [$max, $filas, $sample, $conMarcador] = $medida;
-                $this->line('  Filas de datos   : ' . number_format($filas));
-                $this->line('  Longitud MAXIMA  : ' . number_format($max) . ' caracteres');
-                $this->line('  Celdas con "…"   : ' . number_format($conMarcador));
+                [$max, $filas, $sample, $cortesReales, $puntosLegitimos, $ejemplos] = $medida;
+                $this->line('  Filas de datos          : ' . number_format($filas));
+                $this->line('  Longitud MAXIMA         : ' . number_format($max) . ' caracteres');
+                $this->line('  Cortes del codigo viejo : ' . number_format($cortesReales)
+                    . '  ("…" al final + longitud ~300)');
+                $this->line('  "…" dentro del texto     : ' . number_format($puntosLegitimos)
+                    . '  (puntos suspensivos que escribio el medico, NO son corte)');
                 $this->newLine();
                 $this->line('  Valor mas largo (ultimos 80 chars):');
                 $this->line('    ...' . mb_substr($sample, max(0, mb_strlen($sample) - 80)));
+
+                if ($ejemplos !== []) {
+                    $this->newLine();
+                    $this->line('  Ejemplos de celdas con "…" (para ver que NO son cortes):');
+                    foreach ($ejemplos as $ej) {
+                        $this->line(sprintf('    [len %s] ...%s',
+                            number_format($ej['len']),
+                            mb_substr($ej['valor'], max(0, mb_strlen($ej['valor']) - 55))
+                        ));
+                    }
+                }
                 $this->newLine();
 
-                if ($conMarcador > 0) {
-                    $this->error('  >> Tiene marcador de corte "…": el codigo NO se actualizo o hay cache viejo.');
+                if ($cortesReales > 0) {
+                    $this->error("  >> Hay {$cortesReales} celdas cortadas por el codigo viejo (limite 300).");
+                    $this->line('  >> Limpie cache y regenere: php artisan exports:cleanup --hours=0 && php artisan cache:clear');
                 } else {
-                    $this->info('  >> Sin marcador de corte. El texto sale completo (tope real: 8000 desde Fabric).');
+                    $this->info('  >> SIN cortes del codigo. El texto sale completo (tope real: 8000 desde Fabric).');
+                    if ($puntosLegitimos > 0) {
+                        $this->line('  >> Las celdas con "…" son puntos suspensivos que ESCRIBIO el medico en la');
+                        $this->line('     nota (texto real), no un truncamiento. El dato esta integro.');
+                    }
                     $this->line('  >> En Excel: la columna "' . $col . '" sale ancha. Para leer una nota entera,');
                     $this->line('     seleccione la columna y use Inicio > Formato > Autoajustar alto de fila.');
                 }
@@ -189,18 +208,31 @@ final class BuildXlsxSampleCommand extends Command
     }
 
     /**
-     * @return array{0:int,1:int,2:string,3:int}|null
+     * Mide la columna distinguiendo dos cosas MUY distintas:
+     *
+     *   - Corte del código viejo: el "…" está al FINAL y la celda mide ~300
+     *     caracteres (era `mb_substr(..., 0, 299) . '…'`). Eso SÍ es pérdida.
+     *
+     *   - Puntos suspensivos legítimos: el médico escribió "…" DENTRO de la nota
+     *     (o al final de un texto largo). Es texto real, no un truncamiento.
+     *
+     * Confundir los dos fue el error del detector anterior: contaba cualquier
+     * "…" y marcaba como "corte" celdas de 7.840 caracteres que estaban íntegras.
+     *
+     * @return array{0:int,1:int,2:string,3:int,4:int,5:list<array{len:int,valor:string}>}|null
      */
     private function measureXlsx(string $path, string $column): ?array
     {
         $reader = new Reader();
         $reader->open($path);
 
-        $colIndex    = null;
-        $max         = 0;
-        $filas       = 0;
-        $sample      = '';
-        $conMarcador = 0;
+        $colIndex        = null;
+        $max             = 0;
+        $filas           = 0;
+        $sample          = '';
+        $cortesReales    = 0;
+        $puntosLegitimos = 0;
+        $ejemplos        = [];
 
         foreach ($reader->getSheetIterator() as $sheet) {
             foreach ($sheet->getRowIterator() as $row) {
@@ -226,7 +258,18 @@ final class BuildXlsxSampleCommand extends Command
                 }
 
                 if (str_contains($value, '…')) {
-                    $conMarcador++;
+                    // Corte del código viejo: "…" al final Y longitud en el
+                    // rango del límite viejo (300, con margen por si acaso).
+                    $esCorteViejo = str_ends_with($value, '…') && $len >= 295 && $len <= 305;
+
+                    if ($esCorteViejo) {
+                        $cortesReales++;
+                    } else {
+                        $puntosLegitimos++;
+                        if (count($ejemplos) < 3) {
+                            $ejemplos[] = ['len' => $len, 'valor' => $value];
+                        }
+                    }
                 }
             }
             break;
@@ -234,6 +277,8 @@ final class BuildXlsxSampleCommand extends Command
 
         $reader->close();
 
-        return $colIndex === null ? null : [$max, $filas, $sample, $conMarcador];
+        return $colIndex === null
+            ? null
+            : [$max, $filas, $sample, $cortesReales, $puntosLegitimos, $ejemplos];
     }
 }
