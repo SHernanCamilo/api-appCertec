@@ -32,7 +32,7 @@ return new class extends Migration
     private const SUBMODULOS = [
         ['CONT-FICHAS',        'Fichas Técnicas',        '/contabilidad/fichas-tecnicas',            'bi bi-file-medical', 1],
         ['CONT-FICHAS-GEN',    'Generar Ficha',          '/contabilidad/fichas-tecnicas/formulario', 'bi bi-file-earmark-plus', 1],
-        ['CONT-FICHAS-BANDEJA','Bandeja de Fichas',      '/contabilidad/fichas-tecnicas/bandeja',    'bi bi-inboxes', 2],
+        ['CONT-FICHAS-BANDEJA','Bandeja de Fichas',      '/contabilidad/fichas-tecnicas/bandeja/borradores', 'bi bi-inboxes', 2],
         ['CONT-FICHAS-PARAM',  'Parámetros de Fichas',   '/contabilidad/fichas-tecnicas/parametros', 'bi bi-sliders', 3],
         ['CONT-FICHAS-CUPS',   'Buscador CUPS',          '/contabilidad/fichas-tecnicas/cups',       'bi bi-search', 4],
     ];
