@@ -130,4 +130,67 @@ final class FichaDtoTest extends TestCase
             'valor', 'id_obs_item', 'novedad',
         ], array_keys($atributos));
     }
+
+    /**
+     * Cada tipo de liquidación (TIPO DE SERVICIO / CUPS / GRUPO / SUBGRUPO)
+     * debe mapear sus campos propios sin contaminar los de otras ramas.
+     */
+    public function testMapeoPorTipoDeLiquidacion(): void
+    {
+        // ── TIPO DE SERVICIO ──
+        $ts = DetalleFichaDTO::fromArray([
+            'tipo_liquidacion' => 'TIPO DE SERVICIO',
+            'tipo_servicio'    => 'COORDINACIÓN',
+            'forma_pago'       => 'VR FIJO MES',
+            'valor'            => 1500000,
+        ]);
+        $this->assertSame('TIPO DE SERVICIO', $ts->tipoLiquidacion);
+        $this->assertSame('COORDINACIÓN', $ts->tipoServicio);
+        $this->assertSame('VR FIJO MES', $ts->formaPago);
+        $this->assertSame(1500000.0, $ts->valor);
+        $this->assertNull($ts->cups, 'TIPO DE SERVICIO no debe tener cups');
+        $this->assertNull($ts->grupo);
+
+        // ── CUPS con homólogo y porcentaje ──
+        $cups = DetalleFichaDTO::fromArray([
+            'tipo_liquidacion' => 'CUPS',
+            'cups'             => '890201',
+            'homologo'         => 'S12101',
+            'forma_pago'       => 'ISS 2001',
+            'variacion'        => '1',
+            'valor'            => 0,
+        ]);
+        $this->assertSame('CUPS', $cups->tipoLiquidacion);
+        $this->assertSame('890201', $cups->cups);
+        $this->assertSame('S12101', $cups->homologo);
+        $this->assertSame('1', $cups->variacion);
+        $this->assertNull($cups->tipoServicio, 'CUPS no debe tener tipo_servicio');
+
+        // ── GRUPO ──
+        $grupo = DetalleFichaDTO::fromArray([
+            'tipo_liquidacion' => 'GRUPO',
+            'grupo'            => '01',
+            'forma_pago'       => 'SOAT VIGENTE',
+            'variacion'        => '0',
+            'valor'            => 0,
+        ]);
+        $this->assertSame('GRUPO', $grupo->tipoLiquidacion);
+        $this->assertSame('01', $grupo->grupo);
+        $this->assertSame('0', $grupo->variacion);
+        $this->assertNull($grupo->cups);
+        $this->assertNull($grupo->subgrupo);
+
+        // ── SUBGRUPO ──
+        $sub = DetalleFichaDTO::fromArray([
+            'tipo_liquidacion' => 'SUBGRUPO',
+            'subgrupo'         => '0101',
+            'forma_pago'       => 'SOAT 2024',
+            'variacion'        => '-1',
+            'valor'            => 0,
+        ]);
+        $this->assertSame('SUBGRUPO', $sub->tipoLiquidacion);
+        $this->assertSame('0101', $sub->subgrupo);
+        $this->assertSame('-1', $sub->variacion);
+        $this->assertNull($sub->grupo);
+    }
 }
