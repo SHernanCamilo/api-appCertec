@@ -28,6 +28,8 @@ Route::prefix('dashboard')->group(function (): void {
     Route::get('/indicadores',     [FichDashboardController::class, 'indicadores']);
     Route::get('/por-sucursal',    [FichDashboardController::class, 'porSucursal']);
     Route::get('/proximas-vencer', [FichDashboardController::class, 'proximasAVencer']);
+    // KPIs compactos para las tarjetas de la bandeja (aprobadas / en proceso / rechazadas)
+    Route::get('/resumen-bandeja', [FichDashboardController::class, 'resumenBandeja']);
 });
 
 // ── Catálogos y cascadas de formulario ──────────────────────────────────
@@ -37,6 +39,10 @@ Route::prefix('parametros')->group(function (): void {
 
     Route::get('/especialidades/{idEspecialidad}/profesionales', [FichParametroController::class, 'profesionalesPorEspecialidad'])
         ->whereNumber('idEspecialidad');
+
+    // Búsqueda de profesionales desde Fabric (sustituye fich_profesionales local).
+    // GET /fichas-tecnicas/parametros/profesionales/buscar?q=MARIA&limit=30
+    Route::get('/profesionales/buscar', [FichParametroController::class, 'buscarProfesionales']);
     Route::get('/tipos-servicio/{idTipoServicio}/observaciones', [FichParametroController::class, 'observacionesPorTipoServicio'])
         ->whereNumber('idTipoServicio');
 

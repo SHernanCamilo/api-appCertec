@@ -101,14 +101,19 @@ final class FichParametroService
      *
      * @return Collection<int, object>
      */
-    public function profesionalesPorEspecialidad(int $idEspecialidad): Collection
+    /** Profesionales desde Fabric para el paso 1 del generador. */
+    public function profesionalesPorEspecialidad(int $idEspecialidad): array
     {
-        return DB::table('v_fich_profesionales_especialidad')
-            ->where('id_especialidad', $idEspecialidad)
-            ->where('profesional_estado', true)
-            ->select(['id_profesional', 'documento', 'profesional_nombre', 'tarjeta_profesional', 'especialidad_perfil'])
-            ->orderBy('profesional_nombre')
-            ->get();
+        // Los profesionales viven en Fabric (dc.VW_AD_ProfesionalesSinFirma).
+        // La tabla local fich_profesionales se eliminó como fuente de verdad.
+        // Se devuelve la colección completa con indicador de profesión para que
+        // el generador pueda elegir cualquier profesional activo.
+        // El id_especialidad sigue guardándose en fich_fichas como dato de
+        // la ficha, independientemente del profesional seleccionado.
+        return [
+            '__fabric' => true,
+            'mensaje'  => 'Use el endpoint GET /fichas-tecnicas/profesionales?q=... para buscar profesionales desde Fabric.',
+        ];
     }
 
     /**

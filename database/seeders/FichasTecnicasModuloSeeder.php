@@ -18,9 +18,9 @@ class FichasTecnicasModuloSeeder extends Seeder
 {
     /** Rol legacy → rol Spatie del módulo. */
     private const ROLES = [
-        'generador-fichas'      => 'Fichas Técnicas · Generador',
-        'autorizador-fichas'    => 'Fichas Técnicas · Autorizador (Dirección Médica)',
-        'aprobador-fichas'      => 'Fichas Técnicas · Aprobador (VP Financiera)',
+        'generador-fichas'      => 'Fichas Técnicas · Asistente Administrativo (Generador)',
+        'autorizador-fichas'    => 'Fichas Técnicas · Director Médico (Autoriza)',
+        'aprobador-fichas'      => 'Fichas Técnicas · Vicepresidencia Financiera (Aprueba)',
         'parametrizador-fichas' => 'Fichas Técnicas · Parametrizador',
         'visor-fichas'          => 'Fichas Técnicas · Visor',
     ];
@@ -39,14 +39,19 @@ class FichasTecnicasModuloSeeder extends Seeder
             return;
         }
 
-        $guard = config('auth.defaults.guard', 'api');
+        // El módulo se opera vía API (guard `api`, driver JWT), pero el panel de
+        // administración de roles usa el guard `web`. Se crean en AMBOS guards
+        // para que la validación funcione en las dos vías, igual que PermissionsSeeder.
+        $guards = ['api', 'web'];
 
         foreach (self::ROLES as $nombre => $descripcion) {
-            Role::findOrCreate($nombre, $guard);
+            foreach ($guards as $guard) {
+                Role::findOrCreate($nombre, $guard);
+            }
             $this->command?->line("  · rol {$nombre} ({$descripcion})");
         }
 
-        $this->command?->info('✓ '.count(self::ROLES).' roles del módulo Fichas Técnicas');
+        $this->command?->info('✓ '.count(self::ROLES).' roles del módulo Fichas Técnicas (guards: '.implode(', ', $guards).')');
     }
 
     private function crearPlantillaCorreo(): void

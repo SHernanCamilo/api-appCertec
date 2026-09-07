@@ -11,6 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // Idempotente: otras migraciones de esquema completo ya pueden haber creado
+        // esta tabla. Evita el error 1050 "Table already exists" al correr migrate:fresh
+        // (p.ej. en la BD de testing con RefreshDatabase).
+        if (Schema::hasTable('failed_jobs')) {
+            return;
+        }
+
         Schema::create('failed_jobs', function (Blueprint $table) {
             $table->id();
             $table->string('uuid')->unique();

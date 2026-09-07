@@ -51,6 +51,11 @@ Route::prefix('activos-fijos')->group(function () {
     Route::get('localizaciones', [$controller, 'localizaciones']);
     Route::get('responsables', [$controller, 'responsables']);
     Route::get('validar-periodicidad', [$controller, 'validarPeriodicidad']);
+
+    // Localidades / Ubicaciones (cobertura de inventario)
+    Route::get('localidades/activos', [$controller, 'activosPorLocalidad']);
+    Route::get('localidades/exportar', [$controller, 'exportarLocalidades']);
+    Route::get('localidades', [$controller, 'localidades']);
     Route::get('unidades-funcionales', [$controller, 'unidadesFuncionales']);
     Route::get('empleados', [$controller, 'empleados']);
     Route::get('centros-costo', [$controller, 'centrosCosto']);

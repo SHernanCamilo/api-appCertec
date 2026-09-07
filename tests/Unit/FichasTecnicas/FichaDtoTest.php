@@ -61,7 +61,8 @@ final class FichaDtoTest extends TestCase
         $this->assertSame(1500000.75, $dto->vlrContrato);
         $this->assertSame('2026-03-01', $dto->fechaIni->toDateString());
         $this->assertSame('2027-02-28', $dto->fechaFin->toDateString());
-        $this->assertSame([3, 7], $dto->profesionales, 'Debe eliminar profesionales duplicados');
+        // profesionales son códigos Fabric (string), sin duplicados
+        $this->assertSame(['3', '7'], $dto->profesionales, 'Debe eliminar profesionales duplicados y mantener como string');
     }
 
     public function testDetectaSiEsActualizacion(): void

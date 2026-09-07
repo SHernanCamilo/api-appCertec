@@ -32,6 +32,14 @@ class AnticipoServiceTest extends TestCase
     {
         parent::setUp();
 
+        // El servicio inserta registros con user id fijo (radicado_por / subido_por = 1).
+        // Creamos ese usuario para satisfacer las FKs a la tabla users.
+        $this->crearUsuario(1);
+
+        // Los tests de topes usan conceptos 1 (alimentación) y 2 (transporte).
+        // Sembramos la cadena tipo→clase→modalidad→concepto para satisfacer las FKs.
+        $this->crearConceptosBase();
+
         $this->mockResolver = Mockery::mock(WorkflowResolver::class);
         $this->mockExecutor = Mockery::mock(WorkflowExecutor::class);
         $this->mockNotifier = Mockery::mock(WorkflowNotifier::class);
@@ -41,6 +49,65 @@ class AnticipoServiceTest extends TestCase
             $this->mockExecutor,
             $this->mockNotifier
         );
+    }
+
+    /**
+     * Crea un usuario mínimo con id fijo para satisfacer las FKs a la tabla users.
+     */
+    private function crearUsuario(int $id): void
+    {
+        \Illuminate\Support\Facades\DB::table('users')->updateOrInsert(
+            ['id' => $id],
+            [
+                'name' => "Usuario Test {$id}",
+                'email' => "usuario{$id}@test.local",
+                'password' => bcrypt('secret'),
+                'estado' => 1,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]
+        );
+    }
+
+    /**
+     * Siembra la cadena tipo→clase→modalidad→concepto y crea los conceptos
+     * 1 (alimentación) y 2 (transporte) usados por las reglas de topes.
+     */
+    private function crearConceptosBase(): void
+    {
+        $db = \Illuminate\Support\Facades\DB::class;
+        $now = now();
+
+        \Illuminate\Support\Facades\DB::table('anti_tipos')->insert([
+            'id' => 1, 'codigo' => 'VIAJE', 'nombre' => 'Viaje', 'estado' => 1,
+            'created_at' => $now, 'updated_at' => $now,
+        ]);
+        \Illuminate\Support\Facades\DB::table('anti_clases')->insert([
+            'id' => 1, 'id_tipo' => 1, 'codigo' => 'NAL', 'nombre' => 'Nacional', 'estado' => 1,
+            'created_at' => $now, 'updated_at' => $now,
+        ]);
+        // Dos modalidades distintas para respetar el unique (id_tipo,id_clase,id_modalidad) de conceptos.
+        \Illuminate\Support\Facades\DB::table('anti_modalidades')->insert([
+            [
+                'id' => 1, 'id_clase' => 1, 'codigo' => 'ALIM', 'nombre' => 'Alimentación', 'estado' => 1,
+                'created_at' => $now, 'updated_at' => $now,
+            ],
+            [
+                'id' => 2, 'id_clase' => 1, 'codigo' => 'TRANSP', 'nombre' => 'Transporte', 'estado' => 1,
+                'created_at' => $now, 'updated_at' => $now,
+            ],
+        ]);
+        // Concepto 1 = alimentación, Concepto 2 = transporte
+        \Illuminate\Support\Facades\DB::table('anti_conceptos')->insert([
+            [
+                'id' => 1, 'id_tipo' => 1, 'id_clase' => 1, 'id_modalidad' => 1,
+                'es_obligatorio' => 0, 'estado' => 1, 'created_at' => $now, 'updated_at' => $now,
+            ],
+            [
+                'id' => 2, 'id_tipo' => 1, 'id_clase' => 1, 'id_modalidad' => 2,
+                'es_obligatorio' => 1, 'estado' => 1, 'created_at' => $now, 'updated_at' => $now,
+            ],
+        ]);
     }
 
     protected function tearDown(): void
@@ -141,7 +208,7 @@ class AnticipoServiceTest extends TestCase
 
         $solicitud = $this->service->crearSolicitud([
             'id_empleado' => $empleado->id,
-            'id_sede_origen' => 1,
+            'id_sede_origen' => null,
             'id_ciudad_destino' => $ciudad->id,
             'fecha_salida' => '2026-08-15',
             'fecha_regreso' => '2026-08-17',
@@ -182,7 +249,7 @@ class AnticipoServiceTest extends TestCase
 
         $solicitud = $this->service->crearSolicitud([
             'id_empleado' => $empleado->id,
-            'id_sede_origen' => 1,
+            'id_sede_origen' => null,
             'id_ciudad_destino' => $ciudad->id,
             'fecha_salida' => '2026-08-15',
             'fecha_regreso' => '2026-08-17',
@@ -207,7 +274,7 @@ class AnticipoServiceTest extends TestCase
 
         $solicitud = $this->service->crearSolicitud([
             'id_empleado' => $empleado->id,
-            'id_sede_origen' => 1,
+            'id_sede_origen' => null,
             'id_ciudad_destino' => $ciudad->id,
             'fecha_salida' => '2026-08-15',
             'fecha_regreso' => '2026-08-16',
@@ -215,8 +282,8 @@ class AnticipoServiceTest extends TestCase
             'cobertura' => 'nacional',
             'radicado_por' => 1,
             'items' => [
-                ['descripcion' => 'Hospedaje', 'cantidad' => 2, 'valor_unitario' => 100000, 'valor_total' => 200000],
-                ['descripcion' => 'Alimentación', 'cantidad' => 2, 'valor_unitario' => 80000, 'valor_total' => 160000],
+                ['id_concepto' => 2, 'descripcion' => 'Hospedaje', 'cantidad' => 2, 'valor_unitario' => 100000, 'valor_total' => 200000],
+                ['id_concepto' => 1, 'descripcion' => 'Alimentación', 'cantidad' => 2, 'valor_unitario' => 80000, 'valor_total' => 160000],
             ],
         ]);
 
@@ -233,21 +300,17 @@ class AnticipoServiceTest extends TestCase
     {
         $solicitud = AntiSolicitud::factory()->create(['estado' => 'pendiente_jefe_inmediato', 'monto_solicitado' => 500000]);
 
-        $pasoFinanciero = new WfPaso(['rol_aprobador' => 'financiero']);
-        $instanciaEnProgreso = Mockery::mock(WfInstancia::class);
-        $instanciaEnProgreso->shouldReceive('getAttribute')->with('id')->andReturn(1);
+        // Instancia de workflow REAL en progreso, ligada a la solicitud por modulo_record_id.
+        $instancia = $this->crearInstanciaEnProgreso($solicitud->id);
 
+        // El executor (inyectado) avanza y retorna una instancia con paso "financiero".
+        $pasoFinanciero = new WfPaso(['rol_aprobador' => 'financiero']);
         $instanciaAvanzada = Mockery::mock(WfInstancia::class);
         $instanciaAvanzada->shouldReceive('estaCompletado')->andReturn(false);
         $instanciaAvanzada->shouldReceive('getAttribute')->with('pasoActual')->andReturn($pasoFinanciero);
 
-        // Mock del query de WfInstancia
-        WfInstancia::shouldReceive('where')->andReturnSelf();
-        WfInstancia::shouldReceive('enProgreso')->andReturnSelf();
-        WfInstancia::shouldReceive('firstOrFail')->andReturn($instanciaEnProgreso);
-
         $this->mockExecutor->shouldReceive('aprobar')
-            ->with(1, 45, 'Aprobado', null)
+            ->with($instancia->id, 45, 'Aprobado', null)
             ->andReturn($instanciaAvanzada);
 
         $result = $this->service->aprobar($solicitud->id, 45, 'Aprobado', null);
@@ -263,18 +326,13 @@ class AnticipoServiceTest extends TestCase
             'monto_solicitado' => 500000,
         ]);
 
-        $instanciaEnProgreso = Mockery::mock(WfInstancia::class);
-        $instanciaEnProgreso->shouldReceive('getAttribute')->with('id')->andReturn(1);
+        $instancia = $this->crearInstanciaEnProgreso($solicitud->id);
 
         $instanciaCompletada = Mockery::mock(WfInstancia::class);
         $instanciaCompletada->shouldReceive('estaCompletado')->andReturn(true);
 
-        WfInstancia::shouldReceive('where')->andReturnSelf();
-        WfInstancia::shouldReceive('enProgreso')->andReturnSelf();
-        WfInstancia::shouldReceive('firstOrFail')->andReturn($instanciaEnProgreso);
-
         $this->mockExecutor->shouldReceive('aprobar')
-            ->with(1, 78, 'OK', 450000.0)
+            ->with($instancia->id, 78, 'OK', 450000.0)
             ->andReturn($instanciaCompletada);
 
         $result = $this->service->aprobar($solicitud->id, 78, 'OK', 450000);
@@ -288,18 +346,12 @@ class AnticipoServiceTest extends TestCase
     {
         $solicitud = AntiSolicitud::factory()->create(['estado' => 'pendiente_jefe_inmediato']);
 
-        $paso = new WfPaso(['rol_aprobador' => 'jefe_inmediato']);
-        $instancia = Mockery::mock(WfInstancia::class);
-        $instancia->shouldReceive('getAttribute')->with('id')->andReturn(1);
-        $instancia->shouldReceive('getAttribute')->with('pasoActual')->andReturn($paso);
-
-        WfInstancia::shouldReceive('where')->andReturnSelf();
-        WfInstancia::shouldReceive('enProgreso')->andReturnSelf();
-        WfInstancia::shouldReceive('firstOrFail')->andReturn($instancia);
+        // Instancia real en progreso con paso "jefe_inmediato".
+        $instancia = $this->crearInstanciaEnProgreso($solicitud->id, 'jefe_inmediato');
 
         $this->mockExecutor->shouldReceive('rechazar')
-            ->with(1, 45, 'No justificado')
-            ->andReturn($instancia);
+            ->with($instancia->id, 45, 'No justificado')
+            ->andReturn($instancia->fresh());
 
         $result = $this->service->rechazar($solicitud->id, 45, 'No justificado');
 
@@ -504,10 +556,48 @@ class AnticipoServiceTest extends TestCase
 
     private function crearEmpleadoConNivel(int $nivel): Empleado
     {
+        // Empresa + sucursal reales para que crearSolicitud pueda construir el
+        // contexto del flujo (empresa->sucursales->first()->prefijo).
+        $empresa = \App\Models\Empresa::factory()->create();
+        \App\Models\Sucursal::factory()->create([
+            'id_Empresa' => $empresa->id,
+            'prefijo' => 'MA',
+        ]);
+
         $cargo = \App\Models\Cargo::factory()->create(['nivel_jerarquico' => $nivel]);
+
         return Empleado::factory()->create([
             'id_cargo' => $cargo->id_cargo,
+            'id_empresa' => $empresa->id,
             'estado' => true,
+        ]);
+    }
+
+    /**
+     * Crea una instancia de workflow REAL en progreso, ligada a una solicitud por
+     * modulo_record_id, con un paso actual que tiene el rol indicado.
+     *
+     * El servicio (aprobar/rechazar) consulta esta instancia directamente en BD,
+     * por eso debe existir de verdad (no como mock estático).
+     */
+    private function crearInstanciaEnProgreso(int $recordId, string $rolAprobador = 'jefe_inmediato'): WfInstancia
+    {
+        $modulo = \App\Models\Workflow\WfModulo::factory()->create(['codigo' => 'anticipos', 'estado' => true]);
+        $flujo = WfDefinicion::factory()->create(['id_modulo' => $modulo->id, 'estado' => true]);
+        $paso = WfPaso::factory()->create([
+            'id_definicion' => $flujo->id,
+            'orden' => 1,
+            'rol_aprobador' => $rolAprobador,
+            'estado' => true,
+        ]);
+
+        return WfInstancia::factory()->create([
+            'id_definicion' => $flujo->id,
+            'id_modulo' => $modulo->id,
+            'modulo_record_id' => $recordId,
+            'id_paso_actual' => $paso->id,
+            'estado' => WfInstancia::ESTADO_EN_PROGRESO,
+            'solicitante_id' => 1,
         ]);
     }
 }

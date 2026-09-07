@@ -58,6 +58,10 @@ return [
     // Poner en false para forzar siempre la vista SQL.
     'activos_parquet' => filter_var(env('FABRIC_ACTIVOS_PARQUET', true), FILTER_VALIDATE_BOOLEAN),
 
+    // Fichas Técnicas: leer CUPS/homólogos/profesionales desde el parquet local
+    // (rápido) con fallback a la vista SQL en vivo. false = siempre vista SQL.
+    'fichas_parquet' => filter_var(env('FABRIC_FICHAS_PARQUET', true), FILTER_VALIDATE_BOOLEAN),
+
     // TTL (segundos) del caché local de búsqueda de activos. El maestro de Indigo
     // cambia poco; cachear evita el golpe de ~20 s de la vista SQL en búsquedas
     // repetidas. 0 = desactivar caché. Default 30 min.

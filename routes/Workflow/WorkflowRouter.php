@@ -4,80 +4,94 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Workflow\WorkflowController;
 
 /**
- * Rutas del módulo de Administración de Flujos
- * 
- * Prefijo: /api/workflow
- * Middleware: auth:api
+ * Rutas del Motor de Flujos
+ *
+ * Prefijo: /api/workflow  (aplicado desde api.php)
+ * Middleware: auth:api, check.user.active
  */
 
-Route::middleware(['auth:api'])->group(function () {
-    
-    // ========================================================================
-    // MÓDULOS
-    // ========================================================================
-    Route::get('/modulos', [WorkflowController::class, 'listarModulos']);
+// ============================================================================
+// MÓDULOS
+// ============================================================================
+Route::get('/modulos', [WorkflowController::class, 'listarModulos']);
 
-    // ========================================================================
-    // FLUJOS
-    // ========================================================================
-    Route::prefix('flujos')->group(function () {
-        // Listar flujos
-        Route::get('/', [WorkflowController::class, 'listarFlujos']);
-        
-        // Ver detalle
-        Route::get('/{id}', [WorkflowController::class, 'verFlujo']);
-        
-        // Crear flujo
-        Route::post('/', [WorkflowController::class, 'crearFlujo']);
-        
-        // Actualizar flujo
-        Route::put('/{id}', [WorkflowController::class, 'actualizarFlujo']);
-        
-        // Eliminar flujo
-        Route::delete('/{id}', [WorkflowController::class, 'eliminarFlujo']);
+// ============================================================================
+// DEFINICIONES (flujos) — nombres semánticos usados por el frontend
+// ============================================================================
+Route::prefix('definiciones')->group(function () {
+    Route::get('/',        [WorkflowController::class, 'listarDefiniciones']);
+    Route::post('/',       [WorkflowController::class, 'crearDefinicion']);
+    Route::get('/{id}',    [WorkflowController::class, 'verDefinicion']);
+    Route::put('/{id}',    [WorkflowController::class, 'actualizarDefinicion']);
+    Route::delete('/{id}', [WorkflowController::class, 'eliminarDefinicion']);
+    Route::patch('/{id}/toggle-estado', [WorkflowController::class, 'toggleEstadoDefinicion']);
 
-        // ====================================================================
-        // PASOS DE UN FLUJO
-        // ====================================================================
-        Route::prefix('{idFlujo}/pasos')->group(function () {
-            // Listar pasos
-            Route::get('/', [WorkflowController::class, 'listarPasos']);
-            
-            // Agregar paso
-            Route::post('/', [WorkflowController::class, 'agregarPaso']);
-        });
+    Route::get('/{id}/pasos',  [WorkflowController::class, 'listarPasos']);
+    Route::get('/{id}/reglas', [WorkflowController::class, 'listarReglas']);
+});
 
-        // ====================================================================
-        // REGLAS DE UN FLUJO
-        // ====================================================================
-        Route::prefix('{idFlujo}/reglas')->group(function () {
-            // Listar reglas
-            Route::get('/', [WorkflowController::class, 'listarReglas']);
-            
-            // Agregar regla
-            Route::post('/', [WorkflowController::class, 'agregarRegla']);
-        });
-    });
+// ============================================================================
+// FLUJOS — alias legacy (compatibilidad con /sistema/flujos)
+// ============================================================================
+Route::prefix('flujos')->group(function () {
+    Route::get('/',        [WorkflowController::class, 'listarFlujos']);
+    Route::post('/',       [WorkflowController::class, 'crearFlujo']);
+    Route::get('/{id}',    [WorkflowController::class, 'verFlujo']);
+    Route::put('/{id}',    [WorkflowController::class, 'actualizarFlujo']);
+    Route::delete('/{id}', [WorkflowController::class, 'eliminarFlujo']);
 
-    // ========================================================================
-    // PASOS (Operaciones individuales)
-    // ========================================================================
-    Route::prefix('pasos')->group(function () {
-        // Actualizar paso
-        Route::put('/{id}', [WorkflowController::class, 'actualizarPaso']);
-        
-        // Eliminar paso
-        Route::delete('/{id}', [WorkflowController::class, 'eliminarPaso']);
+    Route::get('/{idFlujo}/pasos',   [WorkflowController::class, 'listarPasos']);
+    Route::post('/{idFlujo}/pasos',  [WorkflowController::class, 'agregarPaso']);
+    Route::get('/{idFlujo}/reglas',  [WorkflowController::class, 'listarReglas']);
+    Route::post('/{idFlujo}/reglas', [WorkflowController::class, 'agregarRegla']);
+});
 
-        // ====================================================================
-        // APROBADORES DE UN PASO
-        // ====================================================================
-        Route::prefix('{idPaso}/aprobadores')->group(function () {
-            // Listar aprobadores
-            Route::get('/', [WorkflowController::class, 'listarAprobadores']);
-            
-            // Agregar aprobador
-            Route::post('/', [WorkflowController::class, 'agregarAprobador']);
-        });
-    });
+// ============================================================================
+// PASOS (operaciones individuales)
+// ============================================================================
+Route::prefix('pasos')->group(function () {
+    Route::post('/',       [WorkflowController::class, 'crearPaso']);
+    Route::put('/{id}',    [WorkflowController::class, 'actualizarPaso']);
+    Route::delete('/{id}', [WorkflowController::class, 'eliminarPaso']);
+
+    Route::get('/{idPaso}/aprobadores',  [WorkflowController::class, 'listarAprobadores']);
+    Route::post('/{idPaso}/aprobadores', [WorkflowController::class, 'agregarAprobador']);
+});
+
+// ============================================================================
+// REGLAS (operaciones individuales)
+// ============================================================================
+Route::prefix('reglas')->group(function () {
+    Route::post('/',       [WorkflowController::class, 'crearRegla']);
+    Route::put('/{id}',    [WorkflowController::class, 'actualizarRegla']);
+    Route::delete('/{id}', [WorkflowController::class, 'eliminarRegla']);
+});
+
+// ============================================================================
+// APROBADORES (operaciones individuales)
+// ============================================================================
+Route::prefix('aprobadores')->group(function () {
+    Route::post('/',       [WorkflowController::class, 'crearAprobador']);
+    Route::put('/{id}',    [WorkflowController::class, 'actualizarAprobador']);
+    Route::delete('/{id}', [WorkflowController::class, 'eliminarAprobador']);
+});
+
+// ============================================================================
+// GRUPOS (WfGrupo)
+// ============================================================================
+Route::prefix('grupos')->group(function () {
+    Route::get('/',            [WorkflowController::class, 'listarGrupos']);
+    Route::post('/',           [WorkflowController::class, 'crearGrupo']);
+    Route::get('/{id}',        [WorkflowController::class, 'verGrupo']);
+    Route::put('/{id}',        [WorkflowController::class, 'actualizarGrupo']);
+    Route::delete('/{id}',     [WorkflowController::class, 'eliminarGrupo']);
+    Route::get('/{id}/cargos', [WorkflowController::class, 'listarCargosGrupo']);
+});
+
+// ============================================================================
+// INSTANCIAS (monitoreo)
+// ============================================================================
+Route::prefix('instancias')->group(function () {
+    Route::get('/',     [WorkflowController::class, 'listarInstancias']);
+    Route::get('/{id}', [WorkflowController::class, 'verInstancia']);
 });

@@ -33,7 +33,9 @@ class StoreFichaRequest extends FormRequest
             'fecha_ini'          => ['required', 'date'],
             'fecha_fin'          => ['required', 'date', 'after_or_equal:fecha_ini'],
             'profesionales'      => ['required', 'array', 'min:1'],
-            'profesionales.*'    => ['integer', 'exists:fich_profesionales,id'],
+            // Los profesionales ahora se identifican por código de documento
+            // (string) desde Fabric. El backend hace upsert en fich_profesionales.
+            'profesionales.*'    => ['string', 'max:30'],
             'id_empresa'         => ['nullable', 'integer', 'exists:ent_empresas,id'],
             'id_sucursal'        => ['nullable', 'integer', 'exists:config_ubi_sucursales,id'],
             'sucursal_legacy'    => ['nullable', 'string', 'max:100'],

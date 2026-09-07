@@ -41,6 +41,56 @@ final class FichFichaService
     }
 
     /**
+     * Resuelve códigos de documento (Fabric) a IDs locales de fich_profesionales.
+     *
+     * Hace upsert: crea la fila con datos mínimos si no existe, devuelve el ID
+     * existente si ya está. Así el frontend puede enviar strings sin romper FKs.
+     *
+     * @param  list<string>  $codigos
+     * @return list<int>
+     */
+    public function resolverIdsProfesionales(array $codigos): array
+    {
+        if ($codigos === []) {
+            return [];
+        }
+
+        $ahora = now();
+        $ids   = [];
+
+        foreach (array_unique($codigos) as $codigo) {
+            $codigo = trim((string) $codigo);
+
+            if ($codigo === '') {
+                continue;
+            }
+
+            $existente = DB::table('fich_profesionales')
+                ->where('documento', $codigo)
+                ->value('id');
+
+            if ($existente !== null) {
+                $ids[] = (int) $existente;
+                continue;
+            }
+
+            // Inserta placeholder: nombre se actualiza cuando el parametrizador
+            // confirme la información completa del profesional desde Fabric.
+            $id = DB::table('fich_profesionales')->insertGetId([
+                'documento'  => $codigo,
+                'nombre'     => "PROF-{$codigo}",
+                'estado'     => true,
+                'created_at' => $ahora,
+                'updated_at' => $ahora,
+            ]);
+
+            $ids[] = (int) $id;
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
      * @return list<array<string, mixed>>
      */
     public function alertasPendientes(): array
@@ -198,15 +248,18 @@ final class FichFichaService
     {
         // RN-02 bloquea si algún profesional está comprometido con otra
         // agremiación; RN-01 solo devuelve alertas informativas.
+        // Los códigos de Fabric se resuelven a IDs locales primero.
+        $idsProfesionales = $this->resolverIdsProfesionales($dto->profesionales);
+
         $this->alertasUltimaValidacion = $this->conflictos->validar(
-            $dto->profesionales,
+            $idsProfesionales,
             $dto->fechaIni->toDateString(),
             $dto->fechaFin->toDateString(),
             null,
             $dto->idAgremiacion
         );
 
-        return DB::transaction(function () use ($dto): FichFicha {
+        return DB::transaction(function () use ($dto, $idsProfesionales): FichFicha {
             $this->auditoria->marcarUsuario($dto->idUserReg, 'Creación de la ficha');
 
             $estadoInicial = $dto->esActualizacion()
@@ -226,9 +279,22 @@ final class FichFichaService
 
             $ficha = FichFicha::query()->create($atributos);
 
-            if ($dto->profesionales !== []) {
-                $ficha->profesionales()->attach($dto->profesionales);
+            if ($idsProfesionales !== []) {
+                $ficha->profesionales()->attach($idsProfesionales);
             }
+
+            // Recalcular contadores denormalizados (total_profesionales, total_detalles)
+            // — los triggers no existen en esta BD, usamos el SP.
+            $this->auditoria->recalcularTotales($ficha->id);
+
+            // Historial inicial (sin triggers, lo registramos explícitamente)
+            $this->auditoria->registrarCambioEstado(
+                $ficha->id,
+                null,
+                $ficha->id_estado,
+                $dto->idUserReg,
+                'Ficha creada'
+            );
 
             return $ficha->refresh();
         });
@@ -249,7 +315,7 @@ final class FichFichaService
         $fechaFin = (string) ($data['fecha_fin'] ?? $ficha->fecha_fin->toDateString());
 
         $profesionales = isset($data['profesionales'])
-            ? array_values(array_unique(array_map('intval', (array) $data['profesionales'])))
+            ? $this->resolverIdsProfesionales(array_map('strval', (array) $data['profesionales']))
             : $ficha->profesionales()->pluck('fich_profesionales.id')->map('intval')->all();
 
         // Se excluye la propia ficha: el legacy no lo hacía y bloqueaba su propia edición.
@@ -321,9 +387,13 @@ final class FichFichaService
 
         $this->auditoria->marcarUsuario($usuarioId, 'Servicio agregado');
 
-        return FichDetalle::query()->create(
+        $detalle = FichDetalle::query()->create(
             $dto->toModelAttributes() + ['id_ficha' => $ficha->id]
         );
+
+        $this->auditoria->recalcularTotales($ficha->id);
+
+        return $detalle;
     }
 
     /**
@@ -347,6 +417,8 @@ final class FichFichaService
                 );
             }
 
+            $this->auditoria->recalcularTotales($ficha->id);
+
             return $creados;
         });
     }
@@ -359,6 +431,8 @@ final class FichFichaService
         $this->auditoria->marcarUsuario($usuarioId, 'Servicio modificado');
         $detalle->update($dto->toModelAttributes());
 
+        $this->auditoria->recalcularTotales((int) $detalle->id_ficha);
+
         return $detalle->refresh();
     }
 
@@ -369,6 +443,8 @@ final class FichFichaService
 
         $this->auditoria->marcarUsuario($usuarioId, 'Servicio eliminado');
         $detalle->delete();
+
+        $this->auditoria->recalcularTotales((int) $detalle->id_ficha);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -401,12 +477,13 @@ final class FichFichaService
     /**
      * @param  list<int>  $idsProfesionales
      */
-    public function sincronizarProfesionales(int $idFicha, array $idsProfesionales, int $usuarioId): FichFicha
+    public function sincronizarProfesionales(int $idFicha, array $codigosProfesionales, int $usuarioId): FichFicha
     {
         $ficha = FichFicha::query()->findOrFail($idFicha);
         $this->garantizarEditable($ficha);
 
-        $ids = array_values(array_unique(array_map('intval', $idsProfesionales)));
+        // Los códigos de Fabric se resuelven a IDs locales (upsert).
+        $ids = $this->resolverIdsProfesionales($codigosProfesionales);
 
         $this->alertasUltimaValidacion = $this->conflictos->validar(
             $ids,
@@ -529,6 +606,18 @@ final class FichFichaService
                 $nueva->profesionales()->attach($profesionales);
             }
 
+            // Recalcular contadores (sin triggers)
+            $this->auditoria->recalcularTotales($nueva->id);
+
+            // Historial inicial de la actualización
+            $this->auditoria->registrarCambioEstado(
+                $nueva->id,
+                null,
+                EstadoFicha::OsBorrador->id(),
+                $usuarioId,
+                'Actualización (OS) creada'
+            );
+
             return $nueva->refresh();
         });
     }
@@ -600,7 +689,11 @@ final class FichFichaService
             $query->deEmpresa((int) $filtros['id_empresa']);
         }
 
-        if (! empty($filtros['id_sucursal'])) {
+        // Múltiples sucursales (autorizador con varias asignadas)
+        if (! empty($filtros['id_sucursales']) && is_array($filtros['id_sucursales'])) {
+            $ids = array_map('intval', $filtros['id_sucursales']);
+            $query->whereIn('id_sucursal', $ids);
+        } elseif (! empty($filtros['id_sucursal'])) {
             $query->deSucursal((int) $filtros['id_sucursal']);
         } elseif (! empty($filtros['sucursal_legacy'])) {
             $query->deSucursal((string) $filtros['sucursal_legacy']);

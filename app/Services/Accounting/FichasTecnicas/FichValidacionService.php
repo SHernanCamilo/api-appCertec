@@ -76,6 +76,8 @@ final class FichValidacionService
         $ficha = DB::transaction(function () use ($ficha, $usuarioId, $destino, $nota): FichFicha {
             $this->auditoria->marcarUsuario($usuarioId, $nota);
 
+            $idEstadoAnterior = (int) $ficha->id_estado;
+
             $ficha->update([
                 'id_estado'         => $destino->id(),
                 'fecha_envio_flujo' => now(),
@@ -83,6 +85,7 @@ final class FichValidacionService
             ]);
 
             $this->registrarComentario($ficha, $usuarioId, $destino, $nota);
+            $this->auditoria->registrarCambioEstado($ficha->id, $idEstadoAnterior, $destino->id(), $usuarioId, $nota);
 
             return $ficha->refresh();
         });
@@ -130,6 +133,8 @@ final class FichValidacionService
         $ficha = DB::transaction(function () use ($ficha, $usuarioId, $observacion, $destino): FichFicha {
             $this->auditoria->marcarUsuario($usuarioId, $observacion);
 
+            $idEstadoAnterior = (int) $ficha->id_estado;
+
             $ficha->update([
                 'id_estado'        => $destino->id(),
                 'user_autoriza_id' => $usuarioId,
@@ -138,6 +143,7 @@ final class FichValidacionService
             ]);
 
             $this->registrarComentario($ficha, $usuarioId, $destino, $observacion);
+            $this->auditoria->registrarCambioEstado($ficha->id, $idEstadoAnterior, $destino->id(), $usuarioId, $observacion);
 
             return $ficha->refresh();
         });
@@ -183,6 +189,8 @@ final class FichValidacionService
 
             $this->auditoria->marcarUsuario($usuarioId, $nota);
 
+            $idEstadoAnterior = (int) $ficha->id_estado;
+
             $ficha->update([
                 'id_estado'       => $destino->id(),
                 'consecutivo'     => $consecutivo,
@@ -192,6 +200,7 @@ final class FichValidacionService
             ]);
 
             $this->registrarComentario($ficha, $usuarioId, $destino, $nota);
+            $this->auditoria->registrarCambioEstado($ficha->id, $idEstadoAnterior, $destino->id(), $usuarioId, $nota);
 
             // Cierra el ciclo de vida de la versión que esta ficha reemplaza.
             $this->enlazarVersionAnterior($ficha, $usuarioId);
@@ -239,6 +248,8 @@ final class FichValidacionService
         $ficha = DB::transaction(function () use ($ficha, $usuarioId, $motivo, $destino, $registraComoAprobador): FichFicha {
             $this->auditoria->marcarUsuario($usuarioId, $motivo);
 
+            $idEstadoAnterior = (int) $ficha->id_estado;
+
             $ficha->update([
                 'id_estado' => $destino->id(),
             ] + ($registraComoAprobador
@@ -247,6 +258,7 @@ final class FichValidacionService
             ));
 
             $this->registrarComentario($ficha, $usuarioId, $destino, $motivo);
+            $this->auditoria->registrarCambioEstado($ficha->id, $idEstadoAnterior, $destino->id(), $usuarioId, $motivo);
 
             return $ficha->refresh();
         });
@@ -276,15 +288,19 @@ final class FichValidacionService
         $this->garantizarTransicion($origen, $destino);
 
         return DB::transaction(function () use ($ficha, $usuarioId, $destino): FichFicha {
-            $this->auditoria->marcarUsuario(
-                $usuarioId ?? (int) $ficha->user_aprueba_id,
-                'La ficha entró en vigencia'
-            );
+            $idUsuario = $usuarioId ?? (int) $ficha->user_aprueba_id;
+            $nota      = 'La ficha entró en vigencia';
+
+            $this->auditoria->marcarUsuario($idUsuario, $nota);
+
+            $idEstadoAnterior = (int) $ficha->id_estado;
 
             $ficha->update([
                 'id_estado'             => $destino->id(),
                 'fecha_vigencia_inicio' => now(),
             ]);
+
+            $this->auditoria->registrarCambioEstado($ficha->id, $idEstadoAnterior, $destino->id(), $idUsuario, $nota);
 
             return $ficha->refresh();
         });

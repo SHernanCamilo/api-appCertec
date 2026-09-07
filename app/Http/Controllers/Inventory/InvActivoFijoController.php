@@ -376,6 +376,65 @@ class InvActivoFijoController extends Controller
         return response()->json($resultado);
     }
 
+    // =========================================================================
+    // LOCALIDADES / UBICACIONES (cobertura de inventario)
+    // =========================================================================
+
+    /**
+     * GET /api/inventario/activos-fijos/localidades
+     * Lista de localidades del maestro con su conteo de activos.
+     */
+    public function localidades(): JsonResponse
+    {
+        $resultado = $this->activos->localidadesLista(auth()->user());
+
+        return response()->json($resultado, ($resultado['success'] ?? false) ? 200 : 502);
+    }
+
+    /**
+     * GET /api/inventario/activos-fijos/localidades/activos?localizacion=...&tipo_inventario_id=&desde=&hasta=
+     * Activos de una localidad marcando inventariados vs faltantes.
+     */
+    public function activosPorLocalidad(Request $request): JsonResponse
+    {
+        $request->validate([
+            'localizacion'       => 'required|string|max:255',
+            'tipo_inventario_id' => 'nullable|integer|exists:inv_tipos_inventario,id',
+            'desde'              => 'nullable|date',
+            'hasta'              => 'nullable|date|after_or_equal:desde',
+        ]);
+
+        $resultado = $this->activos->activosPorLocalidad(
+            auth()->user(),
+            $request->only(['localizacion', 'tipo_inventario_id', 'desde', 'hasta'])
+        );
+
+        if (!($resultado['success'] ?? false)) {
+            return response()->json(['success' => false, 'message' => $resultado['message']], $resultado['code'] ?? 400);
+        }
+
+        return response()->json($resultado);
+    }
+
+    /**
+     * GET /api/inventario/activos-fijos/localidades/exportar?localizacion=&tipo_inventario_id=&desde=&hasta=
+     * Exporta la cobertura por localidad (una o todas) en Excel.
+     */
+    public function exportarLocalidades(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $request->validate([
+            'localizacion'       => 'nullable|string|max:255',
+            'tipo_inventario_id' => 'nullable|integer|exists:inv_tipos_inventario,id',
+            'desde'              => 'nullable|date',
+            'hasta'              => 'nullable|date|after_or_equal:desde',
+        ]);
+
+        return $this->activos->exportarLocalidades(
+            auth()->user(),
+            $request->only(['localizacion', 'tipo_inventario_id', 'desde', 'hasta'])
+        );
+    }
+
     /**
      * GET /api/inventory/activos-fijos/validar-periodicidad?placa=021106&tipo_inventario_id=1
      *

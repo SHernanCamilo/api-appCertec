@@ -24,6 +24,13 @@ class WorkflowExecutorTest extends TestCase
     {
         parent::setUp();
 
+        // Los tests referencian usuarios por id (solicitante y aprobadores).
+        // wf_instancias.solicitante_id y wf_aprobaciones.id_user tienen FK a users,
+        // así que los creamos para satisfacer la integridad referencial.
+        $this->crearUsuario(1);
+        $this->crearUsuario(45);
+        $this->crearUsuario(78);
+
         $this->mockNotifier = Mockery::mock(WorkflowNotifier::class);
         $this->mockNotifier->shouldReceive('notificarAprobador')->andReturnNull();
         $this->mockNotifier->shouldReceive('notificarAprobacion')->andReturnNull();
@@ -31,6 +38,24 @@ class WorkflowExecutorTest extends TestCase
         $this->mockNotifier->shouldReceive('esUsuarioAutorizado')->andReturn(true);
 
         $this->executor = new WorkflowExecutor($this->mockNotifier);
+    }
+
+    /**
+     * Crea un usuario mínimo con id fijo para satisfacer las FKs a la tabla users.
+     */
+    private function crearUsuario(int $id): void
+    {
+        \Illuminate\Support\Facades\DB::table('users')->updateOrInsert(
+            ['id' => $id],
+            [
+                'name' => "Usuario Test {$id}",
+                'email' => "usuario{$id}@test.local",
+                'password' => bcrypt('secret'),
+                'estado' => 1,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]
+        );
     }
 
     protected function tearDown(): void

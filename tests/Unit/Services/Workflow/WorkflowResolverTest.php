@@ -194,9 +194,31 @@ class WorkflowResolverTest extends TestCase
         $this->resolver->resolverFlujo('anticipos', ['nivel' => 1, 'id_empresa' => 999]);
     }
 
+    /**
+     * Crea una empresa mínima para satisfacer la FK wf_definiciones.id_empresa → ent_empresas.id.
+     */
+    private function crearEmpresa(int $id = 1): void
+    {
+        \Illuminate\Support\Facades\DB::table('ent_empresas')->insert([
+            'id' => $id,
+            'nombre' => "Empresa Test {$id}",
+            'prefijo' => 'MA',
+            'rep_legal' => 'Rep Legal Test',
+            'cc_rep_legal' => 123456789,
+            'direccion' => 'Calle 1',
+            'telefono' => 6011234567,
+            'nit' => 900123456,
+            'estado' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
     /** @test */
     public function prioriza_flujos_de_empresa_especifica(): void
     {
+        $this->crearEmpresa(1);
+
         $modulo = WfModulo::factory()->create(['codigo' => 'anticipos', 'estado' => true]);
 
         // Flujo genérico

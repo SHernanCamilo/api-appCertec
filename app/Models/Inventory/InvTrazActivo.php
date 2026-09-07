@@ -259,6 +259,16 @@ class InvTrazActivo extends Model
     }
 
     /**
+     * Valor que tenía un campo en Indigo (snapshot de la toma), por clave de
+     * novedad (ej. 'novedad_placa'). Público para reutilizar en reportes.
+     */
+    public function valorOrigenDe(string $campoNovedad): ?string
+    {
+        $origen = $this->valores_origen ?? [];
+        return is_array($origen) ? $this->valorOrigen($campoNovedad, $origen) : null;
+    }
+
+    /**
      * Busca en el snapshot de Fabric el valor que tenía el campo antes.
      *
      * Los nombres de columna de la vista no siempre coinciden con los de la

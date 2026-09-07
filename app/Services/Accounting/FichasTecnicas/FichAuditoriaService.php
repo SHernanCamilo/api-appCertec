@@ -34,6 +34,30 @@ final class FichAuditoriaService
     }
 
     /**
+     * Inserta una entrada en fich_historial_estados.
+     *
+     * Debe llamarse dentro de la transacción de cada cambio de estado, ya que
+     * los triggers no están disponibles en esta BD. Registra el usuario,
+     * el estado anterior, el nuevo estado y la observación.
+     */
+    public function registrarCambioEstado(
+        int $idFicha,
+        ?int $idEstadoAnterior,
+        int $idEstadoNuevo,
+        int $idUsuario,
+        ?string $observacion = null
+    ): void {
+        DB::table('fich_historial_estados')->insert([
+            'id_ficha'           => $idFicha,
+            'id_estado_anterior' => $idEstadoAnterior,
+            'id_estado_nuevo'    => $idEstadoNuevo,
+            'id_usuario'         => $idUsuario,
+            'observacion'        => $observacion,
+            'created_at'         => now(),
+        ]);
+    }
+
+    /**
      * Bitácora completa de una ficha.
      *
      * @return Collection<int, FichHistorialEstado>

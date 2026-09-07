@@ -135,7 +135,8 @@ class FichFichaController extends BaseFichasController
     {
         $datos = $request->validate([
             'profesionales'   => ['required', 'array', 'min:1'],
-            'profesionales.*' => ['integer'],
+            // Los profesionales llegan como códigos de documento (strings desde Fabric).
+            'profesionales.*' => ['string', 'max:30'],
             'fecha_ini'       => ['required', 'date'],
             'fecha_fin'       => ['required', 'date', 'after_or_equal:fecha_ini'],
             'excluir_ficha'   => ['nullable', 'integer'],
@@ -143,8 +144,13 @@ class FichFichaController extends BaseFichasController
         ]);
 
         return $this->ejecutar(function () use ($datos): JsonResponse {
+            // Resolver códigos de Fabric a IDs locales (upsert transparente).
+            $idsProfesionales = $this->fichas->resolverIdsProfesionales(
+                array_map('strval', $datos['profesionales'])
+            );
+
             $resumen = $this->conflictos->resumen(
-                $datos['profesionales'],
+                $idsProfesionales,
                 $datos['fecha_ini'],
                 $datos['fecha_fin'],
                 isset($datos['excluir_ficha']) ? (int) $datos['excluir_ficha'] : null,
@@ -168,11 +174,15 @@ class FichFichaController extends BaseFichasController
     {
         $datos = $request->validate([
             'profesionales'   => ['present', 'array'],
-            'profesionales.*' => ['integer', 'exists:fich_profesionales,id'],
+            'profesionales.*' => ['string', 'max:30'],
         ]);
 
         return $this->ejecutar(function () use ($id, $datos) {
-            $ficha = $this->fichas->sincronizarProfesionales($id, $datos['profesionales'], $this->usuarioId());
+            $ficha = $this->fichas->sincronizarProfesionales(
+                $id,
+                array_map('strval', $datos['profesionales']),
+                $this->usuarioId()
+            );
 
             return [
                 'ficha'   => $ficha,

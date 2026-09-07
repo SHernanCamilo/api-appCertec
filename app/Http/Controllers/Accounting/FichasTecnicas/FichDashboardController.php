@@ -62,4 +62,33 @@ class FichDashboardController extends BaseFichasController
             'Error al obtener las fichas próximas a vencer'
         );
     }
+
+    /**
+     * Resumen compacto para las tarjetas KPI de la bandeja.
+     *
+     * GET /fichas-tecnicas/dashboard/resumen-bandeja
+     *
+     * Devuelve solo los 4 contadores clave que necesita la bandeja:
+     *   - total            : total de fichas en el alcance del usuario
+     *   - en_proceso       : pendientes_autorizacion + pendientes_financiera
+     *   - aprobadas        : fichas aprobadas (incluye vigentes)
+     *   - rechazadas       : fichas en corrección_requerida
+     *   - valor_contratado : suma valor contratos aprobados/vigentes
+     */
+    public function resumenBandeja(Request $request): JsonResponse
+    {
+        return $this->ejecutar(function () use ($request) {
+            $filtros = $this->contextoAlcance($request);
+            $ind     = $this->dashboard->indicadores($filtros);
+
+            return [
+                'total'            => $ind['total'],
+                'en_proceso'       => $ind['en_proceso'],
+                'aprobadas'        => $ind['aprobadas'] + $ind['en_vigencia'],
+                'rechazadas'       => $ind['rechazadas'],
+                'proximas_vencer'  => $ind['proximas_vencer'],
+                'valor_contratado' => $ind['valor_contratado'],
+            ];
+        }, 'Error al obtener el resumen de la bandeja');
+    }
 }

@@ -85,7 +85,7 @@ final class FichConsecutivoService
                 return $this->siguienteParaActualizacion((int) $ficha->id_padre)['consecutivo'];
             }
 
-            $prefijo = $this->prefijoDeEmpresa($ficha);
+            $prefijo = $this->prefijoDeFicha($ficha);
             $anio    = (int) now()->format('Y');
 
             // Bloquea las fichas del mismo prefijo/año antes de calcular.
@@ -107,18 +107,40 @@ final class FichConsecutivoService
             ->exists();
     }
 
-    private function prefijoDeEmpresa(FichFicha $ficha): string
+    /**
+     * Prefijo del consecutivo de la ficha.
+     *
+     * El legacy numeraba por SUCURSAL (DMC, DMA, DMN…), cada una con su propia
+     * secuencia. Se resuelve en cascada:
+     *   1. `prefijo_fichas` de la sucursal (heredado del legacy).
+     *   2. `prefijo` oficial de la sucursal.
+     *   3. `prefijo` de la empresa (respaldo, para fichas sin sucursal).
+     */
+    private function prefijoDeFicha(FichFicha $ficha): string
     {
-        if ($ficha->id_empresa === null) {
-            throw new RuntimeException('La ficha no tiene empresa asignada; no se puede generar el consecutivo.');
+        if ($ficha->id_sucursal !== null) {
+            $sucursal = DB::table('config_ubi_sucursales')
+                ->whereKey($ficha->id_sucursal)
+                ->first(['prefijo', 'prefijo_fichas']);
+
+            $prefijo = $sucursal->prefijo_fichas ?? $sucursal->prefijo ?? null;
+
+            if (is_string($prefijo) && trim($prefijo) !== '') {
+                return strtoupper(trim($prefijo));
+            }
         }
 
-        $prefijo = Empresa::query()->whereKey($ficha->id_empresa)->value('prefijo');
+        // Respaldo: prefijo de la empresa (fichas sin sucursal asignada).
+        if ($ficha->id_empresa !== null) {
+            $prefijo = Empresa::query()->whereKey($ficha->id_empresa)->value('prefijo');
 
-        if (! is_string($prefijo) || trim($prefijo) === '') {
-            throw new RuntimeException("La empresa {$ficha->id_empresa} no tiene prefijo configurado.");
+            if (is_string($prefijo) && trim($prefijo) !== '') {
+                return strtoupper(trim($prefijo));
+            }
         }
 
-        return strtoupper(trim($prefijo));
+        throw new RuntimeException(
+            'La ficha no tiene sucursal ni empresa con prefijo configurado; no se puede generar el consecutivo.'
+        );
     }
 }

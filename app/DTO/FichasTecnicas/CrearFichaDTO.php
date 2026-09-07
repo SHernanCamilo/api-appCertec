@@ -15,7 +15,7 @@ use Illuminate\Support\Carbon;
 final readonly class CrearFichaDTO
 {
     /**
-     * @param  list<int>  $profesionales
+     * @param  list<string>  $profesionales  Códigos de documento desde Fabric.
      */
     public function __construct(
         public int $idAgremiacion,
@@ -46,7 +46,7 @@ final readonly class CrearFichaDTO
             vlrContrato:      self::normalizarMoneda($data['vlr_contrato'] ?? 0),
             fechaIni:         Carbon::parse((string) $data['fecha_ini'])->startOfDay(),
             fechaFin:         Carbon::parse((string) $data['fecha_fin'])->startOfDay(),
-            profesionales:    array_values(array_unique(array_map('intval', (array) ($data['profesionales'] ?? [])))),
+            profesionales:    array_values(array_unique(array_map('strval', (array) ($data['profesionales'] ?? [])))),
             idUserReg:        (int) $data['id_user_reg'],
             idEmpresa:        isset($data['id_empresa']) ? (int) $data['id_empresa'] : null,
             idSucursal:       isset($data['id_sucursal']) ? (int) $data['id_sucursal'] : null,

@@ -18,6 +18,7 @@ class WfGrupo extends Model
     protected $table = 'wf_grupos';
 
     protected $fillable = [
+        'codigo',
         'nombre',
         'descripcion',
         'id_empresa',
@@ -54,6 +55,11 @@ class WfGrupo extends Model
     public function scopePorNombre($query, string $nombre)
     {
         return $query->where('nombre', $nombre);
+    }
+
+    public function scopePorCodigo($query, string $codigo)
+    {
+        return $query->where('codigo', $codigo);
     }
 
     /**

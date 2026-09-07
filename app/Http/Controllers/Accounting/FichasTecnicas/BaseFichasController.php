@@ -13,6 +13,7 @@ use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Throwable;
@@ -127,10 +128,19 @@ abstract class BaseFichasController extends Controller
     /**
      * Contexto de alcance del usuario autenticado.
      *
-     * Implementa la regla R15 del legacy sin exponer los filtros al cliente:
-     *  - Generador (sin rol de validación): solo sus propias fichas.
-     *  - Autorizador: las de su sucursal.
-     *  - Aprobador / parametrizador: todas.
+     * Jerarquía de visibilidad:
+     *  - Aprobador / parametrizador : todas las fichas (sin filtro de sucursal).
+     *  - Autorizador                : su(s) sucursal(es) asignadas en
+     *                                 `fich_autorizador_sucursal` + tipo_alcance:
+     *                                     nacional  → sin filtro
+     *                                     regional  → por id_empresa
+     *                                     sucursal  → lista de id_sucursal
+     *  - Generador (cualquier otro) : solo sus propias fichas + su sucursal.
+     *
+     * Seguridad empresa (tarea 3):
+     *   Si el request incluye `id_empresa`, se valida que ese ID pertenezca a
+     *   las empresas del usuario autenticado (`seg_empresa_user`). Si no tiene
+     *   acceso, se ignora el parámetro y se usa la empresa del contexto/JWT.
      *
      * @return array<string, mixed>
      */
@@ -142,18 +152,23 @@ abstract class BaseFichasController extends Controller
             return [];
         }
 
-        $contexto = UsuarioContexto::query()->where('user_id', $user->id)->first();
+        $contexto  = UsuarioContexto::query()->where('user_id', $user->id)->first();
+        $empresaJwt = $contexto?->empresa_id ?? $user->id_empresa ?? null;
+
+        // ── Seguridad empresa: validar id_empresa del request ──────────────
+        $idEmpresaRequest = $request->integer('id_empresa') ?: null;
+        $idEmpresaSegura  = $this->resolverEmpresaSegura($user->id, $idEmpresaRequest, $empresaJwt);
 
         $filtros = [
             'user_id'    => $user->id,
-            'id_empresa' => $request->integer('id_empresa') ?: $contexto?->empresa_id,
+            'id_empresa' => $idEmpresaSegura,
         ];
 
-        $esAprobador = $this->tieneAlgunRol($user, [self::ROL_APROBADOR, self::ROL_PARAMETRIZADOR]);
+        $esAprobador   = $this->tieneAlgunRol($user, [self::ROL_APROBADOR, self::ROL_PARAMETRIZADOR]);
         $esAutorizador = $this->tieneAlgunRol($user, [self::ROL_AUTORIZADOR]);
 
+        // ── Aprobador: alcance total ───────────────────────────────────────
         if ($esAprobador) {
-            // Alcance total: solo respeta los filtros explícitos del request.
             if ($request->filled('id_sucursal')) {
                 $filtros['id_sucursal'] = $request->integer('id_sucursal');
             }
@@ -161,17 +176,108 @@ abstract class BaseFichasController extends Controller
             return $filtros;
         }
 
+        // ── Autorizador: alcance parametrizable ───────────────────────────
         if ($esAutorizador) {
-            $filtros['id_sucursal'] = $request->integer('id_sucursal') ?: $user->id_sucursal;
-
-            return $filtros;
+            return $this->alcanceAutorizador($user->id, $filtros, $request);
         }
 
-        // Generador: solo lo propio.
+        // ── Generador: solo lo propio ─────────────────────────────────────
         $filtros['solo_propias'] = true;
         $filtros['id_sucursal']  = $user->id_sucursal;
 
         return array_filter($filtros, static fn (mixed $v): bool => $v !== null && $v !== 0 && $v !== '');
+    }
+
+    /**
+     * Verifica que `id_empresa` del request esté en las empresas autorizadas
+     * del usuario. Si no está, retorna la empresa del JWT/contexto.
+     *
+     * @return int|null
+     */
+    private function resolverEmpresaSegura(int $userId, ?int $idEmpresaRequest, mixed $empresaJwt): ?int
+    {
+        if ($idEmpresaRequest === null || $idEmpresaRequest === 0) {
+            return $empresaJwt ? (int) $empresaJwt : null;
+        }
+
+        $tieneAcceso = DB::table('seg_empresa_user')
+            ->where('user_id', $userId)
+            ->where('empresa_id', $idEmpresaRequest)
+            ->exists();
+
+        if (! $tieneAcceso) {
+            Log::warning('[FichasAlcance] id_empresa no autorizada ignorada', [
+                'user_id'            => $userId,
+                'id_empresa_request' => $idEmpresaRequest,
+                'empresa_jwt'        => $empresaJwt,
+            ]);
+
+            return $empresaJwt ? (int) $empresaJwt : null;
+        }
+
+        return $idEmpresaRequest;
+    }
+
+    /**
+     * Resuelve el alcance de un autorizador desde `fich_autorizador_sucursal`.
+     *
+     * Reglas (en orden de prioridad):
+     *   1. Si tiene alguna fila con tipo_alcance = 'nacional' → sin filtro de empresa/sucursal.
+     *   2. Si tiene tipo_alcance = 'regional'                 → filtra por id_empresa.
+     *   3. Si tiene tipo_alcance = 'sucursal'                 → lista de id_sucursal.
+     *   4. Fallback: usa id_sucursal directo del usuario.
+     *
+     * @param  array<string, mixed>  $filtros
+     * @return array<string, mixed>
+     */
+    private function alcanceAutorizador(int $userId, array $filtros, Request $request): array
+    {
+        $alcances = DB::table('fich_autorizador_sucursal')
+            ->where('id_user', $userId)
+            ->where('estado', true)
+            ->get(['id_empresa', 'id_sucursal', 'tipo_alcance']);
+
+        // Sin configuración: fallback a una sucursal
+        if ($alcances->isEmpty()) {
+            $idSuc = $request->integer('id_sucursal') ?: auth('api')->user()?->id_sucursal;
+            $filtros['id_sucursal'] = $idSuc;
+
+            return $filtros;
+        }
+
+        // Prioridad 1: si tiene algún 'nacional', ve todo
+        if ($alcances->where('tipo_alcance', 'nacional')->isNotEmpty()) {
+            if ($request->filled('id_sucursal')) {
+                $filtros['id_sucursal'] = $request->integer('id_sucursal');
+            }
+
+            return $filtros;
+        }
+
+        // Prioridad 2: si tiene 'regional', filtra por empresa (sin id_sucursal)
+        if ($alcances->where('tipo_alcance', 'regional')->isNotEmpty()) {
+            // id_empresa ya está resuelto en $filtros; quitamos sucursal
+            unset($filtros['id_sucursal']);
+
+            return $filtros;
+        }
+
+        // Prioridad 3: 'sucursal' — lista de IDs asignados
+        $sucursales = $alcances
+            ->where('tipo_alcance', 'sucursal')
+            ->pluck('id_sucursal')
+            ->filter()
+            ->unique()
+            ->values()
+            ->toArray();
+
+        if (count($sucursales) === 1) {
+            $filtros['id_sucursal'] = (int) $sucursales[0];
+        } elseif (count($sucursales) > 1) {
+            $filtros['id_sucursales'] = $sucursales; // plural → FichFichaService aplica whereIn
+        }
+
+        return $filtros;
     }
 
     /**

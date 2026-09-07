@@ -973,46 +973,109 @@ class ActivoFijoService
     ): void {
         $sheet->setTitle('Detalle de tomas');
 
-        $headers = [
-            'Placa', 'Artículo', 'Serie', 'Tipo Inventario', 'Resultado',
-            'Localización Indigo', 'Localización Encontrada', 'Estado Físico',
-            'Responsable', 'Observación', 'Inventariador', 'Fecha Toma',
+        $azul   = '4472C4';
+        $azulInd = '5B7FB5'; // columna Indigo (referencia)
+        $naranja = 'C55A11'; // columna Novedad (lo reportado)
+        $blanco = 'FFFFFF';
+
+        // Campos comparables Indigo vs Novedad. clave = columna de novedad.
+        $camposComparables = [
+            'novedad_placa'          => 'Placa',
+            'novedad_articulo'       => 'Artículo',
+            'novedad_marca'          => 'Marca',
+            'novedad_modelo'         => 'Modelo',
+            'novedad_serie'          => 'Serie',
+            'novedad_responsable'    => 'Responsable',
+            'novedad_localizacion'   => 'Localización',
+            'novedad_sucursal'       => 'Sucursal',
+            'novedad_estado_fisico'  => 'Estado Físico',
         ];
 
-        foreach ($headers as $i => $h) {
-            $sheet->setCellValue([$i + 1, 1], $h);
+        // ── Encabezado de UNA SOLA FILA (para que el autofiltro de Excel ────
+        // funcione por cada columna). Cada campo genera dos columnas:
+        // "Campo (Indigo)" y "Campo (Novedad)".
+        $col = 1;
+        $colIndigo  = []; // columnas de tipo Indigo (para estilo)
+        $colNovedad = []; // columnas de tipo Novedad (para estilo)
+        foreach ($camposComparables as $etiqueta) {
+            $sheet->setCellValue([$col, 1], "{$etiqueta} (Indigo)");
+            $colIndigo[] = $col;
+            $sheet->setCellValue([$col + 1, 1], "{$etiqueta} (Novedad)");
+            $colNovedad[] = $col + 1;
+            $col += 2;
         }
-        $sheet->getStyle([1, 1, count($headers), 1])->applyFromArray([
-            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
-            'fill' => [
-                'fillType'   => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
-                'startColor' => ['rgb' => '4472C4'],
-            ],
-        ]);
+        // Metadatos al final
+        foreach (['Tipo Inventario', 'Resultado', 'Observación', 'Inventariador', 'Fecha Toma'] as $h) {
+            $sheet->setCellValue([$col, 1], $h);
+            $col++;
+        }
+        $colFin = $col - 1;
 
+        // Estilo base del encabezado
+        $sheet->getStyle([1, 1, $colFin, 1])->applyFromArray([
+            'font'      => ['bold' => true, 'color' => ['rgb' => $blanco]],
+            'fill'      => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => $azul]],
+            'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER, 'wrapText' => true],
+        ]);
+        // Diferenciar por color: Indigo (azul) vs Novedad (naranja)
+        foreach ($colIndigo as $c) {
+            $sheet->getStyle([$c, 1, $c, 1])->getFill()
+                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                ->getStartColor()->setRGB($azulInd);
+        }
+        foreach ($colNovedad as $c) {
+            $sheet->getStyle([$c, 1, $c, 1])->getFill()
+                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                ->getStartColor()->setRGB($naranja);
+        }
+
+        // ── Datos: una fila por cada toma (toda la trazabilidad, sin agrupar) ──
+        $amarillo = 'FFF3CD'; // resalta la celda de novedad cuando hubo cambio
         $row = 2;
         foreach ($porPlaca as $tomas) {
             foreach ($tomas as $t) {
                 /** @var TrazabilidadActivo $t */
-                $sheet->setCellValue([1, $row], $t->placa);
-                $sheet->setCellValue([2, $row], $t->articulo_nombre);
-                $sheet->setCellValue([3, $row], $t->serie);
-                $sheet->setCellValue([4, $row], $t->tipoInventario?->nombre ?? 'N/A');
-                $sheet->setCellValue([5, $row], $this->etiquetaResultado($t->resultadoInventario()));
-                $sheet->setCellValue([6, $row], $t->localizacion_original);
-                $sheet->setCellValue([7, $row], $t->novedad_localizacion);
-                $sheet->setCellValue([8, $row], $t->novedad_estado_fisico);
-                $sheet->setCellValue([9, $row], $t->novedad_responsable);
-                $sheet->setCellValue([10, $row], $t->observacion);
-                $sheet->setCellValue([11, $row], $t->registrador?->name ?? 'N/A');
-                $sheet->setCellValue([12, $row], $t->created_at?->format('d/m/Y H:i'));
+                $col = 1;
+                foreach ($camposComparables as $campoNovedad => $etiqueta) {
+                    $indigo  = $campoNovedad === 'novedad_localizacion'
+                        ? ($t->localizacion_original ?: $t->valorOrigenDe($campoNovedad))
+                        : $t->valorOrigenDe($campoNovedad);
+                    $novedad = $t->{$campoNovedad};
+
+                    $sheet->setCellValueExplicit([$col, $row], (string) ($indigo ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+                    $sheet->setCellValueExplicit([$col + 1, $row], (string) ($novedad ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+
+                    // Resaltar la celda de novedad cuando difiere de Indigo
+                    if ($novedad !== null && trim((string) $novedad) !== ''
+                        && mb_strtolower(trim((string) $novedad)) !== mb_strtolower(trim((string) ($indigo ?? '')))) {
+                        $sheet->getStyle([$col + 1, $row])->applyFromArray([
+                            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => $amarillo]],
+                            'font' => ['bold' => true],
+                        ]);
+                    }
+                    $col += 2;
+                }
+
+                // Metadatos
+                $sheet->setCellValue([$col++, $row], $t->tipoInventario?->nombre ?? 'N/A');
+                $sheet->setCellValue([$col++, $row], $this->etiquetaResultado($t->resultadoInventario()));
+                $sheet->setCellValueExplicit([$col++, $row], (string) ($t->observacion ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+                $sheet->setCellValue([$col++, $row], $t->registrador?->name ?? 'N/A');
+                $sheet->setCellValue([$col++, $row], $t->created_at?->format('d/m/Y H:i'));
+
                 $row++;
             }
         }
 
-        foreach (range(1, count($headers)) as $col) {
-            $sheet->getColumnDimensionByColumn($col)->setAutoSize(true);
+        // Autofiltro sobre TODO el rango (encabezado de una fila = filtrable por columna)
+        $ultimaCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colFin);
+        $ultimaFila = max(1, $row - 1);
+        $sheet->setAutoFilter("A1:{$ultimaCol}{$ultimaFila}");
+
+        foreach (range(1, $colFin) as $c) {
+            $sheet->getColumnDimensionByColumn($c)->setAutoSize(true);
         }
+        // Congelar la fila de encabezado
         $sheet->freezePane('A2');
     }
 
@@ -1085,6 +1148,275 @@ class ActivoFijoService
         $texto = $partes === [] ? 'Todos los inventarios' : implode('  |  ', $partes);
 
         return "Filtros: {$texto}   ·   Generado: " . now()->format('d/m/Y H:i');
+    }
+
+    // =========================================================================
+    // LOCALIDADES / UBICACIONES (cobertura de inventario)
+    // =========================================================================
+
+    /** Máximo de filas por página que acepta el endpoint parquet-filter. */
+    private const PARQUET_PAGE = 10000;
+
+    /**
+     * Trae TODAS las filas del parquet aplicando filtros, paginando en bloques
+     * (el endpoint parquet-filter topa en 10k por página).
+     *
+     * @param  array<string, mixed> $filtros
+     * @param  list<string> $columns
+     * @return list<array<string, mixed>>|null  null si el maestro no responde
+     */
+    private function traerTodoParquetFilter(array $filtros, array $columns = []): ?array
+    {
+        $todas  = [];
+        $offset = 0;
+
+        do {
+            try {
+                $page = $this->parquet->filter(self::SCHEMA, self::VIEW, $filtros, self::PARQUET_PAGE, $offset, [
+                    'columns' => $columns,
+                    'count'   => $offset === 0, // contar solo en la primera página
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning('ActivoFijoService: fallo paginando parquet', ['error' => $e->getMessage()]);
+                return $offset === 0 ? null : $todas;
+            }
+
+            if (!($page['success'] ?? false)) {
+                return $offset === 0 ? null : $todas;
+            }
+
+            $lote = $page['value'] ?? [];
+            foreach ($lote as $fila) {
+                $todas[] = $fila;
+            }
+
+            $hayMas = ($page['has_next'] ?? false) && count($lote) === self::PARQUET_PAGE;
+            $offset += self::PARQUET_PAGE;
+        } while ($hayMas && $offset < 500000); // tope de seguridad
+
+        return $todas;
+    }
+
+    /**
+     * Lista de localidades (ubicaciones) distintas del maestro de Indigo, con
+     * el conteo de activos de cada una. Cacheada.
+     *
+     * @return array{success: bool, data: list<array{localizacion: string, total_activos: int}>}
+     */
+    public function localidadesLista(User $user): array
+    {
+        if (!$this->usuarioTieneAcceso($user)) {
+            return ['success' => false, 'data' => [], 'message' => 'Sin acceso al maestro de activos.'];
+        }
+
+        $ttl   = (int) config('fabric.activos_busqueda_ttl', 1800);
+        $cache = 'activo_fijo:localidades_conteo';
+
+        if ($ttl > 0) {
+            $cacheado = Cache::get($cache);
+            if (is_array($cacheado)) {
+                return ['success' => true, 'data' => $cacheado];
+            }
+        }
+
+        // Traer solo placa+localización del parquet (paginado, el endpoint topa
+        // en 10k por página) y contar por localidad.
+        $filas = $this->traerTodoParquetFilter([], ['Placa', 'Localizacion']);
+        if ($filas === null) {
+            return ['success' => false, 'data' => [], 'message' => 'El maestro no está disponible en este momento.'];
+        }
+
+        $conteo = [];
+        foreach ($filas as $fila) {
+            $loc = trim((string) ($fila['Localizacion'] ?? $fila['Localización'] ?? ''));
+            if ($loc === '') {
+                continue;
+            }
+            $conteo[$loc] = ($conteo[$loc] ?? 0) + 1;
+        }
+
+        ksort($conteo, SORT_NATURAL | SORT_FLAG_CASE);
+
+        $data = [];
+        foreach ($conteo as $loc => $total) {
+            $data[] = ['localizacion' => $loc, 'total_activos' => $total];
+        }
+
+        if ($ttl > 0) {
+            Cache::put($cache, $data, $ttl);
+        }
+
+        return ['success' => true, 'data' => $data];
+    }
+
+    /**
+     * Activos de una localidad, marcando cuáles ya fueron inventariados y
+     * cuáles faltan. El estado "inventariado" se determina cruzando con
+     * inv_traz_activo (opcionalmente por tipo de inventario y período).
+     *
+     * @param  array<string, mixed> $filtros [localizacion, tipo_inventario_id?, desde?, hasta?]
+     * @return array{success: bool, data?: array<string, mixed>, message?: string, code?: int}
+     */
+    public function activosPorLocalidad(User $user, array $filtros): array
+    {
+        if (!$this->usuarioTieneAcceso($user)) {
+            return ['success' => false, 'message' => 'Sin acceso al maestro de activos.', 'code' => 403];
+        }
+
+        $localizacion = trim((string) ($filtros['localizacion'] ?? ''));
+        if ($localizacion === '') {
+            return ['success' => false, 'message' => 'La localización es obligatoria.', 'code' => 422];
+        }
+
+        // 1) Activos del maestro (Indigo) en esa localidad (paginado por si supera 10k)
+        $activosMaestro = $this->traerTodoParquetFilter(
+            ['Localizacion' => $localizacion], // igualdad exacta
+            ['Placa', 'Articulo', 'Serie', 'Responsable', 'Localizacion', 'Sucursal', 'EstadoActivo']
+        );
+
+        if ($activosMaestro === null) {
+            return ['success' => false, 'message' => 'El maestro no está disponible.', 'code' => 502];
+        }
+
+        // 2) Placas ya inventariadas (cruce con inv_traz_activo)
+        $query = TrazabilidadActivo::query()
+            ->where('es_externo', false)
+            ->select('placa')
+            ->selectRaw('MAX(created_at) as ultima_toma')
+            ->selectRaw('COUNT(*) as tomas')
+            ->groupBy('placa');
+
+        if (!empty($filtros['tipo_inventario_id'])) {
+            $query->where('tipo_inventario_id', (int) $filtros['tipo_inventario_id']);
+        }
+        if (!empty($filtros['desde'])) {
+            $query->whereDate('created_at', '>=', $filtros['desde']);
+        }
+        if (!empty($filtros['hasta'])) {
+            $query->whereDate('created_at', '<=', $filtros['hasta']);
+        }
+
+        $inventariadas = $query->get()->keyBy(fn ($r) => (string) $r->placa);
+
+        // 3) Combinar: cada activo del maestro con su estado de inventario
+        $items = [];
+        $totalInv = 0;
+        foreach ($activosMaestro as $fila) {
+            $placa = (string) ($fila['Placa'] ?? '');
+            $traz  = $inventariadas->get($placa);
+            $inv   = $traz !== null;
+            if ($inv) {
+                $totalInv++;
+            }
+
+            $items[] = [
+                'placa'        => $placa,
+                'articulo'     => (string) ($fila['Articulo'] ?? ''),
+                'serie'        => (string) ($fila['Serie'] ?? ''),
+                'responsable'  => (string) ($fila['Responsable'] ?? ''),
+                'localizacion' => (string) ($fila['Localizacion'] ?? $fila['Localización'] ?? ''),
+                'sucursal'     => (string) ($fila['Sucursal'] ?? ''),
+                'estado'       => (string) ($fila['EstadoActivo'] ?? ''),
+                'inventariado' => $inv,
+                'tomas'        => $inv ? (int) $traz->tomas : 0,
+                'ultima_toma'  => $inv && $traz->ultima_toma
+                    ? \Carbon\Carbon::parse($traz->ultima_toma)->format('d/m/Y H:i')
+                    : null,
+            ];
+        }
+
+        // Ordenar: faltantes primero (para que salten a la vista)
+        usort($items, fn ($a, $b) => ($a['inventariado'] <=> $b['inventariado']) ?: strcmp($a['placa'], $b['placa']));
+
+        $total = count($items);
+
+        return [
+            'success' => true,
+            'data'    => [
+                'localizacion' => $localizacion,
+                'items'        => $items,
+                'resumen'      => [
+                    'total'        => $total,
+                    'inventariados'=> $totalInv,
+                    'faltantes'    => $total - $totalInv,
+                    'cobertura'    => $total > 0 ? round($totalInv / $total * 100, 1) : 0.0,
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * Exporta a Excel la cobertura de inventario por localidad (una localidad o
+     * todas), marcando inventariados vs faltantes.
+     *
+     * @param  array<string, mixed> $filtros [localizacion?, tipo_inventario_id?, desde?, hasta?]
+     */
+    public function exportarLocalidades(User $user, array $filtros = []): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        // Determinar el conjunto de localidades a exportar.
+        $localizacion = trim((string) ($filtros['localizacion'] ?? ''));
+        if ($localizacion !== '') {
+            $localidades = [$localizacion];
+            $sufijo = preg_replace('/[^A-Za-z0-9_\-]/', '', $localizacion) ?: 'localidad';
+        } else {
+            $lista = $this->localidadesLista($user)['data'] ?? [];
+            $localidades = array_map(fn ($l) => $l['localizacion'], $lista);
+            $sufijo = 'todas';
+        }
+
+        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Cobertura por localidad');
+
+        $headers = ['Localización', 'Placa', 'Artículo', 'Serie', 'Responsable', 'Sucursal', 'Estado (Indigo)', 'Inventariado', 'Tomas', 'Última toma'];
+        foreach ($headers as $i => $h) {
+            $sheet->setCellValue([$i + 1, 1], $h);
+        }
+        $sheet->getStyle([1, 1, count($headers), 1])->applyFromArray([
+            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
+            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
+        ]);
+
+        $row = 2;
+        $verde = 'E4F5EA';
+        $rojo  = 'FDE4E4';
+        foreach ($localidades as $loc) {
+            $res = $this->activosPorLocalidad($user, array_merge($filtros, ['localizacion' => $loc]));
+            $items = $res['data']['items'] ?? [];
+            foreach ($items as $it) {
+                $sheet->setCellValue([1, $row], $it['localizacion']);
+                $sheet->setCellValue([2, $row], $it['placa']);
+                $sheet->setCellValue([3, $row], $it['articulo']);
+                $sheet->setCellValue([4, $row], $it['serie']);
+                $sheet->setCellValue([5, $row], $it['responsable']);
+                $sheet->setCellValue([6, $row], $it['sucursal']);
+                $sheet->setCellValue([7, $row], $it['estado']);
+                $sheet->setCellValue([8, $row], $it['inventariado'] ? 'Sí' : 'FALTA');
+                $sheet->setCellValue([9, $row], $it['tomas']);
+                $sheet->setCellValue([10, $row], $it['ultima_toma'] ?? '');
+
+                $sheet->getStyle([8, $row])->applyFromArray([
+                    'font' => ['bold' => true],
+                    'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
+                               'startColor' => ['rgb' => $it['inventariado'] ? $verde : $rojo]],
+                ]);
+                $row++;
+            }
+        }
+
+        foreach (range(1, count($headers)) as $c) {
+            $sheet->getColumnDimensionByColumn($c)->setAutoSize(true);
+        }
+        $sheet->freezePane('A2');
+
+        $filename = 'cobertura_localidad_' . $sufijo . '_' . now()->format('Y-m-d_His') . '.xlsx';
+
+        return response()->streamDownload(function () use ($spreadsheet) {
+            (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet))->save('php://output');
+        }, $filename, [
+            'Content-Type'  => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Cache-Control' => 'max-age=0',
+        ]);
     }
 
     // =========================================================================

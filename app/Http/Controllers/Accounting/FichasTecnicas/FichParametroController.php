@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Accounting\FichasTecnicas;
 
+use App\Services\Accounting\FichasTecnicas\FichFabricService;
 use App\Services\Accounting\FichasTecnicas\FichParametroService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,8 +18,10 @@ use Illuminate\Http\Request;
  */
 class FichParametroController extends BaseFichasController
 {
-    public function __construct(private readonly FichParametroService $parametros)
-    {
+    public function __construct(
+        private readonly FichParametroService $parametros,
+        private readonly FichFabricService $fabric,
+    ) {
     }
 
     public function index(Request $request, string $catalogo): JsonResponse
@@ -66,13 +69,53 @@ class FichParametroController extends BaseFichasController
         );
     }
 
-    /** Profesionales de una especialidad (cascada del paso 1). */
+    /** Profesionales desde Fabric (cascada del paso 1 — sustituye la tabla local vacía). */
     public function profesionalesPorEspecialidad(int $idEspecialidad): JsonResponse
     {
-        return $this->ejecutar(
-            fn () => $this->parametros->profesionalesPorEspecialidad($idEspecialidad),
-            'Error al obtener los profesionales de la especialidad'
-        );
+        // Redirige al endpoint unificado de búsqueda
+        return $this->buscarProfesionales(request());
+    }
+
+    /**
+     * Búsqueda de profesionales desde Fabric.
+     *
+     * GET /fichas-tecnicas/parametros/profesionales/buscar?q=MARIA&limit=20
+     * GET /fichas-tecnicas/parametros/profesionales/buscar?especialidad=ANESTESIOLOGIA&limit=50
+     *
+     * Nota: FichFabricService ya devuelve el envelope {success, data, total}.
+     * No se usa ejecutar() para evitar el doble-wrapping.
+     */
+    public function buscarProfesionales(Request $request): JsonResponse
+    {
+        $q            = trim((string) ($request->query('q', '') ?? ''));
+        $especialidad = trim((string) ($request->query('especialidad', '') ?? ''));
+        $limit        = min(max((int) ($request->query('limit', 50) ?? 50), 5), 200);
+
+        $user = auth('api')->user();
+
+        try {
+            // Por especialidad (cascada del paso 1, sin término mínimo)
+            if ($especialidad !== '') {
+                $resultado = $this->fabric->profesionalesPorEspecialidad($user, $especialidad, $limit);
+                return response()->json($resultado, ($resultado['success'] ?? false) ? 200 : 502);
+            }
+
+            // Por término de búsqueda libre (≥2 chars)
+            if (mb_strlen($q) < 2) {
+                return response()->json(['success' => true, 'data' => [], 'total' => 0]);
+            }
+
+            $resultado = $this->fabric->buscarProfesionales($user, $q, $limit);
+            return response()->json($resultado, ($resultado['success'] ?? false) ? 200 : 502);
+
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('[FichParametro] Error buscando profesionales Fabric', [
+                'error' => $e->getMessage(),
+                'q'     => $q,
+                'esp'   => $especialidad,
+            ]);
+            return response()->json(['success' => false, 'data' => [], 'total' => 0, 'message' => 'Error al consultar Fabric'], 502);
+        }
     }
 
     /** Observaciones aplicables a un tipo de servicio (cascada del paso 2). */
