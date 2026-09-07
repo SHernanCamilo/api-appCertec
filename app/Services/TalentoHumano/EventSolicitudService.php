@@ -1023,11 +1023,30 @@ class EventSolicitudService
                 throw new \RuntimeException('El evento fue anulado y no puede rechazarse.');
             }
 
-            if (!$solicitud->wf_instancia_id) {
+            $instancia = $this->resolverInstanciaDeEvento($solicitud);
+            if (!$instancia) {
                 throw new \RuntimeException('El evento no tiene un flujo de aprobación asociado.');
             }
 
-            $instancia = $this->workflowExecutor->rechazar($solicitud->wf_instancia_id, $userId, $motivoFlujo);
+            $omitirValidacion = false;
+            if ($this->esPasoDigitalizar($instancia)) {
+                if (!$this->usuarioPuedeGestionarPendiente($userId, $instancia, 'digitalizar')) {
+                    throw new \RuntimeException('No tiene permiso para rechazar este evento.');
+                }
+                $omitirValidacion = true;
+            }
+
+            if ((int) $solicitud->wf_instancia_id !== (int) $instancia->id) {
+                $solicitud->wf_instancia_id = $instancia->id;
+                $solicitud->save();
+            }
+
+            $instancia = $this->workflowExecutor->rechazar(
+                $solicitud->wf_instancia_id,
+                $userId,
+                $motivoFlujo,
+                $omitirValidacion
+            );
 
             $solicitud->update([
                 'estado'             => EventoEstadoMapper::desdeInstancia($instancia),
@@ -1054,7 +1073,7 @@ class EventSolicitudService
     }
 
     /**
-     * Indica si el usuario puede aprobar/rechazar el evento en su paso actual.
+     * Indica si el usuario puede aprobar el evento en su paso actual.
      */
     public function puedeAprobar(int $id, int $userId): bool
     {
@@ -1068,6 +1087,31 @@ class EventSolicitudService
 
         if (!$instancia || !$instancia->estaEnProgreso()) {
             return false;
+        }
+
+        return $this->workflowNotifier->esUsuarioAutorizado($userId, $instancia);
+    }
+
+    /**
+     * Indica si el usuario puede rechazar el evento en su paso actual.
+     * En Digitalizar también aplica el permiso digi-evento (misma cola).
+     */
+    public function puedeRechazar(int $id, int $userId): bool
+    {
+        $solicitud = EventHoraExtra::find($id);
+
+        if (!$solicitud || (int) $solicitud->estado === EventoEstadoMapper::ANULADO) {
+            return false;
+        }
+
+        $instancia = $this->resolverInstanciaDeEvento($solicitud);
+
+        if (!$instancia || !$instancia->estaEnProgreso()) {
+            return false;
+        }
+
+        if ($this->esPasoDigitalizar($instancia)) {
+            return $this->usuarioPuedeGestionarPendiente($userId, $instancia, 'digitalizar');
         }
 
         return $this->workflowNotifier->esUsuarioAutorizado($userId, $instancia);
