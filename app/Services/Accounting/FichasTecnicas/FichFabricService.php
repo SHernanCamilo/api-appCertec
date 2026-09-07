@@ -35,6 +35,8 @@ final class FichFabricService
     private const HOMOLOGOS_SCHEMA = 'df';
     private const HOMOLOGOS_VIEW   = 'VW_Contract_CUPS_Homologos';
 
+    private const CUPS_GRUPOS_TTL = 86400; // 24 h — catálogos normativos
+
     private const PROF_SCHEMA = 'dc';
     private const PROF_VIEW   = 'VW_AD_Profesionales'; // 19 cols — confirmado 2026-09-03
 
@@ -113,6 +115,42 @@ final class FichFabricService
         $data = array_map(fn (array $f): array => $this->normalizarHomologo($f), $filas);
 
         return ['success' => true, 'data' => $data, 'total' => count($data)];
+    }
+
+    /**
+     * Homólogos de un CUPS concreto (cascada del paso 2 del generador).
+     * Filtra df.VW_Contract_CUPS_Homologos por la columna CUPS.
+     *
+     * @return array{success: bool, data?: list<array<string, mixed>>, total?: int, message?: string}
+     */
+    public function homologosDeCups(User $user, string $codeCups): array
+    {
+        $codeCups = trim($codeCups);
+
+        if ($codeCups === '') {
+            return ['success' => true, 'data' => [], 'total' => 0];
+        }
+
+        $cacheKey = "fich_fabric:homologos:{$codeCups}";
+        if ($cached = Cache::get($cacheKey)) {
+            return $cached;
+        }
+
+        $filas = $this->consultar(self::HOMOLOGOS_SCHEMA, self::HOMOLOGOS_VIEW, $user, ['CUPS' => $codeCups], 50);
+
+        if ($filas === null) {
+            return ['success' => false, 'data' => [], 'total' => 0, 'message' => 'No se pudo consultar homólogos del CUPS.'];
+        }
+
+        $result = [
+            'success' => true,
+            'data'    => array_map(fn (array $f): array => $this->normalizarHomologo($f), $filas),
+            'total'   => count($filas),
+        ];
+
+        Cache::put($cacheKey, $result, self::CACHE_TTL);
+
+        return $result;
     }
 
     // =========================================================================
@@ -307,14 +345,33 @@ final class FichFabricService
     // Normalización a contrato estable (insensible a casing/separadores)
     // =========================================================================
 
-    /** @param array<string, mixed> $f  @return array<string, mixed> */
+    /**
+     * Normaliza una fila de df.VW_Contract_CUPS.
+     *
+     * Además del contrato original (code/descripcion/…), expone alias
+     * `subcategoria`/`desc_subcat` y `grupo`/`subgrupo` para que el frontend
+     * del generador (paso 2) los consuma igual que el legacy cups_2641.
+     *
+     * @param array<string, mixed> $f  @return array<string, mixed>
+     */
     private function normalizarCups(array $f): array
     {
-        $i = $this->indice($f);
+        $i    = $this->indice($f);
+        $code = $this->val($i, ['Code']);
+        $desc = $this->val($i, ['Description']);
 
         return [
-            'code'             => $this->val($i, ['Code']),
-            'descripcion'      => $this->val($i, ['Description']),
+            'code'             => $code,
+            'descripcion'      => $desc,
+            // Alias que espera el autocomplete del paso 2 (contrato cups_2641)
+            'subcategoria'     => $code,
+            'desc_subcat'      => $desc,
+            // Grupo de facturación (CodGF/Grupo_Fact) y concepto (subgrupo)
+            'grupo'            => $this->val($i, ['CodGF']),
+            'desc_grup'        => $this->val($i, ['Grupo_Fact', 'GrupoFact']),
+            'subgrupo'         => $this->val($i, ['CodigoConcepto']),
+            'desc_subg'        => $this->val($i, ['Concepto_Fact', 'ConceptoFact']),
+            // Campos originales
             'cod_rips'         => $this->val($i, ['CodRIPS']),
             'rips'             => $this->val($i, ['RIPS']),
             'codigo_concepto'  => $this->val($i, ['CodigoConcepto']),
@@ -325,16 +382,111 @@ final class FichFabricService
         ];
     }
 
-    /** @param array<string, mixed> $f  @return array<string, mixed> */
+    // =========================================================================
+    // Grupos y subgrupos de CUPS (desde df.VW_Contract_CUPS, cacheados)
+    // =========================================================================
+
+    /**
+     * Grupos de facturación distintos (CodGF + Grupo_Fact).
+     * Reemplaza ajax/get_grupos.php (SELECT DISTINCT grupo, desc_grup FROM cups_2641).
+     *
+     * @return array{success: bool, data?: list<array<string, mixed>>, total?: int, message?: string}
+     */
+    public function gruposCups(User $user): array
+    {
+        $cacheKey = 'fich_fabric:cups_grupos';
+        if ($cached = Cache::get($cacheKey)) {
+            return $cached;
+        }
+
+        // Traer un lote amplio y agrupar en PHP (Fabric no soporta DISTINCT vía gateway)
+        $filas = $this->consultar(self::CUPS_SCHEMA, self::CUPS_VIEW, $user, [], 10000);
+
+        if ($filas === null) {
+            return ['success' => false, 'data' => [], 'total' => 0, 'message' => 'No se pudo consultar grupos CUPS.'];
+        }
+
+        $grupos = [];
+        foreach ($filas as $fila) {
+            $i    = $this->indice($fila);
+            $cod  = trim((string) ($this->val($i, ['CodGF']) ?? ''));
+            $desc = trim((string) ($this->val($i, ['Grupo_Fact', 'GrupoFact']) ?? ''));
+            if ($cod === '' || isset($grupos[$cod])) {
+                continue;
+            }
+            $grupos[$cod] = ['grupo' => $cod, 'desc_grup' => $cod.' - '.$desc];
+        }
+
+        ksort($grupos);
+        $result = ['success' => true, 'data' => array_values($grupos), 'total' => count($grupos)];
+        Cache::put($cacheKey, $result, self::CUPS_GRUPOS_TTL);
+
+        return $result;
+    }
+
+    /**
+     * Subgrupos (conceptos de facturación) distintos (CodigoConcepto + Concepto_Fact).
+     * Reemplaza ajax/get_subgrupos.php.
+     *
+     * @return array{success: bool, data?: list<array<string, mixed>>, total?: int, message?: string}
+     */
+    public function subgruposCups(User $user): array
+    {
+        $cacheKey = 'fich_fabric:cups_subgrupos';
+        if ($cached = Cache::get($cacheKey)) {
+            return $cached;
+        }
+
+        $filas = $this->consultar(self::CUPS_SCHEMA, self::CUPS_VIEW, $user, [], 10000);
+
+        if ($filas === null) {
+            return ['success' => false, 'data' => [], 'total' => 0, 'message' => 'No se pudo consultar subgrupos CUPS.'];
+        }
+
+        $subgrupos = [];
+        foreach ($filas as $fila) {
+            $i    = $this->indice($fila);
+            $cod  = trim((string) ($this->val($i, ['CodigoConcepto']) ?? ''));
+            $desc = trim((string) ($this->val($i, ['Concepto_Fact', 'ConceptoFact']) ?? ''));
+            if ($cod === '' || isset($subgrupos[$cod])) {
+                continue;
+            }
+            $subgrupos[$cod] = ['subgrupo' => $cod, 'desc_subg' => $cod.' - '.$desc];
+        }
+
+        ksort($subgrupos);
+        $result = ['success' => true, 'data' => array_values($subgrupos), 'total' => count($subgrupos)];
+        Cache::put($cacheKey, $result, self::CUPS_GRUPOS_TTL);
+
+        return $result;
+    }
+
+    /**
+     * Normaliza una fila de df.VW_Contract_CUPS_Homologos.
+     *
+     * Expone alias `code_manual`/`desc_manual` (contrato legacy homologos) para
+     * que el select de homologación del paso 2 los consuma sin cambios.
+     *
+     * @param array<string, mixed> $f  @return array<string, mixed>
+     */
     private function normalizarHomologo(array $f): array
     {
-        $i = $this->indice($f);
+        $i         = $this->indice($f);
+        $codServ   = $this->val($i, ['CodServicioIPS']);
+        $descServ  = $this->val($i, ['DescripcionServicio']);
 
         return [
             'cups'                  => $this->val($i, ['CUPS']),
             'descripcion'           => $this->val($i, ['Descripcion', 'Descripción']),
-            'cod_servicio_ips'      => $this->val($i, ['CodServicioIPS']),
-            'descripcion_servicio'  => $this->val($i, ['DescripcionServicio']),
+            // Alias contrato legacy: code_manual/desc_manual
+            'code_manual'           => $codServ,
+            'desc_manual'           => $descServ,
+            'code_cups'             => $this->val($i, ['CUPS']),
+            'desc_cups'             => $this->val($i, ['Descripcion', 'Descripción']),
+            'valor'                 => null, // Fabric no trae tarifa monetaria directa
+            // Campos originales
+            'cod_servicio_ips'      => $codServ,
+            'descripcion_servicio'  => $descServ,
             'tipo_manual'           => $this->val($i, ['Tipo_Manual', 'TipoManual']),
             'concepto_facturacion'  => $this->val($i, ['Concepto_Facturacion', 'ConceptoFacturacion']),
             'uvr_grupo_qx'          => $this->val($i, ['UVR_Grupo_Qx', 'UVRGrupoQx']),
