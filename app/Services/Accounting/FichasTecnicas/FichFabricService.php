@@ -301,15 +301,23 @@ final class FichFabricService
     // =========================================================================
 
     /**
-     * Consulta una vista de Fabric filtrando por parquet local; si no está
-     * disponible, cae a la vista SQL en vivo. Devuelve las filas crudas o null.
+     * Consulta una vista de Fabric filtrando por parquet local (DuckDB).
+     *
+     * Por defecto usa SOLO el parquet local (rápido, ~90 ms). Si $permitirFallback
+     * es true y el parquet no está disponible, cae a la vista SQL en vivo.
      *
      * @param  array<string, string>  $filtros
      * @return list<array<string, mixed>>|null
      */
-    private function consultar(string $schema, string $view, User $user, array $filtros, int $limit): ?array
-    {
-        // ── Camino rápido: parquet-filter (DuckDB) ───────────────────────
+    private function consultar(
+        string $schema,
+        string $view,
+        User $user,
+        array $filtros,
+        int $limit,
+        bool $permitirFallback = false
+    ): ?array {
+        // ── Camino principal: parquet-filter (DuckDB local) ──────────────
         if (config('fabric.fichas_parquet', true)) {
             try {
                 $res = $this->parquet->filter($schema, $view, $filtros, $limit, 0, ['count' => false]);
@@ -317,15 +325,27 @@ final class FichFabricService
                 if ($res['success'] ?? false) {
                     return $res['value'] ?? [];
                 }
+
+                // Parquet respondió pero sin éxito (p.ej. 409 vista sin parquet)
+                Log::info('[FichFabric] parquet-filter sin datos', [
+                    'view'    => "{$schema}.{$view}",
+                    'status'  => $res['status'] ?? null,
+                    'message' => $res['message'] ?? null,
+                ]);
             } catch (\Throwable $e) {
-                Log::warning('[FichFabric] parquet-filter falló, usando vista SQL', [
+                Log::warning('[FichFabric] parquet-filter error', [
                     'view'  => "{$schema}.{$view}",
                     'error' => $e->getMessage(),
                 ]);
             }
+
+            // Sin fallback → devolver vacío en vez de golpear Fabric SQL en vivo
+            if (! $permitirFallback) {
+                return [];
+            }
         }
 
-        // ── Fallback: vista SQL en vivo vía /api/data/dynamic ────────────
+        // ── Fallback opcional: vista SQL en vivo vía /api/data/dynamic ───
         $res = $this->gateway->queryViewData($user, $schema, $view, [
             'columns'    => [],
             'filters'    => $filtros,
