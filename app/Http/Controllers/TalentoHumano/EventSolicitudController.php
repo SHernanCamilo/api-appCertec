@@ -463,7 +463,7 @@ class EventSolicitudController extends Controller
 
         try {
             $user = auth('api')->user();
-            if (!$user || !$this->service->puedeAprobar($id, $user->id)) {
+            if (!$user || !$this->service->puedeRechazar($id, $user->id)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'No tiene permiso para rechazar este evento',

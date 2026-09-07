@@ -68,7 +68,7 @@ class EventosWorkflowSeeder extends Seeder
         $pasos = [
             ['orden' => 1, 'nombre_paso' => 'Aprobar',     'rol_aprobador' => 'aprobador',     'permiso' => 'apro-evento',  'alcance' => 'uf',        'rechazo' => true],
             ['orden' => 2, 'nombre_paso' => 'Autorizar',   'rol_aprobador' => 'autorizador',   'permiso' => 'auto-evento',  'alcance' => 'sucursal',  'rechazo' => true],
-            ['orden' => 3, 'nombre_paso' => 'Digitalizar', 'rol_aprobador' => 'digitalizador', 'permiso' => 'digi-evento',  'alcance' => 'empresa',   'rechazo' => false],
+            ['orden' => 3, 'nombre_paso' => 'Digitalizar', 'rol_aprobador' => 'digitalizador', 'permiso' => 'digi-evento',  'alcance' => 'empresa',   'rechazo' => true],
         ];
 
         $this->crearPasosConPermiso($flujo->id, $pasos);
@@ -99,7 +99,7 @@ class EventosWorkflowSeeder extends Seeder
 
         $pasos = [
             ['orden' => 1, 'nombre_paso' => 'Autorizar',   'rol_aprobador' => 'autorizador',   'permiso' => 'auto-evento',  'alcance' => 'sucursal', 'rechazo' => true],
-            ['orden' => 2, 'nombre_paso' => 'Digitalizar', 'rol_aprobador' => 'digitalizador', 'permiso' => 'digi-evento',  'alcance' => 'empresa',  'rechazo' => false],
+            ['orden' => 2, 'nombre_paso' => 'Digitalizar', 'rol_aprobador' => 'digitalizador', 'permiso' => 'digi-evento',  'alcance' => 'empresa',  'rechazo' => true],
         ];
 
         $this->crearPasosConPermiso($flujo->id, $pasos);
@@ -132,7 +132,7 @@ class EventosWorkflowSeeder extends Seeder
         $pasos = [
             ['orden' => 1, 'nombre_paso' => 'Aprobar (otra empresa)', 'rol_aprobador' => 'aprobador',     'permiso' => 'apro-evento', 'alcance' => 'empresa',  'rechazo' => true],
             ['orden' => 2, 'nombre_paso' => 'Autorizar',              'rol_aprobador' => 'autorizador',   'permiso' => 'auto-evento', 'alcance' => 'sucursal', 'rechazo' => true],
-            ['orden' => 3, 'nombre_paso' => 'Digitalizar',            'rol_aprobador' => 'digitalizador', 'permiso' => 'digi-evento', 'alcance' => 'empresa',  'rechazo' => false],
+            ['orden' => 3, 'nombre_paso' => 'Digitalizar',            'rol_aprobador' => 'digitalizador', 'permiso' => 'digi-evento', 'alcance' => 'empresa',  'rechazo' => true],
         ];
 
         $this->crearPasosConPermiso($flujo->id, $pasos);

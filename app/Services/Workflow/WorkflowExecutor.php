@@ -176,20 +176,24 @@ class WorkflowExecutor
      * @param int $instanciaId ID de la instancia
      * @param int $userId Usuario que rechaza
      * @param string $comentario Motivo del rechazo
+     * @param bool $omitirValidacionAutorizacion Permite rechazar con permiso de digitalizador
      *
      * @return WfInstancia
      */
-    public function rechazar(int $instanciaId, int $userId, string $comentario): WfInstancia
-    {
-        return DB::transaction(function () use ($instanciaId, $userId, $comentario) {
+    public function rechazar(
+        int $instanciaId,
+        int $userId,
+        string $comentario,
+        bool $omitirValidacionAutorizacion = false
+    ): WfInstancia {
+        return DB::transaction(function () use ($instanciaId, $userId, $comentario, $omitirValidacionAutorizacion) {
             $instancia = WfInstancia::with(['pasoActual', 'solicitante'])->findOrFail($instanciaId);
 
             if (!$instancia->estaEnProgreso()) {
                 throw new \Exception("La instancia no está en progreso");
             }
 
-            // Validar que el usuario esté autorizado para aprobar este paso
-            if (!$this->notifier->esUsuarioAutorizado($userId, $instancia)) {
+            if (!$omitirValidacionAutorizacion && !$this->notifier->esUsuarioAutorizado($userId, $instancia)) {
                 throw new \Exception("No estás autorizado para rechazar este paso");
             }
 
