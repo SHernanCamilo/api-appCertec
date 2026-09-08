@@ -36,6 +36,9 @@ class StoreFichaRequest extends FormRequest
             // Los profesionales ahora se identifican por código de documento
             // (string) desde Fabric. El backend hace upsert en fich_profesionales.
             'profesionales.*'    => ['string', 'max:30'],
+            // Mapa opcional código→nombre del profesional (para no guardar "PROF-xxx").
+            'profesionales_info'   => ['nullable', 'array'],
+            'profesionales_info.*' => ['nullable', 'string', 'max:255'],
             'id_empresa'         => ['nullable', 'integer', 'exists:ent_empresas,id'],
             'id_sucursal'        => ['nullable', 'integer', 'exists:config_ubi_sucursales,id'],
             'sucursal_legacy'    => ['nullable', 'string', 'max:100'],

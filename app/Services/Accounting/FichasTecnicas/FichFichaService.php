@@ -49,7 +49,7 @@ final class FichFichaService
      * @param  list<string>  $codigos
      * @return list<int>
      */
-    public function resolverIdsProfesionales(array $codigos): array
+    public function resolverIdsProfesionales(array $codigos, array $nombres = []): array
     {
         if ($codigos === []) {
             return [];
@@ -65,20 +65,37 @@ final class FichFichaService
                 continue;
             }
 
+            // Nombre real enviado por el frontend (mapa código→nombre). Puede
+            // venir como "DOCUMENTO - NOMBRE"; nos quedamos solo con el nombre.
+            $nombreReal = $this->nombreProfesionalDesdeMapa($nombres, $codigo);
+
             $existente = DB::table('fich_profesionales')
                 ->where('documento', $codigo)
                 ->value('id');
 
             if ($existente !== null) {
+                // Si teníamos un placeholder ("PROF-xxx") y ahora conocemos el
+                // nombre real, lo actualizamos; nunca lo sobreescribimos con vacío.
+                if ($nombreReal !== null) {
+                    DB::table('fich_profesionales')
+                        ->where('id', $existente)
+                        ->where(function ($q) use ($codigo): void {
+                            $q->whereNull('nombre')
+                              ->orWhere('nombre', '')
+                              ->orWhere('nombre', "PROF-{$codigo}");
+                        })
+                        ->update(['nombre' => $nombreReal, 'updated_at' => $ahora]);
+                }
+
                 $ids[] = (int) $existente;
                 continue;
             }
 
-            // Inserta placeholder: nombre se actualiza cuando el parametrizador
-            // confirme la información completa del profesional desde Fabric.
+            // Nombre no es obligatorio: si no lo conocemos usamos el documento
+            // como placeholder legible (antes era "PROF-xxx").
             $id = DB::table('fich_profesionales')->insertGetId([
                 'documento'  => $codigo,
-                'nombre'     => "PROF-{$codigo}",
+                'nombre'     => $nombreReal ?? $codigo,
                 'estado'     => true,
                 'created_at' => $ahora,
                 'updated_at' => $ahora,
@@ -88,6 +105,30 @@ final class FichFichaService
         }
 
         return array_values(array_unique($ids));
+    }
+
+    /**
+     * Extrae el nombre real de un profesional desde el mapa código→nombre.
+     *
+     * Acepta el valor tal cual ("MARIA PEREZ") o en formato "DOCUMENTO - NOMBRE"
+     * ("123 - MARIA PEREZ"), del cual se toma solo la parte del nombre. Devuelve
+     * null si no hay nombre útil (para no pisar datos existentes con vacíos).
+     */
+    private function nombreProfesionalDesdeMapa(array $nombres, string $codigo): ?string
+    {
+        $valor = trim((string) ($nombres[$codigo] ?? ''));
+
+        if ($valor === '') {
+            return null;
+        }
+
+        // "123 - MARIA PEREZ" → "MARIA PEREZ"
+        if (str_contains($valor, ' - ')) {
+            $partes = explode(' - ', $valor, 2);
+            $valor  = trim($partes[1] ?? $partes[0]);
+        }
+
+        return $valor !== '' ? mb_substr($valor, 0, 255) : null;
     }
 
     /**
@@ -249,7 +290,7 @@ final class FichFichaService
         // RN-02 bloquea si algún profesional está comprometido con otra
         // agremiación; RN-01 solo devuelve alertas informativas.
         // Los códigos de Fabric se resuelven a IDs locales primero.
-        $idsProfesionales = $this->resolverIdsProfesionales($dto->profesionales);
+        $idsProfesionales = $this->resolverIdsProfesionales($dto->profesionales, $dto->profesionalesInfo);
 
         $this->alertasUltimaValidacion = $this->conflictos->validar(
             $idsProfesionales,

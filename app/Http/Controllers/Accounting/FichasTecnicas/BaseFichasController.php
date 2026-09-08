@@ -183,7 +183,7 @@ abstract class BaseFichasController extends Controller
 
         // ── Generador: solo lo propio ─────────────────────────────────────
         $filtros['solo_propias'] = true;
-        $filtros['id_sucursal']  = $user->id_sucursal;
+        $filtros['id_sucursal']  = $this->sucursalExistenteONull($user->id_sucursal);
 
         return array_filter($filtros, static fn (mixed $v): bool => $v !== null && $v !== 0 && $v !== '');
     }
@@ -197,7 +197,7 @@ abstract class BaseFichasController extends Controller
     private function resolverEmpresaSegura(int $userId, ?int $idEmpresaRequest, mixed $empresaJwt): ?int
     {
         if ($idEmpresaRequest === null || $idEmpresaRequest === 0) {
-            return $empresaJwt ? (int) $empresaJwt : null;
+            return $this->empresaExistenteONull($empresaJwt ? (int) $empresaJwt : null);
         }
 
         $tieneAcceso = DB::table('seg_empresa_user')
@@ -212,10 +212,66 @@ abstract class BaseFichasController extends Controller
                 'empresa_jwt'        => $empresaJwt,
             ]);
 
-            return $empresaJwt ? (int) $empresaJwt : null;
+            return $this->empresaExistenteONull($empresaJwt ? (int) $empresaJwt : null);
         }
 
-        return $idEmpresaRequest;
+        return $this->empresaExistenteONull($idEmpresaRequest);
+    }
+
+    /**
+     * Devuelve el id de empresa solo si existe realmente en `ent_empresas`.
+     *
+     * El JWT/contexto puede arrastrar un id de empresa legacy o de otro tenant
+     * (p. ej. 1973) que no corresponde a ninguna fila de `ent_empresas`. Usarlo
+     * directamente rompe la FK `fk_ffic_empresa` al crear la ficha. La columna
+     * `id_empresa` es nullable, así que ante un id inexistente devolvemos null
+     * en lugar de provocar una violación de integridad.
+     */
+    private function empresaExistenteONull(?int $idEmpresa): ?int
+    {
+        if ($idEmpresa === null || $idEmpresa === 0) {
+            return null;
+        }
+
+        $existe = DB::table('ent_empresas')->where('id', $idEmpresa)->exists();
+
+        if (! $existe) {
+            Log::warning('[FichasAlcance] id_empresa inexistente en ent_empresas, se usa null', [
+                'id_empresa' => $idEmpresa,
+            ]);
+
+            return null;
+        }
+
+        return $idEmpresa;
+    }
+
+    /**
+     * Devuelve el id de sucursal solo si existe en `config_ubi_sucursales`.
+     *
+     * Mismo problema que `empresaExistenteONull`: el id_sucursal del usuario
+     * puede ser un valor legacy que no corresponde a la tabla de sucursales,
+     * lo que rompería la FK al crear la ficha. La columna es nullable.
+     */
+    private function sucursalExistenteONull(mixed $idSucursal): ?int
+    {
+        $id = (int) $idSucursal;
+
+        if ($id === 0) {
+            return null;
+        }
+
+        $existe = DB::table('config_ubi_sucursales')->where('id', $id)->exists();
+
+        if (! $existe) {
+            Log::warning('[FichasAlcance] id_sucursal inexistente en config_ubi_sucursales, se usa null', [
+                'id_sucursal' => $id,
+            ]);
+
+            return null;
+        }
+
+        return $id;
     }
 
     /**

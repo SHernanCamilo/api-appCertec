@@ -31,6 +31,8 @@ final readonly class CrearFichaDTO
         public ?string $sucursalLegacy = null,
         public ?int $idPadre = null,
         public ?string $obsOs = null,
+        /** @var array<string, string> Mapa código→nombre del profesional (opcional). */
+        public array $profesionalesInfo = [],
     ) {
     }
 
@@ -53,7 +55,32 @@ final readonly class CrearFichaDTO
             sucursalLegacy:   isset($data['sucursal_legacy']) ? (string) $data['sucursal_legacy'] : null,
             idPadre:          isset($data['id_padre']) ? (int) $data['id_padre'] : null,
             obsOs:            isset($data['obs_os']) ? (string) $data['obs_os'] : null,
+            profesionalesInfo: self::normalizarInfoProfesionales($data['profesionales_info'] ?? []),
         );
+    }
+
+    /**
+     * Normaliza el mapa código→nombre de profesionales a array<string,string>.
+     *
+     * @param  mixed  $info
+     * @return array<string, string>
+     */
+    private static function normalizarInfoProfesionales(mixed $info): array
+    {
+        if (! is_array($info)) {
+            return [];
+        }
+
+        $mapa = [];
+        foreach ($info as $codigo => $nombre) {
+            $codigo = trim((string) $codigo);
+            $nombre = trim((string) $nombre);
+            if ($codigo !== '' && $nombre !== '') {
+                $mapa[$codigo] = $nombre;
+            }
+        }
+
+        return $mapa;
     }
 
     /**
