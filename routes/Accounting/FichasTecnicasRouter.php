@@ -53,7 +53,7 @@ Route::prefix('parametros')->group(function (): void {
 
     // CRUD genérico: agremiaciones | profesionales | especialidades |
     // tipos-servicio | objetos-contrato | obs-items | homologos
-    $catalogos = 'agremiaciones|profesionales|especialidades|tipos-servicio|objetos-contrato|obs-items|homologos';
+    $catalogos = 'agremiaciones|profesionales|especialidades|tipos-servicio|objetos-contrato|obs-items|homologos|formas-pago';
 
     Route::get('/{catalogo}',                    [FichParametroController::class, 'index'])->where('catalogo', $catalogos);
     Route::post('/{catalogo}',                   [FichParametroController::class, 'store'])->where('catalogo', $catalogos);

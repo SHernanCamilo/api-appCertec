@@ -59,6 +59,7 @@ class FichFicha extends Model
         'sucursal_legacy',
         'id_agremiacion',
         'id_objeto_contrato',
+        'id_forma_pago',
         'id_especialidad',
         'vlr_contrato',
         'fecha_ini',
@@ -132,6 +133,11 @@ class FichFicha extends Model
     public function objetoContrato(): BelongsTo
     {
         return $this->belongsTo(FichObjetoContrato::class, 'id_objeto_contrato');
+    }
+
+    public function formaPago(): BelongsTo
+    {
+        return $this->belongsTo(FichFormaPago::class, 'id_forma_pago');
     }
 
     public function empresa(): BelongsTo

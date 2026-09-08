@@ -29,6 +29,7 @@ class StoreFichaRequest extends FormRequest
             'id_agremiacion'     => ['required', 'integer', 'exists:fich_agremiaciones,id'],
             'id_objeto_contrato' => ['required', 'integer', 'exists:fich_objetos_contrato,id'],
             'id_especialidad'    => ['required', 'integer', 'exists:fich_especialidades,id'],
+            'id_forma_pago'      => ['nullable', 'integer', 'exists:fich_formas_pago,id'],
             'vlr_contrato'       => ['required'],
             'fecha_ini'          => ['required', 'date'],
             'fecha_fin'          => ['required', 'date', 'after_or_equal:fecha_ini'],

@@ -6,6 +6,7 @@ namespace App\Services\Accounting\FichasTecnicas;
 
 use App\Models\Accounting\FichasTecnicas\FichAgremiacion;
 use App\Models\Accounting\FichasTecnicas\FichEspecialidad;
+use App\Models\Accounting\FichasTecnicas\FichFormaPago;
 use App\Models\Accounting\FichasTecnicas\FichHomologo;
 use App\Models\Accounting\FichasTecnicas\FichObjetoContrato;
 use App\Models\Accounting\FichasTecnicas\FichObsItem;
@@ -38,6 +39,7 @@ final class FichParametroService
         'objetos-contrato' => FichObjetoContrato::class,
         'obs-items'        => FichObsItem::class,
         'homologos'        => FichHomologo::class,
+        'formas-pago'      => FichFormaPago::class,
     ];
 
     /**
@@ -87,8 +89,8 @@ final class FichParametroService
             'especialidades'   => FichEspecialidad::query()->activas()->orderBy('descripcion')->get(['id', 'descripcion', 'perfil']),
             'objetos_contrato' => FichObjetoContrato::query()->activos()->orderBy('descripcion')->get(['id', 'descripcion']),
             'tipos_servicio'   => FichTipoServicio::query()->activos()->orderBy('descripcion')->get(['id', 'descripcion']),
-            'formas_pago'      => collect(\App\Models\Accounting\FichasTecnicas\FichDetalle::FORMAS_PAGO)
-                ->map(static fn (string $v): array => ['value' => $v, 'label' => $v]),
+            // Catálogo parametrizable de plazos de pago (60/90/120 días…).
+            'formas_pago'      => FichFormaPago::query()->activos()->orderBy('dias')->get(['id', 'descripcion', 'dias']),
             'perfiles'         => collect(FichEspecialidad::PERFILES)
                 ->map(static fn (string $v): array => ['value' => $v, 'label' => $v]),
         ];
@@ -286,6 +288,11 @@ final class FichParametroService
             ],
             'objetos-contrato' => [
                 'descripcion' => "{$modo}|string|max:500",
+                'estado'      => 'nullable|boolean',
+            ],
+            'formas-pago' => [
+                'descripcion' => "{$modo}|string|max:150",
+                'dias'        => 'nullable|integer|min:0|max:3650',
                 'estado'      => 'nullable|boolean',
             ],
             'obs-items' => [

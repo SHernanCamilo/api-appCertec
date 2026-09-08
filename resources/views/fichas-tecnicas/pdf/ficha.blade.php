@@ -117,7 +117,7 @@
             <td class="left">Presentación Factura:</td>
             <td class="left">Último día hábil de cada mes</td>
             <td class="left">Forma de Pago:</td>
-            <td class="left">90 Días Hábiles</td>
+            <td class="left">{{ $ficha->formaPago->descripcion ?? '90 DÍAS HÁBILES' }}</td>
         </tr>
         <tr>
             <td class="left">Objeto del Contrato:</td>
