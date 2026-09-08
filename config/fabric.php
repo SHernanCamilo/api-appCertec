@@ -38,7 +38,12 @@ return [
 
     // Máximo de filas que se abren en el visor web. Por encima de este volumen
     // la vista se abre en JadeOne Desktop: el navegador no sostiene el dataset.
-    'web_max_rows' => (int) env('FABRIC_WEB_MAX_ROWS', 250000),
+    //
+    // Fijo en 200.000: vistas anchas como gd.VW_Glosa_GlosasPorConcepto_Tja
+    // (241K filas × 58 columnas ≈ 14M celdas) ahogaban el navegador con 250K.
+    // A 200.000 esas vistas grandes se derivan a JadeOne Desktop, donde el
+    // volumen sí se maneja. No se usa variable de entorno a propósito.
+    'web_max_rows' => 200000,
 
     // TTL del mapa de filas por vista que alimenta la decisión web/desktop (segundos)
     'row_counts_cache_ttl' => (int) env('FABRIC_ROW_COUNTS_CACHE_TTL', 900),
