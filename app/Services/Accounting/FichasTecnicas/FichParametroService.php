@@ -120,11 +120,34 @@ final class FichParametroService
         // módulo — NO "todas", porque los nombres de sucursal se repiten entre
         // empresas (p. ej. "Sucursal Bogota" existe en varias) y saldrían
         // duplicados en el selector.
-        $idEmpresa = (int) ($contexto?->empresa_id ?? ($user->id_empresa ?? 0));
+        //
+        // Nota: `users` no tiene columna `id_empresa` (la sucursal del usuario
+        // vive en `id_sucursal`), así que el fallback real es el contexto o el
+        // default del módulo.
+        $idEmpresa = (int) ($contexto?->empresa_id ?? 0);
         if ($idEmpresa <= 0) {
             $idEmpresa = self::EMPRESA_DEFAULT;
         }
 
+        $sucursales = $this->sucursalesDeEmpresa($idEmpresa);
+
+        // Contexto obsoleto o inválido (p. ej. empresa_id que ya no existe en
+        // `config_ubi_sucursales`): caemos a la empresa por defecto para no
+        // dejar el selector vacío y bloquear la creación de la ficha.
+        if ($sucursales->isEmpty() && $idEmpresa !== self::EMPRESA_DEFAULT) {
+            $sucursales = $this->sucursalesDeEmpresa(self::EMPRESA_DEFAULT);
+        }
+
+        return $sucursales;
+    }
+
+    /**
+     * Sucursales activas de una empresa, ordenadas por nombre.
+     *
+     * @return Collection<int, object>
+     */
+    private function sucursalesDeEmpresa(int $idEmpresa): Collection
+    {
         return \App\Models\Sucursal::query()
             ->where('id_Empresa', $idEmpresa)
             ->orderBy('nombre')

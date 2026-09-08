@@ -460,6 +460,79 @@ final class FichAlcanceSeguridadTest extends TestCase
     }
 
     // =========================================================================
+    // Selector de sucursales del paso 1 (opcionesFormulario)
+    // =========================================================================
+
+    /**
+     * El generador debe ver las sucursales de la empresa de su contexto.
+     */
+    /** @test */
+    public function test_opciones_trae_sucursales_de_la_empresa_del_contexto(): void
+    {
+        $userId = $this->crearUsuario('generador-fichas');
+        $this->fijarContextoEmpresa($userId, $this->empresaId);
+
+        $sucursales = $this->sucursalesDelFormularioComo($userId);
+
+        $this->assertNotEmpty($sucursales, 'Debe traer sucursales de la empresa del contexto.');
+        foreach ($sucursales as $s) {
+            $this->assertSame($this->empresaId, (int) $s->id_Empresa);
+        }
+    }
+
+    /**
+     * Regresión: si el contexto apunta a una empresa inválida o sin sucursales
+     * (p. ej. un empresa_id obsoleto como 1973 que no existe en
+     * config_ubi_sucursales), NO debe devolver vacío — cae a la empresa por
+     * defecto del módulo para no bloquear el formulario.
+     */
+    /** @test */
+    public function test_contexto_con_empresa_sin_sucursales_cae_al_default(): void
+    {
+        $userId = $this->crearUsuario('generador-fichas');
+        // Empresa inexistente en config_ubi_sucursales.
+        $this->fijarContextoEmpresa($userId, 999999);
+
+        $sucursales = $this->sucursalesDelFormularioComo($userId);
+
+        $this->assertNotEmpty(
+            $sucursales,
+            'Un contexto con empresa sin sucursales debe caer al default, no quedar vacío.'
+        );
+    }
+
+    /**
+     * Fija (o crea) el contexto de empresa del usuario en seg_usuario_contexto.
+     */
+    private function fijarContextoEmpresa(int $userId, int $empresaId): void
+    {
+        DB::table('seg_usuario_contexto')->updateOrInsert(
+            ['user_id' => $userId],
+            [
+                'empresa_id'           => $empresaId,
+                'ultima_actualizacion' => now(),
+                'updated_at'           => now(),
+                'created_at'           => now(),
+            ]
+        );
+    }
+
+    /**
+     * Ejecuta opcionesFormulario() autenticado como el usuario dado y devuelve
+     * la colección de sucursales.
+     */
+    private function sucursalesDelFormularioComo(int $userId): \Illuminate\Support\Collection
+    {
+        $user = \App\Models\User::query()->find($userId);
+        $this->actingAs($user, 'api');
+
+        $opciones = app(\App\Services\Accounting\FichasTecnicas\FichParametroService::class)
+            ->opcionesFormulario();
+
+        return collect($opciones['sucursales']);
+    }
+
+    // =========================================================================
     // HELPERS privados
     // =========================================================================
 
