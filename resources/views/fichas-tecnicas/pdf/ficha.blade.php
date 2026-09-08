@@ -75,12 +75,14 @@
         .hdr-ctrl-wrap { padding: 0; }
         .hdr-ctrl-tbl  { margin: 0; border: 0; }
         .hdr-ctrl-tbl td {
-            font-size: 6.8px;
+            font-size: 6.5px;
+            padding: 2px 3px;
             border-top: 0;
             border-right: 0;
+            white-space: nowrap;
         }
         .hdr-ctrl-tbl tr:last-child td { border-bottom: 0; }
-        .hdr-ctrl-tbl tr td:first-child { border-left: 0; }
+        .hdr-ctrl-tbl tr td:first-child { border-left: 0; font-weight: bold; }
 
         /* Etiquetas de datos generales */
         .lbl { background: #fff; }
@@ -91,7 +93,17 @@
         }
 
         /* Firmas: espacio para rúbrica + rótulo */
-        .firma-espacio { height: 42px; }
+        .firma-espacio { height: 44px; vertical-align: bottom; }
+        .firma-digital {
+            display: inline-block;
+            font-size: 6.3px;
+            font-style: italic;
+            color: #1d4ed8;
+            border-top: 0.75px solid #1d4ed8;
+            padding-top: 1px;
+        }
+        .firma-rotulo td { font-weight: bold; font-size: 6.8px; }
+        .firma-nombre td { font-size: 6.3px; color: #444; }
     </style>
 </head>
 <body>
@@ -105,15 +117,15 @@
 <table>
     <tbody>
         <tr>
-            <td class="hdr-logo" width="19%">
+            <td class="hdr-logo" width="20%">
                 @if ($logoEmpresa)
                     <img src="{{ $logoEmpresa }}" alt="Logo">
                 @else
                     <span class="hdr-marca">{{ $ficha->empresa->nombre ?? 'MEDILASER' }}</span>
                 @endif
             </td>
-            <td class="hdr-tit" width="57%">FICHA TÉCNICA PRESTACIÓN DE SERVICIOS DE SALUD</td>
-            <td class="hdr-ctrl-wrap" width="24%">
+            <td class="hdr-tit" width="53%">FICHA TÉCNICA PRESTACIÓN DE SERVICIOS DE SALUD</td>
+            <td class="hdr-ctrl-wrap" width="27%">
                 <table class="hdr-ctrl-tbl">
                     <tbody>
                         <tr><td class="cen" width="48%">VERSIÓN</td><td class="cen" width="52%">11</td></tr>
@@ -126,7 +138,18 @@
         </tr>
         <tr>
             <td colspan="3" class="cen">
-                Sucursal: {{ strtoupper($ficha->sucursal->nombre ?? $ficha->sucursal_legacy ?? 'N/D') }} -
+                @php
+                    $sucLabel = match ($ficha->tipo_alcance) {
+                        'nacional' => 'NACIONAL',
+                        'sede'     => strtoupper($ficha->sedes->pluck('nombre')->implode(', ')),
+                        default    => strtoupper(
+                            $ficha->sucursales->pluck('nombre')->implode(', ')
+                            ?: ($ficha->sucursal->nombre ?? $ficha->sucursal_legacy ?? 'N/D')
+                        ),
+                    };
+                    $sucLabel = $sucLabel !== '' ? $sucLabel : 'N/D';
+                @endphp
+                Sucursal: {{ $sucLabel }} -
                 Fecha de Generación: {{ $generadoEn->format('Y-m-d, H:i:s') }} -
                 No de Ficha: <strong>{{ $ficha->consecutivo ?? 'BORRADOR-'.$ficha->id }}</strong>
             </td>
@@ -346,27 +369,39 @@
     <tbody>
         <tr><td colspan="4" class="sec">7. LEGALIZACIÓN - FIRMAS DE LAS PARTES</td></tr>
         <tr>
+            {{-- Contratista: espacio para firma manuscrita/escaneada --}}
             <td class="cen firma-espacio" width="25%"></td>
+            {{-- Supervisor: quien elabora --}}
             <td class="cen firma-espacio" width="25%"></td>
-            <td class="cen firma-espacio" width="25%">{{ $ficha->fecha_autoriza ? 'AUTORIZADA' : 'No Firmada' }}</td>
-            <td class="cen firma-espacio" width="25%">{{ $ficha->fecha_aprueba ? 'APROBADA' : 'No Firmada' }}</td>
+            {{-- VoBo Contratación (autorizador / Dirección Médica) --}}
+            <td class="cen firma-espacio" width="25%">
+                @if ($ficha->fecha_autoriza)
+                    <span class="firma-digital">Firmado digitalmente</span>
+                @endif
+            </td>
+            {{-- VoBo Vicepresidencia Financiera (aprobador) --}}
+            <td class="cen firma-espacio" width="25%">
+                @if ($ficha->fecha_aprueba)
+                    <span class="firma-digital">Firmado digitalmente</span>
+                @endif
+            </td>
         </tr>
-        <tr>
+        <tr class="firma-rotulo">
             <td class="cen">Firma Contratista</td>
             <td class="cen">Firma Supervisor</td>
             <td class="cen">VoBo Contratación</td>
-            <td class="cen">VoBo Vice Financiera</td>
+            <td class="cen">VoBo Vice. Financiera</td>
         </tr>
-        <tr>
-            <td class="cen" style="font-size: 6.5px; color: #444;">{{ $ficha->agremiacion->rep_legal ?: '' }}</td>
-            <td class="cen" style="font-size: 6.5px; color: #444;">{{ $ficha->generador->name ?? '' }}</td>
-            <td class="cen" style="font-size: 6.5px; color: #444;">
-                {{ $ficha->autorizador->name ?? '' }}
-                @if($ficha->fecha_autoriza)<br>{{ $ficha->fecha_autoriza->format('d/m/Y') }}@endif
+        <tr class="firma-nombre">
+            <td class="cen">{{ $ficha->agremiacion->rep_legal ?: '—' }}</td>
+            <td class="cen">{{ $ficha->generador->name ?? '—' }}</td>
+            <td class="cen">
+                {{ $ficha->autorizador->name ?? 'Pendiente' }}
+                @if($ficha->fecha_autoriza)<br>{{ $ficha->fecha_autoriza->format('d/m/Y H:i') }}@endif
             </td>
-            <td class="cen" style="font-size: 6.5px; color: #444;">
-                {{ $ficha->aprobador->name ?? '' }}
-                @if($ficha->fecha_aprueba)<br>{{ $ficha->fecha_aprueba->format('d/m/Y') }}@endif
+            <td class="cen">
+                {{ $ficha->aprobador->name ?? 'Pendiente' }}
+                @if($ficha->fecha_aprueba)<br>{{ $ficha->fecha_aprueba->format('d/m/Y H:i') }}@endif
             </td>
         </tr>
         <tr><td colspan="4" class="cen">Elaboró: {{ $ficha->generador->name ?? '—' }}</td></tr>

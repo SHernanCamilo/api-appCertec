@@ -71,21 +71,27 @@ final class FichPdfService
     /**
      * Logo de la empresa de la ficha como data-URI base64.
      *
-     * El legacy incrustaba la imagen con un `switch` por nombre de empresa y
-     * rutas fijas (`../images/medilaser.png`). Aquí se toma de
-     * `ent_empresas.logo`, que puede ser una URL, una ruta relativa o ya un
-     * data-URI. Se devuelve null si no se puede resolver, y la plantilla cae
-     * al nombre/prefijo de la empresa como texto.
+     * Estrategia (en orden), replicando y mejorando el legacy:
+     *   1. Logo LOCAL empaquetado por empresa (public/images/fichas/*.png),
+     *      elegido por prefijo/nombre — es lo más confiable y rápido para PDF.
+     *   2. `ent_empresas.logo`: data-URI, ruta local o URL remota.
+     *   3. null → la plantilla cae al nombre de la empresa como texto.
      */
     private function logoEmpresa(FichFicha $ficha): ?string
     {
+        // 1) Logo local empaquetado, elegido por la empresa.
+        $local = $this->logoLocalPorEmpresa($ficha);
+        if ($local !== null) {
+            return $local;
+        }
+
+        // 2) Logo configurado en ent_empresas.logo.
         $logo = trim((string) ($ficha->empresa->logo ?? ''));
 
         if ($logo === '') {
             return null;
         }
 
-        // Ya viene embebido.
         if (str_starts_with($logo, 'data:image')) {
             return $logo;
         }
@@ -95,10 +101,7 @@ final class FichPdfService
 
         if (preg_match('#^https?://#i', $logo) === 1) {
             try {
-                $respuesta = Http::timeout(8)
-                    ->withOptions(['verify' => false])
-                    ->get($logo);
-
+                $respuesta = Http::timeout(8)->withOptions(['verify' => false])->get($logo);
                 if ($respuesta->successful()) {
                     $contenido = $respuesta->body();
                     $mime      = $respuesta->header('Content-Type') ?: null;
@@ -108,7 +111,6 @@ final class FichPdfService
             }
         } else {
             $relativa = ltrim($logo, '/');
-
             foreach ([
                 public_path($relativa),
                 storage_path('app/public/'.$relativa),
@@ -132,6 +134,37 @@ final class FichPdfService
         }
 
         return 'data:'.$mime.';base64,'.base64_encode($contenido);
+    }
+
+    /**
+     * Elige un logo local empaquetado según la empresa de la ficha.
+     *
+     * Los archivos viven en public/images/fichas/. Como el módulo pertenece a
+     * Medilaser, si no se identifica otra empresa se usa el logo Medilaser.
+     */
+    private function logoLocalPorEmpresa(FichFicha $ficha): ?string
+    {
+        $nombre  = mb_strtoupper((string) ($ficha->empresa->nombre ?? ''), 'UTF-8');
+        $prefijo = mb_strtoupper((string) ($ficha->empresa->prefijo ?? ''), 'UTF-8');
+
+        $archivo = match (true) {
+            str_contains($nombre, 'MEDIFACA') || $prefijo === 'MF'  => 'medifaca.png',
+            str_contains($nombre, 'MEGASALUD')                      => 'megasalud.png',
+            default                                                  => 'medilaser.png',
+        };
+
+        $ruta = public_path('images/fichas/'.$archivo);
+
+        if (! is_file($ruta)) {
+            return null;
+        }
+
+        $contenido = file_get_contents($ruta);
+        if ($contenido === false || $contenido === '') {
+            return null;
+        }
+
+        return 'data:image/png;base64,'.base64_encode($contenido);
     }
 
     /**
