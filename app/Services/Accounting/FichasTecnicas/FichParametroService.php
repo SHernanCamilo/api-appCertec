@@ -30,6 +30,9 @@ use InvalidArgumentException;
  */
 final class FichParametroService
 {
+    /** Empresa por defecto del módulo (Clínica Medilaser) para el selector de sucursales. */
+    private const EMPRESA_DEFAULT = 1;
+
     /** Catálogos administrables y su modelo asociado. */
     private const CATALOGOS = [
         'agremiaciones'    => FichAgremiacion::class,
@@ -113,23 +116,19 @@ final class FichParametroService
             ? \App\Models\UsuarioContexto::query()->where('user_id', $user->id)->first()
             : null;
 
-        $idEmpresa = $contexto?->empresa_id ?? ($user->id_empresa ?? null);
-
-        // Sucursales de la empresa en contexto.
-        $sucursales = \App\Models\Sucursal::query()
-            ->when($idEmpresa, fn ($q) => $q->where('id_Empresa', (int) $idEmpresa))
-            ->orderBy('nombre')
-            ->get(['id', 'nombre', 'id_Empresa']);
-
-        // Fallback: si no hay contexto de empresa o esa empresa no tiene
-        // sucursales configuradas, devolver todas para no bloquear el formulario.
-        if ($sucursales->isEmpty()) {
-            $sucursales = \App\Models\Sucursal::query()
-                ->orderBy('nombre')
-                ->get(['id', 'nombre', 'id_Empresa']);
+        // Empresa del contexto; si no hay, Medilaser (id 1) como default del
+        // módulo — NO "todas", porque los nombres de sucursal se repiten entre
+        // empresas (p. ej. "Sucursal Bogota" existe en varias) y saldrían
+        // duplicados en el selector.
+        $idEmpresa = (int) ($contexto?->empresa_id ?? ($user->id_empresa ?? 0));
+        if ($idEmpresa <= 0) {
+            $idEmpresa = self::EMPRESA_DEFAULT;
         }
 
-        return $sucursales;
+        return \App\Models\Sucursal::query()
+            ->where('id_Empresa', $idEmpresa)
+            ->orderBy('nombre')
+            ->get(['id', 'nombre', 'id_Empresa']);
     }
 
     /**

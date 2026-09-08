@@ -63,8 +63,8 @@
         .total td { background: #f0f0f0; font-weight: bold; }
 
         /* Encabezado */
-        .hdr-logo  { text-align: center; padding: 4px; }
-        .hdr-logo img { width: 118px; height: auto; }
+        .hdr-logo  { text-align: center; padding: 3px; }
+        .hdr-logo img { width: 130px; height: auto; max-height: 46px; }
         .hdr-marca { font-weight: bold; font-size: 11px; color: #b91c1c; letter-spacing: .5px; }
         /* 8.6px en DejaVu Sans Bold cabe en una línea dentro del 54% del ancho.
            DejaVu es más ancha que la Arial del legacy, de ahí el tamaño menor. */
