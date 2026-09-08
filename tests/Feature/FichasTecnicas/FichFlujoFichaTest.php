@@ -13,6 +13,7 @@ use App\Exceptions\FichasTecnicas\VentanaEnvioCerradaException;
 use App\Models\Accounting\FichasTecnicas\FichFicha;
 use App\Services\Accounting\FichasTecnicas\FichConsecutivoService;
 use App\Services\Accounting\FichasTecnicas\FichFichaService;
+use App\Services\Accounting\FichasTecnicas\FichPdfService;
 use App\Services\Accounting\FichasTecnicas\FichValidacionService;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Carbon;
@@ -649,6 +650,118 @@ final class FichFlujoFichaTest extends TestCase
         // MariaDB 10.4 no enforce CHECK constraints (introducido en 10.5+).
         // La validación de fecha_fin >= fecha_ini la hace StoreFichaRequest en PHP.
         $this->markTestSkipped('CHECK constraints no se enforcement en MariaDB 10.4. Validar vía StoreFichaRequest.');
+    }
+
+    // ── Vigencia: solo cuenta tras la aprobación (VF) ────────────────────
+
+    /**
+     * RN de vigencia: mientras la ficha no esté aprobada, los días restantes y
+     * el estado de vigencia NO cuentan, aunque ya tenga fecha_fin cargada.
+     */
+    public function testUnBorradorNoCuentaVigenciaAunqueTengaFechaFin(): void
+    {
+        $ficha = $this->crearFicha([$this->nuevoProfesional()], '2035-01-01', '2035-12-31');
+
+        $this->assertSame(EstadoFicha::Borrador->id(), $ficha->id_estado);
+        $this->assertNotNull($ficha->fecha_fin, 'El borrador sí tiene fecha_fin');
+        $this->assertNull($ficha->dias_restantes, 'Un borrador no debe contar días restantes');
+        $this->assertNull($ficha->vigencia_estado, 'Un borrador no debe tener estado de vigencia');
+    }
+
+    /** Una ficha en autorización tampoco cuenta vigencia. */
+    public function testUnaFichaEnAutorizacionNoCuentaVigencia(): void
+    {
+        $ficha = $this->fichaConServicio([$this->nuevoProfesional()], '2035-01-01', '2035-12-31');
+        $ficha = $this->validacion->enviar($ficha->id, $this->userId);
+
+        $this->assertSame(EstadoFicha::PendienteAutorizacion->id(), $ficha->id_estado);
+        $this->assertNull($ficha->dias_restantes);
+        $this->assertNull($ficha->vigencia_estado);
+    }
+
+    /** Al aprobar, la vigencia empieza a contar. */
+    public function testUnaFichaAprobadaSiCuentaVigencia(): void
+    {
+        $ficha = $this->fichaConServicio(
+            [$this->nuevoProfesional()],
+            now()->addDays(10)->toDateString(),
+            now()->addYear()->toDateString()
+        );
+
+        $ficha = $this->aprobarFicha($ficha);
+
+        $this->assertContains(
+            $ficha->id_estado,
+            [EstadoFicha::Aprobada->id(), EstadoFicha::Vigente->id()],
+            'La ficha debe quedar aprobada o vigente'
+        );
+        $this->assertNotNull($ficha->dias_restantes, 'Una ficha aprobada sí cuenta días restantes');
+        $this->assertGreaterThan(0, $ficha->dias_restantes);
+        $this->assertNotNull($ficha->vigencia_estado, 'Una ficha aprobada sí tiene estado de vigencia');
+    }
+
+    /** Una ficha aprobada ya vencida reporta VENCIDA. */
+    public function testUnaFichaAprobadaVencidaReportaVencida(): void
+    {
+        $ficha = $this->fichaConServicio(
+            [$this->nuevoProfesional()],
+            '2035-01-01',
+            '2035-12-31'
+        );
+        $ficha = $this->aprobarFicha($ficha);
+
+        // Fijar "hoy" después de la fecha_fin para simular vencimiento.
+        Carbon::setTestNow(Carbon::create(2036, 6, 1, 9, 0, 0, 'America/Bogota'));
+        $ficha->refresh();
+
+        $this->assertLessThan(0, $ficha->dias_restantes);
+        $this->assertSame('VENCIDA', $ficha->vigencia_estado);
+
+        Carbon::setTestNow();
+    }
+
+    // ── PDF ──────────────────────────────────────────────────────────────
+
+    /**
+     * Humo del PDF: la plantilla renderiza sin errores y trae las secciones
+     * institucionales. Guarda la maqueta contra regresiones de Blade/DomPDF.
+     */
+    public function testElHtmlDelPdfTraeLasSeccionesInstitucionales(): void
+    {
+        $ficha = $this->fichaConServicio([$this->nuevoProfesional()], '2035-01-01', '2035-12-31');
+        $ficha = $this->aprobarFicha($ficha);
+
+        $html = app(FichPdfService::class)->generarHtml($ficha->id);
+
+        $this->assertStringContainsString('FICHA TÉCNICA PRESTACIÓN DE SERVICIOS DE SALUD', $html);
+        $this->assertStringContainsString('1. DATOS GENERALES', $html);
+        $this->assertStringContainsString('2. RELACIÓN DE PROFESIONALES', $html);
+        $this->assertStringContainsString('3. DESCRIPCIÓN DE SERVICIOS Y TARIFAS', $html);
+        $this->assertStringContainsString('7. LEGALIZACIÓN', $html);
+        // El consecutivo asignado debe aparecer como "No. de Ficha".
+        $this->assertStringContainsString((string) $ficha->consecutivo, $html);
+    }
+
+    /** El binario del PDF se genera y es un PDF válido (cabecera %PDF). */
+    public function testGeneraElBinarioDelPdf(): void
+    {
+        $ficha = $this->fichaConServicio([$this->nuevoProfesional()], '2035-01-01', '2035-12-31');
+        $ficha = $this->aprobarFicha($ficha);
+
+        $binario = app(FichPdfService::class)->generar($ficha->id);
+
+        $this->assertStringStartsWith('%PDF', $binario, 'El binario debe tener cabecera PDF');
+        $this->assertGreaterThan(1000, strlen($binario), 'El PDF no debería estar vacío');
+    }
+
+    /** Un borrador (sin consecutivo) también genera PDF, rotulado como BORRADOR. */
+    public function testElPdfDeUnBorradorSeRotulaComoBorrador(): void
+    {
+        $ficha = $this->fichaConServicio([$this->nuevoProfesional()], '2035-01-01', '2035-12-31');
+
+        $html = app(FichPdfService::class)->generarHtml($ficha->id);
+
+        $this->assertStringContainsString('BORRADOR-'.$ficha->id, $html);
     }
 
     public function testLosScopesDeBandejaFiltranPorEstado(): void
