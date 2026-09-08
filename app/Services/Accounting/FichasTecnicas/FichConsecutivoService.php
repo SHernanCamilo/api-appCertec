@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace App\Services\Accounting\FichasTecnicas;
 
 use App\Models\Accounting\FichasTecnicas\FichFicha;
+use App\Models\Config\SecSecuencia;
 use App\Models\Empresa;
+use App\Services\SecuenciaNumericaService;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
+use Throwable;
 
 /**
  * Generación de consecutivos de ficha técnica.
@@ -26,6 +29,14 @@ use RuntimeException;
  */
 final class FichConsecutivoService
 {
+    /** Módulo "Fichas Técnicas" en seg_modulos (para el sistema de secuencias). */
+    private const MODULO_FICHAS = 95;
+
+    public function __construct(
+        private readonly SecuenciaNumericaService $secuencias,
+    ) {
+    }
+
     /**
      * Sugiere el siguiente consecutivo disponible para una ficha nueva.
      *
@@ -74,21 +85,31 @@ final class FichConsecutivoService
      */
     public function resolverParaFicha(FichFicha $ficha): string
     {
-        return DB::transaction(function () use ($ficha): string {
-            if ($ficha->esActualizacion()) {
-                // Bloquea las versiones existentes del mismo padre.
+        // Actualizaciones (OS): mantienen su regla de versión sobre el padre.
+        if ($ficha->esActualizacion()) {
+            return DB::transaction(function () use ($ficha): string {
                 FichFicha::query()
                     ->where('id_padre', $ficha->id_padre)
                     ->lockForUpdate()
                     ->get(['id']);
 
                 return $this->siguienteParaActualizacion((int) $ficha->id_padre)['consecutivo'];
-            }
+            });
+        }
 
+        // Ficha nueva: usar el SISTEMA DE SECUENCIAS de la plataforma
+        // (config_sec_*) por sucursal. Es el estándar y reemplaza el atajo
+        // legacy de `config_ubi_sucursales.prefijo_fichas`.
+        $consecutivo = $this->desdeSistemaSecuencias($ficha);
+        if ($consecutivo !== null) {
+            return $consecutivo;
+        }
+
+        // Respaldo (si aún no hay secuencia configurada): método legacy.
+        return DB::transaction(function () use ($ficha): string {
             $prefijo = $this->prefijoDeFicha($ficha);
             $anio    = (int) now()->format('Y');
 
-            // Bloquea las fichas del mismo prefijo/año antes de calcular.
             FichFicha::query()
                 ->where('consecutivo', 'like', "{$prefijo}-{$anio}-%")
                 ->lockForUpdate()
@@ -96,6 +117,63 @@ final class FichConsecutivoService
 
             return $this->siguienteParaFicha($prefijo, $anio);
         });
+    }
+
+    /**
+     * Genera el consecutivo con el sistema de secuencias (config_sec_*),
+     * usando la sucursal de la ficha como unidad operativa.
+     *
+     * Devuelve null si no hay una secuencia configurada para el módulo/empresa
+     * o para esa sucursal, para que el llamador use el respaldo legacy.
+     */
+    private function desdeSistemaSecuencias(FichFicha $ficha): ?string
+    {
+        $idEmpresa  = $ficha->id_empresa;
+        $idSucursal = $this->sucursalDeFicha($ficha);
+
+        if ($idEmpresa === null || $idSucursal === null) {
+            return null;
+        }
+
+        // ¿Existe secuencia activa para (empresa, módulo Fichas)?
+        $existe = SecSecuencia::query()
+            ->where('empresa_id', $idEmpresa)
+            ->where('modulo_id', self::MODULO_FICHAS)
+            ->whereNull('proceso_id')
+            ->where('estado', true)
+            ->exists();
+
+        if (! $existe) {
+            return null;
+        }
+
+        try {
+            return $this->secuencias->generar($idEmpresa, self::MODULO_FICHAS, null, $idSucursal);
+        } catch (Throwable) {
+            // Sin detalle para esa sucursal, etc. → respaldo legacy.
+            return null;
+        }
+    }
+
+    /**
+     * Sucursal que rige el consecutivo de la ficha.
+     *
+     * Con el nuevo alcance, una ficha puede abarcar varias sucursales; el
+     * consecutivo se ancla a UNA: se prioriza `id_sucursal` (la principal) y,
+     * si no está, la primera sucursal del alcance.
+     */
+    private function sucursalDeFicha(FichFicha $ficha): ?int
+    {
+        if ($ficha->id_sucursal !== null) {
+            return (int) $ficha->id_sucursal;
+        }
+
+        $idAlcance = DB::table('fich_ficha_sucursal')
+            ->where('id_ficha', $ficha->id)
+            ->orderBy('id_sucursal')
+            ->value('id_sucursal');
+
+        return $idAlcance !== null ? (int) $idAlcance : null;
     }
 
     /** Verifica que un consecutivo digitado manualmente no esté en uso. */
