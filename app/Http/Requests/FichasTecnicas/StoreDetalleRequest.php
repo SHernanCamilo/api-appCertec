@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Requests\FichasTecnicas;
 
-use App\Models\Accounting\FichasTecnicas\FichDetalle;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 /**
  * Validación de los ítems de servicio (paso 2 del generador).
@@ -31,10 +29,13 @@ class StoreDetalleRequest extends FormRequest
             'tipo_liquidacion' => ['nullable', 'string', 'max:100'],
             'tipo_servicio'    => ['nullable', 'string', 'max:150'],
             'id_tipo_servicio' => ['nullable', 'integer', 'exists:fich_tipos_servicio,id'],
-            'cups'             => ['nullable', 'string', 'max:10'],
-            'grupo'            => ['nullable', 'string', 'max:3'],
-            'subgrupo'         => ['nullable', 'string', 'max:4'],
-            'forma_pago'       => ['nullable', 'string', Rule::in(FichDetalle::FORMAS_PAGO)],
+            'cups'             => ['nullable', 'string', 'max:20'],
+            'grupo'            => ['nullable', 'string', 'max:20'],
+            'subgrupo'         => ['nullable', 'string', 'max:20'],
+            // forma_pago es texto libre (legacy): las formas reales provienen de
+            // los tarifarios (VR FIJO MES, SOAT 2020, ISS 2001, TARIFA EVENTO…),
+            // no de una lista cerrada. Solo validamos longitud.
+            'forma_pago'       => ['nullable', 'string', 'max:100'],
             'homologo'         => ['nullable', 'string', 'max:60'],
             'variacion'        => ['nullable', 'string', 'max:10'],
             'valor'            => ['required', 'numeric', 'min:0'],
