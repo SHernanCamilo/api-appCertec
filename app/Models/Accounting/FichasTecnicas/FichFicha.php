@@ -60,6 +60,7 @@ class FichFicha extends Model
         'id_agremiacion',
         'id_objeto_contrato',
         'id_forma_pago',
+        'tipo_alcance',
         'id_especialidad',
         'vlr_contrato',
         'fecha_ini',
@@ -207,6 +208,28 @@ class FichFicha extends Model
             'id_ficha',
             'id_profesional'
         )->withPivot('novedad')->withTimestamps();
+    }
+
+    /** Sucursales de alcance (cuando tipo_alcance = 'sucursal'). */
+    public function sucursales(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Sucursal::class,
+            'fich_ficha_sucursal',
+            'id_ficha',
+            'id_sucursal'
+        )->withTimestamps();
+    }
+
+    /** Sedes de alcance (cuando tipo_alcance = 'sede'). */
+    public function sedes(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            \App\Models\Sede::class,
+            'fich_ficha_sede',
+            'id_ficha',
+            'id_sede'
+        )->withTimestamps();
     }
 
     public function observaciones(): HasMany

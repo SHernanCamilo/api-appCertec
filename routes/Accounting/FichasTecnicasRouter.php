@@ -46,6 +46,13 @@ Route::prefix('parametros')->group(function (): void {
     Route::get('/tipos-servicio/{idTipoServicio}/observaciones', [FichParametroController::class, 'observacionesPorTipoServicio'])
         ->whereNumber('idTipoServicio');
 
+    // Alcance de la ficha: sucursales por empresa y sedes por sucursal(es).
+    Route::get('/empresas/{idEmpresa}/sucursales', [FichParametroController::class, 'sucursalesPorEmpresa'])
+        ->whereNumber('idEmpresa');
+    Route::get('/sucursales/{idSucursal}/sedes', [FichParametroController::class, 'sedesPorSucursal'])
+        ->whereNumber('idSucursal');
+    Route::get('/sedes', [FichParametroController::class, 'sedesPorSucursal']);
+
     Route::post('/profesionales/{idProfesional}/especialidades', [FichParametroController::class, 'asignarEspecialidades'])
         ->whereNumber('idProfesional');
     Route::post('/obs-items/{idObsItem}/tipos-servicio', [FichParametroController::class, 'asignarTiposServicio'])

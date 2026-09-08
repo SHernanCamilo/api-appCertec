@@ -34,6 +34,12 @@ final readonly class CrearFichaDTO
         public ?string $obsOs = null,
         /** @var array<string, string> Mapa código→nombre del profesional (opcional). */
         public array $profesionalesInfo = [],
+        /** Alcance de la ficha: 'nacional' | 'sucursal' | 'sede'. */
+        public string $tipoAlcance = 'sucursal',
+        /** @var list<int> Sucursales del alcance (si tipoAlcance = 'sucursal'). */
+        public array $sucursales = [],
+        /** @var list<int> Sedes del alcance (si tipoAlcance = 'sede'). */
+        public array $sedes = [],
     ) {
     }
 
@@ -58,6 +64,11 @@ final readonly class CrearFichaDTO
             idPadre:          isset($data['id_padre']) ? (int) $data['id_padre'] : null,
             obsOs:            isset($data['obs_os']) ? (string) $data['obs_os'] : null,
             profesionalesInfo: self::normalizarInfoProfesionales($data['profesionales_info'] ?? []),
+            tipoAlcance:      in_array($data['tipo_alcance'] ?? null, ['nacional', 'sucursal', 'sede'], true)
+                                  ? (string) $data['tipo_alcance']
+                                  : 'sucursal',
+            sucursales:       array_values(array_unique(array_map('intval', (array) ($data['sucursales'] ?? [])))),
+            sedes:            array_values(array_unique(array_map('intval', (array) ($data['sedes'] ?? [])))),
         );
     }
 
@@ -109,6 +120,7 @@ final readonly class CrearFichaDTO
             'id_objeto_contrato' => $this->idObjetoContrato,
             'id_especialidad'    => $this->idEspecialidad,
             'id_forma_pago'      => $this->idFormaPago,
+            'tipo_alcance'       => $this->tipoAlcance,
             'vlr_contrato'       => $this->vlrContrato,
             'fecha_ini'          => $this->fechaIni->toDateString(),
             'fecha_fin'          => $this->fechaFin->toDateString(),

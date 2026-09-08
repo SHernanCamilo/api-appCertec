@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Accounting\FichasTecnicas;
 
+use App\Models\Sede;
+use App\Models\Sucursal;
 use App\Services\Accounting\FichasTecnicas\FichFabricService;
 use App\Services\Accounting\FichasTecnicas\FichParametroService;
 use Illuminate\Http\JsonResponse;
@@ -67,6 +69,40 @@ class FichParametroController extends BaseFichasController
             fn () => $this->parametros->opcionesFormulario(),
             'Error al obtener las opciones de los catálogos'
         );
+    }
+
+    /**
+     * Sucursales de una empresa (para el alcance de la ficha, paso 1).
+     * GET /fichas-tecnicas/parametros/empresas/{idEmpresa}/sucursales
+     */
+    public function sucursalesPorEmpresa(int $idEmpresa): JsonResponse
+    {
+        return $this->ejecutar(
+            fn () => Sucursal::query()
+                ->where('id_Empresa', $idEmpresa)
+                ->orderBy('nombre')
+                ->get(['id', 'nombre', 'id_Empresa']),
+            'Error al obtener las sucursales de la empresa'
+        );
+    }
+
+    /**
+     * Sedes de una o varias sucursales (para el alcance de la ficha, paso 1).
+     * GET /fichas-tecnicas/parametros/sucursales/{idSucursal}/sedes
+     * GET /fichas-tecnicas/parametros/sedes?sucursales[]=1&sucursales[]=2
+     */
+    public function sedesPorSucursal(Request $request, ?int $idSucursal = null): JsonResponse
+    {
+        return $this->ejecutar(function () use ($request, $idSucursal) {
+            $ids = $idSucursal !== null
+                ? [$idSucursal]
+                : array_map('intval', (array) $request->query('sucursales', []));
+
+            return Sede::query()
+                ->when($ids !== [], fn ($q) => $q->whereIn('id_Sucursal', $ids))
+                ->orderBy('nombre')
+                ->get(['id', 'nombre', 'id_Sucursal']);
+        }, 'Error al obtener las sedes de la sucursal');
     }
 
     /** Profesionales desde Fabric (cascada del paso 1 — sustituye la tabla local vacía). */

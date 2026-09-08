@@ -30,6 +30,12 @@ class StoreFichaRequest extends FormRequest
             'id_objeto_contrato' => ['required', 'integer', 'exists:fich_objetos_contrato,id'],
             'id_especialidad'    => ['required', 'integer', 'exists:fich_especialidades,id'],
             'id_forma_pago'      => ['nullable', 'integer', 'exists:fich_formas_pago,id'],
+            // Alcance de la ficha: nacional (todo), sucursal(es) o sede(s).
+            'tipo_alcance'       => ['nullable', 'string', 'in:nacional,sucursal,sede'],
+            'sucursales'         => ['nullable', 'array', 'required_if:tipo_alcance,sucursal'],
+            'sucursales.*'       => ['integer', 'exists:config_ubi_sucursales,id'],
+            'sedes'              => ['nullable', 'array', 'required_if:tipo_alcance,sede'],
+            'sedes.*'            => ['integer', 'exists:config_ubi_sede,id'],
             'vlr_contrato'       => ['required'],
             'fecha_ini'          => ['required', 'date'],
             'fecha_fin'          => ['required', 'date', 'after_or_equal:fecha_ini'],

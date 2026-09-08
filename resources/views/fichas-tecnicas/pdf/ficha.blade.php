@@ -183,6 +183,19 @@
             <td class="left">{{ $ficha->formaPago->descripcion ?? '90 DÍAS HÁBILES' }}</td>
         </tr>
         <tr>
+            <td class="left lbl">Alcance:</td>
+            <td class="left" colspan="3">
+                @switch ($ficha->tipo_alcance)
+                    @case ('nacional') Nacional (todas las sucursales) @break
+                    @case ('sede')
+                        Sedes: {{ $ficha->sedes->pluck('nombre')->implode(', ') ?: '—' }}
+                        @break
+                    @default
+                        Sucursales: {{ $ficha->sucursales->pluck('nombre')->implode(', ') ?: '—' }}
+                @endswitch
+            </td>
+        </tr>
+        <tr>
             <td class="left lbl">Objeto del Contrato:</td>
             <td class="left" colspan="3">{{ $ficha->objetoContrato->descripcion ?? '—' }}</td>
         </tr>

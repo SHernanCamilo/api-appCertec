@@ -108,6 +108,32 @@ final class FichFichaService
     }
 
     /**
+     * Sincroniza el alcance de la ficha (sucursales/sedes) según tipo_alcance.
+     *
+     *   nacional → sin filas en pivotes (aplica a todo).
+     *   sucursal → sincroniza fich_ficha_sucursal.
+     *   sede     → sincroniza fich_ficha_sede.
+     *
+     * Se llama tanto en creación como en actualización (sync es idempotente).
+     */
+    private function sincronizarAlcance(FichFicha $ficha, CrearFichaDTO $dto): void
+    {
+        match ($dto->tipoAlcance) {
+            'sucursal' => $ficha->sucursales()->sync($dto->sucursales),
+            'sede'     => $ficha->sedes()->sync($dto->sedes),
+            default    => null, // nacional: sin selección específica
+        };
+
+        // Al cambiar de tipo, limpiar el pivote que ya no aplica.
+        if ($dto->tipoAlcance !== 'sucursal') {
+            $ficha->sucursales()->detach();
+        }
+        if ($dto->tipoAlcance !== 'sede') {
+            $ficha->sedes()->detach();
+        }
+    }
+
+    /**
      * Extrae el nombre real de un profesional desde el mapa código→nombre.
      *
      * Acepta el valor tal cual ("MARIA PEREZ") o en formato "DOCUMENTO - NOMBRE"
@@ -202,8 +228,11 @@ final class FichFichaService
                 'agremiacion',
                 'especialidad',
                 'objetoContrato',
+                'formaPago',
                 'empresa',
                 'sucursal',
+                'sucursales:id,nombre',
+                'sedes:id,nombre',
                 'generador:id,name,email',
                 'autorizador:id,name,email',
                 'aprobador:id,name,email',
@@ -323,6 +352,9 @@ final class FichFichaService
             if ($idsProfesionales !== []) {
                 $ficha->profesionales()->attach($idsProfesionales);
             }
+
+            // Alcance: sincroniza sucursales/sedes según tipo_alcance.
+            $this->sincronizarAlcance($ficha, $dto);
 
             // Recalcular contadores denormalizados (total_profesionales, total_detalles)
             // — los triggers no existen en esta BD, usamos el SP.

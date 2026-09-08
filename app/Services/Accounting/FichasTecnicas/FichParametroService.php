@@ -91,9 +91,34 @@ final class FichParametroService
             'tipos_servicio'   => FichTipoServicio::query()->activos()->orderBy('descripcion')->get(['id', 'descripcion']),
             // Catálogo parametrizable de plazos de pago (60/90/120 días…).
             'formas_pago'      => FichFormaPago::query()->activos()->orderBy('dias')->get(['id', 'descripcion', 'dias']),
+            // Sucursales de la empresa en contexto (para el alcance de la ficha).
+            'sucursales'       => $this->sucursalesDelContexto(),
             'perfiles'         => collect(FichEspecialidad::PERFILES)
                 ->map(static fn (string $v): array => ['value' => $v, 'label' => $v]),
         ];
+    }
+
+    /**
+     * Sucursales de la empresa del usuario en contexto (para el paso 1).
+     *
+     * Si no hay empresa resuelta, devuelve todas las sucursales activas para
+     * no bloquear el formulario.
+     *
+     * @return Collection<int, object>
+     */
+    private function sucursalesDelContexto(): Collection
+    {
+        $user = auth('api')->user();
+        $contexto = $user !== null
+            ? \App\Models\UsuarioContexto::query()->where('user_id', $user->id)->first()
+            : null;
+
+        $idEmpresa = $contexto?->empresa_id ?? ($user->id_empresa ?? null);
+
+        return \App\Models\Sucursal::query()
+            ->when($idEmpresa, fn ($q) => $q->where('id_Empresa', (int) $idEmpresa))
+            ->orderBy('nombre')
+            ->get(['id', 'nombre', 'id_Empresa']);
     }
 
     /**
