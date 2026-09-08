@@ -253,7 +253,10 @@ class FichFicha extends Model
 
     public function getDiasRestantesAttribute(): ?int
     {
-        if ($this->fecha_fin === null) {
+        // La vigencia (y por tanto los días restantes) solo cuenta cuando la
+        // ficha ya fue aprobada por Vicepresidencia Financiera y está vigente.
+        // En borrador / en proceso de validación NO corre el conteo.
+        if ($this->fecha_fin === null || ! $this->estadoEnum()->cuentaVigencia()) {
             return null;
         }
 

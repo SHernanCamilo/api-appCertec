@@ -20,9 +20,9 @@
 
         body {
             font-family: 'DejaVu Sans', sans-serif;
-            font-size: 7.2px;
-            line-height: 1.25;
-            color: #000;
+            font-size: 7.4px;
+            line-height: 1.3;
+            color: #1a1a1a;
             margin: 0;
         }
 
@@ -30,11 +30,11 @@
             width: 100%;
             table-layout: fixed;
             border-collapse: collapse;
-            margin: 0 0 3px;
+            margin: 0 0 4px;
         }
-        table, td, th { border: 0.75px solid #595959; }
+        table, td, th { border: 0.75px solid #8a8a8a; }
         td, th {
-            padding: 2.5px 4px;
+            padding: 3px 5px;
             vertical-align: middle;
             word-wrap: break-word;
             overflow-wrap: break-word;
@@ -43,24 +43,31 @@
             background: #d8d8ef;
             text-align: center;
             font-weight: bold;
-            font-size: 6.8px;
+            font-size: 6.9px;
+            color: #1e1b4b;
+            text-transform: uppercase;
+            letter-spacing: .2px;
         }
         thead { display: table-header-group; }
         tr { page-break-inside: avoid; }
 
-        /* Título de sección: fondo gris claro, centrado, negrita */
+        /* Título de sección: banda institucional oscura, texto claro */
         .sec {
-            background-color: #f0f0f0;
+            background-color: #1e293b;
+            color: #fff;
             font-weight: bold;
-            font-size: 9px;
-            padding: 4px;
-            text-align: center;
+            font-size: 8.4px;
+            padding: 4.5px 6px;
+            text-align: left;
+            letter-spacing: .3px;
+            text-transform: uppercase;
         }
 
         .cen   { text-align: center; }
         .num   { text-align: right; }
         .left  { text-align: left; }
-        .total td { background: #f0f0f0; font-weight: bold; }
+        .total td { background: #e8eaf3; font-weight: bold; color: #1e1b4b; }
+        .total td.num:last-of-type { font-size: 8px; }
 
         /* Encabezado */
         .hdr-logo  { text-align: center; padding: 3px; }
@@ -68,7 +75,8 @@
         .hdr-marca { font-weight: bold; font-size: 11px; color: #b91c1c; letter-spacing: .5px; }
         /* 8.6px en DejaVu Sans Bold cabe en una línea dentro del 54% del ancho.
            DejaVu es más ancha que la Arial del legacy, de ahí el tamaño menor. */
-        .hdr-tit   { text-align: center; font-weight: bold; font-size: 8.6px; }
+        .hdr-tit   { text-align: center; font-weight: bold; font-size: 8.6px; text-transform: uppercase; letter-spacing: .3px; }
+        .hdr-meta  { text-align: center; font-size: 7px; background: #f4f5fb; color: #374151; padding: 3.5px 5px; }
 
         /* Recuadro de control anidado: sin borde exterior ni padding propio
            para que sus filas queden a ras de la celda contenedora. */
@@ -84,8 +92,12 @@
         .hdr-ctrl-tbl tr:last-child td { border-bottom: 0; }
         .hdr-ctrl-tbl tr td:first-child { border-left: 0; font-weight: bold; }
 
-        /* Etiquetas de datos generales */
-        .lbl { background: #fff; }
+        /* Etiquetas de datos generales: fondo tenue + negrita para jerarquía */
+        .lbl {
+            background: #f4f5fb;
+            font-weight: bold;
+            color: #374151;
+        }
 
         .aviso-os {
             background: #fff3cd; border: 0.75px solid #ffe69c;
@@ -137,7 +149,7 @@
             </td>
         </tr>
         <tr>
-            <td colspan="3" class="cen">
+            <td colspan="3" class="hdr-meta">
                 @php
                     $sucLabel = match ($ficha->tipo_alcance) {
                         'nacional' => 'NACIONAL',
@@ -149,9 +161,10 @@
                     };
                     $sucLabel = $sucLabel !== '' ? $sucLabel : 'N/D';
                 @endphp
-                Sucursal: {{ $sucLabel }} -
-                Fecha de Generación: {{ $generadoEn->format('Y-m-d, H:i:s') }} -
-                No de Ficha: <strong>{{ $ficha->consecutivo ?? 'BORRADOR-'.$ficha->id }}</strong>
+                <strong>Sucursal:</strong> {{ $sucLabel }}
+                &nbsp;&bull;&nbsp; <strong>Generada:</strong> {{ $generadoEn->format('Y-m-d H:i') }}
+                &nbsp;&bull;&nbsp; <strong>No. de Ficha:</strong>
+                <strong style="color:#b91c1c">{{ $ficha->consecutivo ?? 'BORRADOR-'.$ficha->id }}</strong>
             </td>
         </tr>
     </tbody>
