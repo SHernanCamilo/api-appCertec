@@ -1,107 +1,75 @@
 {{--
     Plantilla del PDF de ficha técnica — "FICHA TÉCNICA PRESTACIÓN DE SERVICIOS DE SALUD".
-    Maquetado alineado al formato institucional F-GJ-145 MD (Medilaser).
-    Reemplaza includes/pdf.php, pdf_os.php, ficha_pdf.php y ficha_os_pdf.php del legacy.
+    Réplica del maquetado institucional legacy (includes/ficha_pdf.php, formato F-GJ-145 MD),
+    unificando includes/pdf.php, pdf_os.php, ficha_pdf.php y ficha_os_pdf.php.
 --}}
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Ficha Técnica {{ $ficha->consecutivo ?? 'Borrador '.$ficha->id }}</title>
+    <title>Ficha Técnica No. {{ $ficha->consecutivo ?? 'Borrador '.$ficha->id }}</title>
     <style>
-        @page { margin: 104px 26px 58px 26px; }
+        @page { margin: 24px 22px 40px 22px; }
         * { box-sizing: border-box; }
-        body { font-family: 'DejaVu Sans', sans-serif; font-size: 8px; color: #1f2937; margin: 0; }
+        body { font-family: Arial, 'DejaVu Sans', sans-serif; font-size: 8px; color: #000; margin: 0; }
 
-        /* ── Encabezado institucional (membrete con recuadro de control) ── */
-        header { position: fixed; top: -92px; left: 0; right: 0; height: 82px; }
-        .hdr { width: 100%; border-collapse: collapse; border: 1.2px solid #1f2937; }
-        .hdr td { border: 1px solid #1f2937; padding: 4px 6px; vertical-align: middle; }
-        .hdr .logo { width: 20%; text-align: center; font-weight: bold; font-size: 11px; color: #b91c1c; }
-        .hdr .titulo { width: 56%; text-align: center; }
-        .hdr .titulo h1 { margin: 0; font-size: 12px; font-weight: bold; letter-spacing: .3px; }
-        .hdr .titulo .sub { font-size: 7px; color: #374151; margin-top: 2px; }
-        .hdr .ctrl { width: 24%; padding: 0; }
-        .hdr .ctrl table { width: 100%; border-collapse: collapse; }
-        .hdr .ctrl td { border: 1px solid #1f2937; font-size: 6.5px; padding: 2px 3px; text-align: center; }
-        .hdr .ctrl .k { background: #f3f4f6; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+        table, td, th { border: 1px solid #595959; border-collapse: collapse; font-size: 8px; }
+        td, th { padding: 3px 4px; vertical-align: middle; }
+        th { background: #d8d8ef; text-align: center; }
+        thead { display: table-header-group; }
 
-        footer { position: fixed; bottom: -42px; left: 0; right: 0; height: 32px;
-                 font-size: 6.8px; color: #6b7280; border-top: 1px solid #d1d5db; padding-top: 4px; }
-
-        /* ── Secciones ── */
-        .sec { background: #1f2937; color: #fff; font-size: 8.5px; font-weight: bold;
-               padding: 3px 6px; margin: 9px 0 0; text-transform: uppercase; letter-spacing: .3px; }
-
-        table.grid { width: 100%; border-collapse: collapse; }
-        .grid td, .grid th { border: 1px solid #9ca3af; padding: 3px 5px; vertical-align: top; }
-
-        /* Datos generales (etiqueta/valor) */
-        .datos td { padding: 3px 5px; }
-        .datos .lbl { width: 15%; font-weight: bold; color: #374151; background: #f3f4f6; }
-        .datos .val { width: 35%; }
-
-        /* Tablas de datos */
-        .tbl th { background: #e5e7eb; border: 1px solid #9ca3af; padding: 4px 3px;
-                  font-size: 7px; text-align: center; text-transform: uppercase; }
-        .tbl td { border: 1px solid #c9ced6; padding: 3px 4px; font-size: 7.2px; }
-        .tbl tbody tr:nth-child(even) td { background: #fafbfc; }
-
-        .num { text-align: right; }
+        .section-title { background-color: #f0f0f0; font-weight: bold; font-size: 10px;
+                         padding: 5px; text-align: center; }
+        .lbl { font-weight: normal; }
         .cen { text-align: center; }
-        .total td { background: #eef1f4; font-weight: bold; }
-        .grupo-head { background: #d1d5db; font-weight: bold; font-size: 7.5px; }
+        .num { text-align: right; }
+        .left { text-align: left; }
 
-        .lista { margin: 0; padding: 4px 6px 4px 20px; font-size: 7.4px; }
-        .lista li { margin-bottom: 2px; }
+        /* Encabezado */
+        .hdr-logo { width: 130px; text-align: center; font-weight: bold; font-size: 13px; color: #b91c1c; }
+        .hdr-tit  { text-align: center; font-weight: bold; font-size: 11px; }
 
-        .nota { border: 1px solid #c9ced6; padding: 5px 7px; font-size: 7.2px; }
-        .nota p { margin: 0 0 3px; }
-
-        .badge { display: inline-block; padding: 1px 6px; border-radius: 8px; color: #fff; font-size: 7px; }
-        .aviso-os { background: #fff3cd; border: 1px solid #ffe69c; padding: 5px 7px; margin: 6px 0; font-size: 7.6px; }
-
-        /* Firmas */
-        .firmas { margin-top: 30px; width: 100%; border-collapse: collapse; }
-        .firmas td { width: 25%; padding: 26px 6px 3px; border-top: 1px solid #1f2937;
-                     text-align: center; font-size: 7px; vertical-align: top; }
+        .aviso-os { background: #fff3cd; border: 1px solid #ffe69c; padding: 5px 7px;
+                    margin: 4px 0; font-size: 8px; }
+        .total td { background: #f0f0f0; font-weight: bold; }
+        .nota-final { font-size: 7.5px; text-align: center; }
     </style>
 </head>
 <body>
 
-<header>
-    <table class="hdr">
+{{-- ══════════ ENCABEZADO ══════════ --}}
+<table>
+    <thead>
         <tr>
-            <td class="logo">{{ $ficha->empresa->prefijo ?? 'MEDILASER' }}</td>
-            <td class="titulo">
-                <h1>FICHA TÉCNICA PRESTACIÓN DE SERVICIOS DE SALUD</h1>
-                <div class="sub">
-                    Sucursal: {{ strtoupper($ficha->sucursal->nombre ?? $ficha->sucursal_legacy ?? 'N/D') }}
-                    &nbsp;·&nbsp; Fecha de Generación: {{ $generadoEn->format('Y-m-d, H:i:s') }}
-                    &nbsp;·&nbsp; No de Ficha: {{ $ficha->consecutivo ?? 'BORRADOR-'.$ficha->id }}
-                </div>
+            <td rowspan="4" class="hdr-logo">{{ $ficha->empresa->prefijo ?? 'MEDILASER' }}</td>
+            <td rowspan="4" class="hdr-tit" style="width: 330px;">
+                FICHA TÉCNICA PRESTACIÓN DE SERVICIOS DE SALUD
             </td>
-            <td class="ctrl">
-                <table>
-                    <tr><td class="k">VERSIÓN</td><td class="k">VIGENCIA</td></tr>
-                    <tr><td>11</td><td>MARZO 2022</td></tr>
-                    <tr><td class="k">CÓDIGO</td><td class="k">PÁGINAS</td></tr>
-                    <tr><td>F-GJ-145 MD</td><td><span class="pagenum"></span></td></tr>
-                </table>
+            <td class="cen">VERSIÓN</td>
+            <td class="cen">11</td>
+        </tr>
+        <tr>
+            <td class="cen">VIGENCIA</td>
+            <td class="cen">MARZO 2022</td>
+        </tr>
+        <tr>
+            <td class="cen">CÓDIGO</td>
+            <td class="cen">F-GJ-145 MD</td>
+        </tr>
+        <tr>
+            <td class="cen">PÁGINAS</td>
+            <td class="cen"><span class="pagenum"></span></td>
+        </tr>
+        <tr>
+            <td colspan="4" class="cen">
+                Sucursal: {{ strtoupper($ficha->sucursal->nombre ?? $ficha->sucursal_legacy ?? 'N/D') }} -
+                Fecha de Generación: {{ $generadoEn->format('Y-m-d, H:i:s') }} -
+                No de Ficha: <strong>{{ $ficha->consecutivo ?? 'BORRADOR-'.$ficha->id }}</strong>
             </td>
         </tr>
-    </table>
-</header>
-
-<footer>
-    <table style="width:100%;">
-        <tr>
-            <td>Elaboró: {{ $ficha->generador->name ?? '—' }}</td>
-            <td class="cen">{{ $ficha->empresa->nombre ?? 'Medilaser S.A.' }} · Ficha Técnica</td>
-            <td style="text-align:right;">{{ $ficha->consecutivo ?? 'Borrador '.$ficha->id }}</td>
-        </tr>
-    </table>
-</footer>
+    </thead>
+</table>
 
 @if ($ficha->esActualizacion())
     <div class="aviso-os">
@@ -112,60 +80,64 @@
 @endif
 
 {{-- ══════════ 1. DATOS GENERALES ══════════ --}}
-<div class="sec">1. Datos Generales</div>
-<table class="grid datos">
-    <tr>
-        <td class="lbl">Nombre del Prestador</td>
-        <td class="val">{{ $ficha->agremiacion->nombre ?? '—' }}</td>
-        <td class="lbl">Nit</td>
-        <td class="val">{{ $ficha->agremiacion->nit ?? '—' }}</td>
-    </tr>
-    <tr>
-        <td class="lbl">Representante Legal</td>
-        <td class="val">{{ $ficha->agremiacion->rep_legal ?? '—' }}</td>
-        <td class="lbl">Cédula del Representante</td>
-        <td class="val">{{ $ficha->agremiacion->cc_rep_legal ?? '—' }}</td>
-    </tr>
-    <tr>
-        <td class="lbl">Dirección Prestador</td>
-        <td class="val">{{ $ficha->agremiacion->direccion ?? '—' }}</td>
-        <td class="lbl">Teléfono</td>
-        <td class="val">{{ $ficha->agremiacion->telefono ?? '—' }}</td>
-    </tr>
-    <tr>
-        <td class="lbl">Fecha de Inicio</td>
-        <td class="val">{{ $ficha->fecha_ini?->format('Y-m-d') ?? '—' }}</td>
-        <td class="lbl">Fecha Fin</td>
-        <td class="val">{{ $ficha->fecha_fin?->format('Y-m-d') ?? '—' }}</td>
-    </tr>
-    <tr>
-        <td class="lbl">Valor Estimado</td>
-        <td class="val">${{ number_format((float) $ficha->vlr_contrato, 2, ',', '.') }}</td>
-        <td class="lbl">Especialidad Contratada</td>
-        <td class="val">{{ $ficha->especialidad->descripcion ?? '—' }}</td>
-    </tr>
-    <tr>
-        <td class="lbl">Objeto del Contrato</td>
-        <td colspan="3">{{ $ficha->objetoContrato->descripcion ?? '—' }}</td>
-    </tr>
+<table>
+    <tbody>
+        <tr><td colspan="4" class="section-title">1. DATOS GENERALES</td></tr>
+        <tr>
+            <td class="left" style="width:20%;">Nombre del Prestador:</td>
+            <td class="left" style="width:30%;">{{ $ficha->agremiacion->nombre ?? '—' }}</td>
+            <td class="left" style="width:20%;">Nit:</td>
+            <td class="left" style="width:30%;">{{ $ficha->agremiacion->nit ?? '—' }}</td>
+        </tr>
+        <tr>
+            <td class="left">Representante Legal:</td>
+            <td class="left">{{ $ficha->agremiacion->rep_legal ?? '—' }}</td>
+            <td class="left">Cédula del Representante:</td>
+            <td class="left">{{ $ficha->agremiacion->cc_rep_legal ?? '—' }}</td>
+        </tr>
+        <tr>
+            <td class="left">Dirección Prestador:</td>
+            <td class="left">{{ $ficha->agremiacion->direccion ?? '—' }}</td>
+            <td class="left">Teléfono:</td>
+            <td class="left">{{ $ficha->agremiacion->telefono ?? '—' }}</td>
+        </tr>
+        <tr>
+            <td class="left">Especialidad Contratada:</td>
+            <td class="left">{{ $ficha->especialidad->descripcion ?? '—' }}</td>
+            <td class="left">Valor Estimado:</td>
+            <td class="left">${{ number_format((float) $ficha->vlr_contrato, 2, ',', '.') }}</td>
+        </tr>
+        <tr>
+            <td class="left">Fecha de Inicio:</td>
+            <td class="left">{{ $ficha->fecha_ini?->format('Y-m-d') ?? '—' }}</td>
+            <td class="left">Fecha Fin:</td>
+            <td class="left">{{ $ficha->fecha_fin?->format('Y-m-d') ?? '—' }}</td>
+        </tr>
+        <tr>
+            <td class="left">Presentación Factura:</td>
+            <td class="left">Último día hábil de cada mes</td>
+            <td class="left">Forma de Pago:</td>
+            <td class="left">90 Días Hábiles</td>
+        </tr>
+        <tr>
+            <td class="left">Objeto del Contrato:</td>
+            <td class="left" colspan="3">{{ $ficha->objetoContrato->descripcion ?? '—' }}</td>
+        </tr>
+    </tbody>
 </table>
 
 {{-- ══════════ 2. RELACIÓN DE PROFESIONALES ══════════ --}}
-<div class="sec">2. Relación de Profesionales Prestadores de los Servicios</div>
-<table class="tbl">
-    <thead>
-        <tr>
-            <th style="width: 6%;">No.</th>
-            <th>Nombre Completo</th>
-            <th style="width: 22%;">Documento</th>
-            <th style="width: 22%;">Tarjeta Profesional</th>
-        </tr>
-    </thead>
+<table>
     <tbody>
-        @forelse ($ficha->profesionales as $i => $prof)
+        <tr><td colspan="4" class="section-title">2. RELACIÓN DE PROFESIONALES PRESTADORES DE LOS SERVICIOS</td></tr>
+        <tr>
+            <th colspan="2">NOMBRE COMPLETO</th>
+            <th>DOCUMENTO</th>
+            <th>TARJETA PROFESIONAL</th>
+        </tr>
+        @forelse ($ficha->profesionales as $prof)
             <tr>
-                <td class="cen">{{ $i + 1 }}</td>
-                <td>{{ $prof->nombre }}</td>
+                <td colspan="2" class="left">{{ $prof->nombre }}</td>
                 <td class="cen">{{ $prof->documento }}</td>
                 <td class="cen">{{ $prof->tarjeta_profesional ?? '—' }}</td>
             </tr>
@@ -176,151 +148,139 @@
 </table>
 
 {{-- ══════════ 3. DESCRIPCIÓN DE SERVICIOS Y TARIFAS ══════════ --}}
-<div class="sec">3. Descripción de Servicios y Tarifas Contratados</div>
-<table class="tbl">
-    <thead>
+<table>
+    <tr><td colspan="8" class="section-title">3. DESCRIPCIÓN DE SERVICIOS Y TARIFAS CONTRATADOS</td></tr>
+    <tr>
+        <th style="width:4%;">No.</th>
+        <th style="width:12%;">Servicio</th>
+        <th>Descripción</th>
+        <th style="width:11%;">Forma Pago</th>
+        <th style="width:9%;">Homólogo</th>
+        <th style="width:7%;">Variación</th>
+        <th style="width:11%;">Valor</th>
+        <th style="width:18%;">Observación del Ítem</th>
+    </tr>
+    @forelse ($detalles as $i => $d)
         <tr>
-            <th style="width: 4%;">No.</th>
-            <th style="width: 12%;">Servicio</th>
-            <th>Descripción</th>
-            <th style="width: 11%;">Forma Pago</th>
-            <th style="width: 9%;">Homólogo</th>
-            <th style="width: 7%;">Variación</th>
-            <th style="width: 11%;">Valor</th>
-            <th style="width: 18%;">Observación del Ítem</th>
+            <td class="cen">{{ $i + 1 }}</td>
+            <td class="left">{{ $d->tipo_liquidacion === 'CUPS' ? 'CUPS' : ($d->tipo_servicio ?? $d->tipo_liquidacion ?? '—') }}</td>
+            <td class="left">
+                @if ($d->tipo_liquidacion === 'CUPS')
+                    {{ $d->cups }}@if($d->cups_descripcion) - {{ $d->cups_descripcion }}@endif
+                @elseif ($d->tipo_liquidacion === 'GRUPO')
+                    {{ $d->grupo }}@if($d->grupo_descripcion) - {{ $d->grupo_descripcion }}@endif
+                @elseif ($d->tipo_liquidacion === 'SUBGRUPO')
+                    {{ $d->subgrupo }}@if($d->subgrupo_descripcion) - {{ $d->subgrupo_descripcion }}@endif
+                @else
+                    {{ $d->tipo_servicio ?? '-' }}
+                @endif
+            </td>
+            <td class="cen">{{ $d->forma_pago ?: 'VALOR FIJO' }}</td>
+            <td class="cen">{{ $d->homologo ?: '-' }}</td>
+            <td class="cen">
+                @if ($d->variacion !== null && $d->variacion !== '')
+                    {{ (int) $d->variacion > 0 ? '+' : '' }}{{ $d->variacion }}%
+                @else
+                    -
+                @endif
+            </td>
+            <td class="num">${{ number_format((float) $d->valor, 2, ',', '.') }}</td>
+            <td class="left">{{ $d->obs_item_descripcion ?: '-' }}</td>
         </tr>
-    </thead>
-    <tbody>
-        @forelse ($detalles as $i => $d)
-            <tr>
-                <td class="cen">{{ $i + 1 }}</td>
-                <td>
-                    @if ($d->tipo_liquidacion === 'CUPS')
-                        CUPS
-                    @else
-                        {{ $d->tipo_servicio ?? $d->tipo_liquidacion ?? '—' }}
-                    @endif
-                </td>
-                <td>
-                    @if ($d->tipo_liquidacion === 'CUPS')
-                        {{ $d->cups }} @if($d->cups_descripcion)- {{ $d->cups_descripcion }}@endif
-                    @elseif ($d->tipo_liquidacion === 'GRUPO')
-                        GRUPO {{ $d->grupo }} @if($d->grupo_descripcion)- {{ $d->grupo_descripcion }}@endif
-                    @elseif ($d->tipo_liquidacion === 'SUBGRUPO')
-                        SUBGRUPO {{ $d->subgrupo }} @if($d->subgrupo_descripcion)- {{ $d->subgrupo_descripcion }}@endif
-                    @else
-                        {{ $d->tipo_servicio ?? '—' }}
-                    @endif
-                </td>
-                <td class="cen">{{ $d->forma_pago ?? '—' }}</td>
-                <td class="cen">{{ $d->homologo ?? '—' }}</td>
-                <td class="cen">
-                    @if ($d->variacion !== null && $d->variacion !== '')
-                        {{ (int) $d->variacion > 0 ? '+' : '' }}{{ $d->variacion }}%
-                    @else
-                        —
-                    @endif
-                </td>
-                <td class="num">${{ number_format((float) $d->valor, 2, ',', '.') }}</td>
-                <td>{{ $d->obs_item_descripcion ?? '' }}</td>
-            </tr>
-        @empty
-            <tr><td colspan="8" class="cen">Sin servicios registrados</td></tr>
-        @endforelse
-        <tr class="total">
-            <td colspan="6" style="text-align:right;">TOTAL SERVICIOS</td>
-            <td class="num">${{ number_format((float) $ficha->valor_total_detalles, 2, ',', '.') }}</td>
-            <td></td>
-        </tr>
-    </tbody>
+    @empty
+        <tr><td colspan="8" class="cen">Sin servicios registrados</td></tr>
+    @endforelse
+    <tr class="total">
+        <td colspan="6" class="num">TOTAL SERVICIOS</td>
+        <td class="num">${{ number_format((float) $ficha->valor_total_detalles, 2, ',', '.') }}</td>
+        <td></td>
+    </tr>
 </table>
 
 {{-- ══════════ 4. OBSERVACIONES GENERALES ══════════ --}}
-<div class="sec">4. Observaciones Generales</div>
-@if ($ficha->observaciones->isNotEmpty())
-    <ol class="lista">
-        @foreach ($ficha->observaciones as $obs)
-            <li>{{ $obs->desc_obs }}</li>
-        @endforeach
-    </ol>
-@else
-    <div class="nota"><p>Sin observaciones generales registradas.</p></div>
-@endif
+<table>
+    <tr><td colspan="2" class="section-title">4. OBSERVACIONES GENERALES</td></tr>
+    @forelse ($ficha->observaciones as $i => $obs)
+        <tr>
+            <td class="cen" style="width:5%;">{{ $i + 1 }}</td>
+            <td class="left">{{ $obs->desc_obs }}</td>
+        </tr>
+    @empty
+        <tr><td colspan="2" class="cen">Sin observaciones generales registradas.</td></tr>
+    @endforelse
+</table>
 
-{{-- ══════════ 5. PÓLIZA DE RIESGOS Y LINEAMIENTOS ══════════ --}}
-<div class="sec">5. Póliza de Riesgos · Políticas y Lineamientos</div>
-<div class="nota">
-    <p><strong>Póliza de responsabilidad civil de clínicas y hospitales</strong> — Cuantía especialidad 500 SMLMV.</p>
-    <p><strong>Póliza única de cumplimiento</strong> — Cuantía especialidad.</p>
-    <ol class="lista">
-        <li>No se permite el desarrollo de actividades simultáneas que generen doble facturación.</li>
-        <li>No se reconocerán valores superiores a la tarifa cancelada por las EAPB o normatividad legal vigente.</li>
-        <li>Se dará cumplimiento a estándares de calidad, puntualidad y oportunidad definidos por la institución.</li>
-        <li>La formulación de tecnologías en salud no incluidas en el PBS deberá ajustarse a la normatividad.</li>
-        <li>Las glosas generadas por las E.R.P y los mayores valores pagados serán descontados cuando sean inherentes a su actuar médico.</li>
-        <li>En procedimientos en igual o diferente vía de acceso o acto, se aplicará el manual base pactado para dicha tarifa; en tarifas propias aplicará lo regulado en el manual ISS.</li>
-    </ol>
-</div>
+{{-- ══════════ 5. PÓLIZA DE RIESGOS ══════════ --}}
+<table>
+    <tr><td colspan="4" class="section-title">5. PÓLIZA DE RIESGOS</td></tr>
+    <tr>
+        <td class="left" style="width:30%;">PÓLIZA DE RESPONSABILIDAD CIVIL DE CLÍNICAS Y HOSPITALES</td>
+        <td class="left" colspan="3">{{ $polizaCuantia }}</td>
+    </tr>
+    <tr>
+        <td class="left">PÓLIZA ÚNICA DE CUMPLIMIENTO</td>
+        <td class="left" colspan="3">CUANTÍA ESPECIALIDAD</td>
+    </tr>
+    <tr>
+        <td class="left" rowspan="6">POLÍTICAS Y LINEAMIENTOS</td>
+        <td class="left" colspan="3">1. NO SE PERMITE EL DESARROLLO DE ACTIVIDADES SIMULTÁNEAS QUE GENEREN DOBLE FACTURACIÓN.</td>
+    </tr>
+    <tr><td class="left" colspan="3">2. NO SE RECONOCERÁN VALORES SUPERIORES A LA TARIFA CANCELADA POR LAS EAPB O NORMATIVIDAD LEGAL VIGENTE.</td></tr>
+    <tr><td class="left" colspan="3">3. SE DARÁ CUMPLIMIENTO A ESTÁNDARES DE CALIDAD, PUNTUALIDAD Y OPORTUNIDAD DEFINIDOS POR LA INSTITUCIÓN.</td></tr>
+    <tr><td class="left" colspan="3">4. LA FORMULACIÓN DE TECNOLOGÍAS EN SALUD NO INCLUIDAS EN EL PBS DEBERÁ ESTAR AJUSTADA A LO DEFINIDO POR LA NORMATIVIDAD.</td></tr>
+    <tr><td class="left" colspan="3">5. LAS GLOSAS GENERADAS POR LAS E.R.P Y LOS MAYORES VALORES PAGADOS EN CUALQUIER MOMENTO SERÁN DESCONTADOS CUANDO SEAN INHERENTES A SU ACTUAR MÉDICO.</td></tr>
+    <tr><td class="left" colspan="3">6. EN CASO DE QUE SE PACTEN TARIFAS EN LAS QUE SE REALICEN PROCEDIMIENTOS EN IGUAL O DIFERENTE VÍA DE ACCESO, EN IGUAL O DIFERENTE ACTO, SE APLICARÁ EL MANUAL BASE PACTADO PARA DICHA TARIFA; EN EL CASO DE TARIFAS PROPIAS APLICARÁ LO REGULADO EN EL MANUAL ISS.</td></tr>
+</table>
 
 {{-- ══════════ 6. CHEQUEO DOCUMENTAL ══════════ --}}
-<div class="sec">6. Chequeo Documental</div>
-<table class="tbl">
-    <thead>
-        <tr><th style="width: 8%;">Verif.</th><th>Descripción del Documento</th></tr>
-    </thead>
-    <tbody>
-        @foreach ([
-            'Certificado de existencia y representación legal y/o registro sindical (agremiaciones)',
-            'Registro Único Tributario (RUT)',
-            'Certificado de cuenta bancaria',
-            'Cédula representante legal',
-            'Formulario SARLAFT del contratista',
-            'Oferta o propuesta de servicios',
-            'F-TH-089 MD, Lista de chequeo de hojas de vida',
-        ] as $doc)
-            <tr>
-                <td class="cen">☐</td>
-                <td>{{ $doc }}</td>
-            </tr>
-        @endforeach
-    </tbody>
+<table>
+    <tr><td colspan="4" class="section-title">6. CHEQUEO DOCUMENTAL</td></tr>
+    <tr>
+        <th colspan="3">DESCRIPCIÓN DEL DOCUMENTO</th>
+        <th>VERIFICACIÓN LEGAL</th>
+    </tr>
+    @foreach ([
+        'CERTIFICADO DE EXISTENCIA Y REPRESENTACIÓN LEGAL Y/O REGISTRO SINDICAL (AGREMIACIONES)',
+        'REGISTRO ÚNICO TRIBUTARIO (RUT)',
+        'CERTIFICADO DE CUENTA BANCARIA',
+        'CÉDULA REPRESENTANTE LEGAL',
+        'FORMULARIO SARLAFT DEL CONTRATISTA',
+        'OFERTA O PROPUESTA DE SERVICIOS',
+        'F-TH-089 MD, LISTA DE CHEQUEO DE HOJAS DE VIDA',
+    ] as $doc)
+        <tr>
+            <td colspan="3" class="left">{{ $doc }}</td>
+            <td></td>
+        </tr>
+    @endforeach
 </table>
 
 {{-- ══════════ 7. LEGALIZACIÓN - FIRMAS ══════════ --}}
-<div class="sec">7. Legalización · Firmas de las Partes</div>
-<table class="firmas">
+<table>
+    <tr><td colspan="4" class="section-title">7. LEGALIZACIÓN - FIRMAS DE LAS PARTES</td></tr>
     <tr>
-        <td>
-            Firma Contratista<br>
-            <span style="font-size:6.5px;color:#6b7280;">{{ $ficha->agremiacion->rep_legal ?? '' }}</span>
+        <td class="cen" style="height:40px;"></td>
+        <td class="cen" style="height:40px;"></td>
+        <td class="cen" style="height:40px;">
+            {{ $ficha->fecha_autoriza ? 'Autorizada' : 'No Firmada' }}
         </td>
-        <td>
-            Firma Supervisor<br>
-            <span style="font-size:6.5px;color:#6b7280;">{{ $ficha->generador->name ?? '' }}</span>
-        </td>
-        <td>
-            VoBo Contratación<br>
-            <span style="font-size:6.5px;color:#6b7280;">
-                {{ $ficha->autorizador->name ?? 'Pendiente' }}
-                @if($ficha->fecha_autoriza) · {{ $ficha->fecha_autoriza->format('d/m/Y') }} @endif
-            </span>
-        </td>
-        <td>
-            VoBo Vice. Financiera<br>
-            <span style="font-size:6.5px;color:#6b7280;">
-                {{ $ficha->aprobador->name ?? 'Pendiente' }}
-                @if($ficha->fecha_aprueba) · {{ $ficha->fecha_aprueba->format('d/m/Y') }} @endif
-            </span>
+        <td class="cen" style="height:40px;">
+            {{ $ficha->fecha_aprueba ? 'Aprobada' : 'No Firmada' }}
         </td>
     </tr>
+    <tr>
+        <td class="cen">Firma Contratista</td>
+        <td class="cen">Firma Supervisor</td>
+        <td class="cen">VoBo Contratación</td>
+        <td class="cen">VoBo Vice Financiera</td>
+    </tr>
+    <tr><td colspan="4" class="cen">Elaboró: {{ $ficha->generador->name ?? '—' }}</td></tr>
 </table>
 
 <script type="text/php">
     if (isset($pdf)) {
-        $pdf->page_script('
-            $font = $fontMetrics->get_font("DejaVu Sans", "normal");
-            $pdf->text(520, 760, "Pag " . $PAGE_NUM . " de " . $PAGE_COUNT, $font, 6.8, [0.42, 0.46, 0.49]);
-        ');
+        $font = $fontMetrics->get_font("Arial, Helvetica, sans-serif", "normal");
+        $pdf->text(270, 780, "Pag " . $PAGE_NUM . " de " . $PAGE_COUNT, $font, 8);
     }
 </script>
 

@@ -58,9 +58,29 @@ final class FichPdfService
         $detalles = $this->fichas->detallesEnriquecidos($idFicha);
 
         return [
-            'ficha'      => $ficha,
-            'detalles'   => $detalles,
-            'generadoEn' => now()->timezone('America/Bogota'),
+            'ficha'         => $ficha,
+            'detalles'      => $detalles,
+            'polizaCuantia' => $this->cuantiaPoliza($ficha->especialidad->descripcion ?? ''),
+            'generadoEn'    => now()->timezone('America/Bogota'),
         ];
+    }
+
+    /**
+     * Cuantía de la póliza de responsabilidad civil según la especialidad.
+     *
+     * Réplica de la regla del legacy (ficha_pdf.php): las especialidades
+     * quirúrgicas de alto riesgo exigen 500 SMLMV; el resto, 350 SMLMV.
+     */
+    private function cuantiaPoliza(string $especialidad): string
+    {
+        $altas = [
+            'CIRUGIA CARDIOVASCULAR', 'MEDICINA INTERNA', 'CIRUGIA GENERAL', 'PEDIATRIA',
+            'NEUROCIRUGIA', 'ORTOPEDIA Y TRAUMATOLOGIA', 'GINECOLOGIA Y OBSTETRICIA',
+            'UROLOGIA', 'CIRUGIA PEDIATRICA',
+        ];
+
+        return in_array(mb_strtoupper(trim($especialidad)), $altas, true)
+            ? 'CUANTÍA ESPECIALIDAD 500 SMLMV'
+            : 'CUANTÍA ESPECIALIDAD 350 SMLMV';
     }
 }
