@@ -115,10 +115,21 @@ final class FichParametroService
 
         $idEmpresa = $contexto?->empresa_id ?? ($user->id_empresa ?? null);
 
-        return \App\Models\Sucursal::query()
+        // Sucursales de la empresa en contexto.
+        $sucursales = \App\Models\Sucursal::query()
             ->when($idEmpresa, fn ($q) => $q->where('id_Empresa', (int) $idEmpresa))
             ->orderBy('nombre')
             ->get(['id', 'nombre', 'id_Empresa']);
+
+        // Fallback: si no hay contexto de empresa o esa empresa no tiene
+        // sucursales configuradas, devolver todas para no bloquear el formulario.
+        if ($sucursales->isEmpty()) {
+            $sucursales = \App\Models\Sucursal::query()
+                ->orderBy('nombre')
+                ->get(['id', 'nombre', 'id_Empresa']);
+        }
+
+        return $sucursales;
     }
 
     /**
