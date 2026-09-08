@@ -18,11 +18,13 @@
         @page { margin: 20px 20px 34px 20px; }
         * { box-sizing: border-box; }
 
+        /* Réplica del legacy: Arial, tablas 8px, títulos gris claro centrados.
+           DejaVu Sans se mantiene como fuente base por su soporte Unicode
+           (tildes/Ñ) que Arial no garantiza en DomPDF. */
         body {
-            font-family: 'DejaVu Sans', sans-serif;
-            font-size: 7.4px;
-            line-height: 1.3;
-            color: #1a1a1a;
+            font-family: 'DejaVu Sans', Arial, sans-serif;
+            font-size: 8px;
+            color: #000;
             margin: 0;
         }
 
@@ -30,11 +32,14 @@
             width: 100%;
             table-layout: fixed;
             border-collapse: collapse;
-            margin: 0 0 4px;
+            margin: 0;
         }
-        table, td, th { border: 0.75px solid #8a8a8a; }
+        table, td, th {
+            border: 1px solid #595959;
+            font-size: 8px;
+        }
         td, th {
-            padding: 3px 5px;
+            padding: 2px 4px;
             vertical-align: middle;
             word-wrap: break-word;
             overflow-wrap: break-word;
@@ -43,79 +48,78 @@
             background: #d8d8ef;
             text-align: center;
             font-weight: bold;
-            font-size: 6.9px;
-            color: #1e1b4b;
-            text-transform: uppercase;
-            letter-spacing: .2px;
         }
         thead { display: table-header-group; }
         tr { page-break-inside: avoid; }
 
-        /* Título de sección: banda institucional oscura, texto claro */
+        /* Título de sección: fondo gris claro, negrita, centrado (legacy). */
         .sec {
-            background-color: #1e293b;
-            color: #fff;
+            background-color: #f0f0f0;
             font-weight: bold;
-            font-size: 8.4px;
-            padding: 4.5px 6px;
-            text-align: left;
-            letter-spacing: .3px;
-            text-transform: uppercase;
+            font-size: 10px;
+            padding: 5px;
+            text-align: center;
         }
 
-        .cen   { text-align: center; }
-        .num   { text-align: right; }
-        .left  { text-align: left; }
-        .total td { background: #e8eaf3; font-weight: bold; color: #1e1b4b; }
-        .total td.num:last-of-type { font-size: 8px; }
+        .cen  { text-align: center; }
+        .num  { text-align: right; }
+        .left { text-align: left; }
+        .total td { background: #f0f0f0; font-weight: bold; }
 
         /* Encabezado */
         .hdr-logo  { text-align: center; padding: 3px; }
-        .hdr-logo img { width: 130px; height: auto; max-height: 46px; }
-        .hdr-marca { font-weight: bold; font-size: 11px; color: #b91c1c; letter-spacing: .5px; }
-        /* 8.6px en DejaVu Sans Bold cabe en una línea dentro del 54% del ancho.
-           DejaVu es más ancha que la Arial del legacy, de ahí el tamaño menor. */
-        .hdr-tit   { text-align: center; font-weight: bold; font-size: 8.6px; text-transform: uppercase; letter-spacing: .3px; }
-        .hdr-meta  { text-align: center; font-size: 7px; background: #f4f5fb; color: #374151; padding: 3.5px 5px; }
+        .hdr-logo img { width: 130px; height: auto; max-height: 48px; }
+        .hdr-marca { font-weight: bold; font-size: 11px; color: #b91c1c; }
+        .hdr-tit   { text-align: center; font-weight: bold; font-size: 9px; }
+        .hdr-meta  { text-align: center; font-size: 8px; padding: 4px; }
 
         /* Recuadro de control anidado: sin borde exterior ni padding propio
            para que sus filas queden a ras de la celda contenedora. */
         .hdr-ctrl-wrap { padding: 0; }
         .hdr-ctrl-tbl  { margin: 0; border: 0; }
         .hdr-ctrl-tbl td {
-            font-size: 6.5px;
-            padding: 2px 3px;
+            font-size: 8px;
+            padding: 2px 4px;
             border-top: 0;
             border-right: 0;
-            white-space: nowrap;
+            text-align: center;
         }
         .hdr-ctrl-tbl tr:last-child td { border-bottom: 0; }
-        .hdr-ctrl-tbl tr td:first-child { border-left: 0; font-weight: bold; }
+        .hdr-ctrl-tbl tr td:first-child { border-left: 0; }
 
-        /* Etiquetas de datos generales: fondo tenue + negrita para jerarquía */
-        .lbl {
-            background: #f4f5fb;
-            font-weight: bold;
-            color: #374151;
-        }
+        /* Etiquetas de datos generales (fondo blanco, como el legacy). */
+        .lbl { background: #fff; }
 
         .aviso-os {
-            background: #fff3cd; border: 0.75px solid #ffe69c;
-            padding: 4px 6px; margin: 0 0 3px; font-size: 7.2px;
+            background: #fff3cd; border: 1px solid #ffe69c;
+            padding: 4px 6px; margin: 0 0 2px; font-size: 8px;
         }
 
-        /* Firmas: espacio para rúbrica + rótulo */
-        .firma-espacio { height: 44px; vertical-align: bottom; }
-        .firma-digital {
-            display: inline-block;
-            font-size: 6.3px;
+        /* Firmas: espacio para rúbrica + rótulo (legacy: 40px). */
+        .firma-espacio { height: 40px; vertical-align: bottom; padding: 3px; }
+        /* Nombre a modo de rúbrica (el legacy usa una firma escaneada; aquí se
+           emula con el nombre en cursiva sobre una línea). */
+        .firma-rubrica {
+            font-family: 'DejaVu Serif', Georgia, serif;
             font-style: italic;
-            color: #1d4ed8;
-            border-top: 0.75px solid #1d4ed8;
-            padding-top: 1px;
+            font-size: 11px;
+            font-weight: bold;
         }
-        .firma-rotulo td { font-weight: bold; font-size: 6.8px; }
-        .firma-nombre td { font-size: 6.3px; color: #444; }
+        .firma-nom {
+            font-weight: bold;
+            font-size: 7.5px;
+            border-top: 1px solid #000;
+            padding-top: 1px;
+            display: inline-block;
+        }
+        .firma-leyenda {
+            font-size: 6px;
+            font-style: italic;
+            color: #333;
+            line-height: 1.15;
+        }
+        .firma-pend { font-size: 8px; color: #666; }
+        .firma-rotulo td { font-weight: normal; }
     </style>
 </head>
 <body>
@@ -161,10 +165,10 @@
                     };
                     $sucLabel = $sucLabel !== '' ? $sucLabel : 'N/D';
                 @endphp
-                <strong>Sucursal:</strong> {{ $sucLabel }}
-                &nbsp;&bull;&nbsp; <strong>Generada:</strong> {{ $generadoEn->format('Y-m-d H:i') }}
-                &nbsp;&bull;&nbsp; <strong>No. de Ficha:</strong>
-                <strong style="color:#b91c1c">{{ $ficha->consecutivo ?? 'BORRADOR-'.$ficha->id }}</strong>
+                Sucursal: {{ $sucLabel }} -
+                Fecha de Generación: {{ $generadoEn->format('Y-m-d, H:i:s') }} -
+                No de Ficha:
+                <strong>{{ $ficha->consecutivo ?? 'BORRADOR-'.$ficha->id }}</strong>
             </td>
         </tr>
     </tbody>
@@ -388,14 +392,22 @@
             <td class="cen firma-espacio" width="25%"></td>
             {{-- VoBo Contratación (autorizador / Dirección Médica) --}}
             <td class="cen firma-espacio" width="25%">
-                @if ($ficha->fecha_autoriza)
-                    <span class="firma-digital">Firmado digitalmente</span>
+                @if ($ficha->fecha_autoriza && $ficha->autorizador)
+                    <span class="firma-rubrica">{{ $ficha->autorizador->name }}</span><br>
+                    <span class="firma-nom">{{ $ficha->autorizador->name }}</span><br>
+                    <span class="firma-leyenda">Documento Firmado Digitalmente<br>Firma Válida Solo para Fichas Técnicas en Aplicación jade</span>
+                @else
+                    <span class="firma-pend">No Firmada</span>
                 @endif
             </td>
             {{-- VoBo Vicepresidencia Financiera (aprobador) --}}
             <td class="cen firma-espacio" width="25%">
-                @if ($ficha->fecha_aprueba)
-                    <span class="firma-digital">Firmado digitalmente</span>
+                @if ($ficha->fecha_aprueba && $ficha->aprobador)
+                    <span class="firma-rubrica">{{ $ficha->aprobador->name }}</span><br>
+                    <span class="firma-nom">{{ $ficha->aprobador->name }}</span><br>
+                    <span class="firma-leyenda">Documento Firmado Digitalmente<br>Firma Válida Solo para Fichas Técnicas en Aplicación jade</span>
+                @else
+                    <span class="firma-pend">No Firmada</span>
                 @endif
             </td>
         </tr>
@@ -403,19 +415,7 @@
             <td class="cen">Firma Contratista</td>
             <td class="cen">Firma Supervisor</td>
             <td class="cen">VoBo Contratación</td>
-            <td class="cen">VoBo Vice. Financiera</td>
-        </tr>
-        <tr class="firma-nombre">
-            <td class="cen">{{ $ficha->agremiacion->rep_legal ?: '—' }}</td>
-            <td class="cen">{{ $ficha->generador->name ?? '—' }}</td>
-            <td class="cen">
-                {{ $ficha->autorizador->name ?? 'Pendiente' }}
-                @if($ficha->fecha_autoriza)<br>{{ $ficha->fecha_autoriza->format('d/m/Y H:i') }}@endif
-            </td>
-            <td class="cen">
-                {{ $ficha->aprobador->name ?? 'Pendiente' }}
-                @if($ficha->fecha_aprueba)<br>{{ $ficha->fecha_aprueba->format('d/m/Y H:i') }}@endif
-            </td>
+            <td class="cen">VoBo Vice Financiera</td>
         </tr>
         <tr><td colspan="4" class="cen">Elaboró: {{ $ficha->generador->name ?? '—' }}</td></tr>
     </tbody>
