@@ -6,6 +6,8 @@ namespace App\Services\Accounting\FichasTecnicas;
 
 use App\Models\Accounting\FichasTecnicas\FichFicha;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Support\Facades\Http;
+use Throwable;
 
 /**
  * Generación del PDF de la ficha técnica.
@@ -61,8 +63,75 @@ final class FichPdfService
             'ficha'         => $ficha,
             'detalles'      => $detalles,
             'polizaCuantia' => $this->cuantiaPoliza($ficha->especialidad->descripcion ?? ''),
+            'logoEmpresa'   => $this->logoEmpresa($ficha),
             'generadoEn'    => now()->timezone('America/Bogota'),
         ];
+    }
+
+    /**
+     * Logo de la empresa de la ficha como data-URI base64.
+     *
+     * El legacy incrustaba la imagen con un `switch` por nombre de empresa y
+     * rutas fijas (`../images/medilaser.png`). Aquí se toma de
+     * `ent_empresas.logo`, que puede ser una URL, una ruta relativa o ya un
+     * data-URI. Se devuelve null si no se puede resolver, y la plantilla cae
+     * al nombre/prefijo de la empresa como texto.
+     */
+    private function logoEmpresa(FichFicha $ficha): ?string
+    {
+        $logo = trim((string) ($ficha->empresa->logo ?? ''));
+
+        if ($logo === '') {
+            return null;
+        }
+
+        // Ya viene embebido.
+        if (str_starts_with($logo, 'data:image')) {
+            return $logo;
+        }
+
+        $contenido = null;
+        $mime      = null;
+
+        if (preg_match('#^https?://#i', $logo) === 1) {
+            try {
+                $respuesta = Http::timeout(8)
+                    ->withOptions(['verify' => false])
+                    ->get($logo);
+
+                if ($respuesta->successful()) {
+                    $contenido = $respuesta->body();
+                    $mime      = $respuesta->header('Content-Type') ?: null;
+                }
+            } catch (Throwable) {
+                return null;
+            }
+        } else {
+            $relativa = ltrim($logo, '/');
+
+            foreach ([
+                public_path($relativa),
+                storage_path('app/public/'.$relativa),
+                storage_path('app/'.$relativa),
+                base_path($relativa),
+            ] as $ruta) {
+                if (is_file($ruta)) {
+                    $contenido = file_get_contents($ruta) ?: null;
+                    $mime      = mime_content_type($ruta) ?: null;
+                    break;
+                }
+            }
+        }
+
+        if ($contenido === null || $contenido === '') {
+            return null;
+        }
+
+        if ($mime === null || ! str_starts_with($mime, 'image/')) {
+            $mime = 'image/png';
+        }
+
+        return 'data:'.$mime.';base64,'.base64_encode($contenido);
     }
 
     /**
