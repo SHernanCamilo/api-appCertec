@@ -220,19 +220,68 @@ class NotificacionDashboardController extends Controller
      */
     public function rebotados(Request $request): JsonResponse
     {
-        $emails = NotifEmailLog::where('delivery_status', NotifEmailLog::DELIVERY_BOUNCED)
+        $request->validate([
+            'clinica'       => 'nullable|string|max:150',
+            'email_to'      => 'nullable|string|max:150',
+            'profesional'   => 'nullable|string|max:150',
+            'especialidad'  => 'nullable|string|max:150',
+            'busqueda'      => 'nullable|string|max:150',
+            'fecha_desde'   => 'nullable|date',
+            'fecha_hasta'   => 'nullable|date',
+            'per_page'      => 'nullable|integer|min:1|max:100',
+            'page'          => 'nullable|integer|min:1',
+        ]);
+
+        $query = NotifEmailLog::where('delivery_status', NotifEmailLog::DELIVERY_BOUNCED)
             ->select([
                 'id', 'email_to', 'profesional_nombre', 'identificacion_paciente',
                 'nombre_paciente', 'bounce_reason', 'bounce_detected_at',
                 'especialidad', 'clinica', 'created_at',
-            ])
-            ->orderByDesc('bounce_detected_at')
-            ->take(50)
-            ->get();
+            ]);
+
+        // ── Filtros a nivel servidor ─────────────────────────────────────────
+        if ($request->filled('clinica')) {
+            $query->where('clinica', $request->clinica);
+        }
+        if ($request->filled('email_to')) {
+            $query->where('email_to', 'LIKE', '%' . $request->email_to . '%');
+        }
+        if ($request->filled('profesional')) {
+            $query->where('profesional_nombre', 'LIKE', '%' . $request->profesional . '%');
+        }
+        if ($request->filled('especialidad')) {
+            $query->where('especialidad', $request->especialidad);
+        }
+        if ($request->filled('fecha_desde')) {
+            $query->whereDate('bounce_detected_at', '>=', $request->fecha_desde);
+        }
+        if ($request->filled('fecha_hasta')) {
+            $query->whereDate('bounce_detected_at', '<=', $request->fecha_hasta);
+        }
+
+        // Búsqueda libre: pega en email, profesional, paciente o identificación.
+        if ($request->filled('busqueda')) {
+            $term = $request->busqueda;
+            $query->where(function ($q) use ($term) {
+                $q->where('email_to', 'LIKE', "%{$term}%")
+                  ->orWhere('profesional_nombre', 'LIKE', "%{$term}%")
+                  ->orWhere('nombre_paciente', 'LIKE', "%{$term}%")
+                  ->orWhere('identificacion_paciente', 'LIKE', "%{$term}%");
+            });
+        }
+
+        $perPage = (int) $request->input('per_page', 20);
+        $emails  = $query->orderByDesc('bounce_detected_at')->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'data'    => $emails,
+            'data'    => $emails->items(),
+            'meta'    => [
+                'total'        => $emails->total(),
+                'per_page'     => $emails->perPage(),
+                'current_page' => $emails->currentPage(),
+                'last_page'    => $emails->lastPage(),
+            ],
         ]);
     }
 }
