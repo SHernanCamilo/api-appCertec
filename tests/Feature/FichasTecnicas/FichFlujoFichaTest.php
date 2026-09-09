@@ -742,6 +742,34 @@ final class FichFlujoFichaTest extends TestCase
         $this->assertStringContainsString((string) $ficha->consecutivo, $html);
     }
 
+    /**
+     * La descripción del CUPS persistida en el detalle debe aparecer en el PDF,
+     * aunque fich_cups esté vacío (los datos viven en Fabric).
+     */
+    public function testElPdfMuestraLaDescripcionDelCupsPersistida(): void
+    {
+        $ficha = $this->crearFicha([$this->nuevoProfesional()], '2035-01-01', '2035-12-31');
+
+        $this->fichas->agregarDetalle(
+            $ficha->id,
+            DetalleFichaDTO::fromArray([
+                'tipo_liquidacion' => 'CUPS',
+                'cups'             => '890201',
+                'cups_descripcion' => 'CONSULTA DE PRIMERA VEZ POR MEDICINA ESPECIALIZADA',
+                'forma_pago'       => 'ISS 2001',
+                'variacion'        => '37',
+                'valor'            => 0,
+            ]),
+            $this->userId
+        );
+
+        $ficha = $this->aprobarFicha($ficha->refresh());
+
+        $html = app(FichPdfService::class)->generarHtml($ficha->id);
+
+        $this->assertStringContainsString('CONSULTA DE PRIMERA VEZ POR MEDICINA ESPECIALIZADA', $html);
+    }
+
     /** El binario del PDF se genera y es un PDF válido (cabecera %PDF). */
     public function testGeneraElBinarioDelPdf(): void
     {

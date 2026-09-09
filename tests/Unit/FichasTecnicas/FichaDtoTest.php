@@ -128,6 +128,7 @@ final class FichaDtoTest extends TestCase
             'tipo_liquidacion', 'tipo_servicio', 'id_tipo_servicio', 'cups',
             'grupo', 'subgrupo', 'forma_pago', 'homologo', 'variacion',
             'valor', 'id_obs_item', 'novedad',
+            'cups_descripcion', 'grupo_descripcion', 'subgrupo_descripcion',
         ], array_keys($atributos));
     }
 
