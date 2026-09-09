@@ -27,7 +27,8 @@ use Illuminate\Support\Facades\Http;
 final class DiagnoseBouncesCommand extends Command
 {
     protected $signature = 'notif:diagnose-bounces
-        {--days=3 : Cuantos dias hacia atras inspeccionar el buzon}';
+        {--days=3 : Cuantos dias hacia atras inspeccionar el buzon}
+        {--sweep : Ademas de diagnosticar, EJECUTA el barrido y marca los rebotes encontrados}';
 
     protected $description = 'Diagnostica la deteccion de rebotes de notificaciones (token Graph, pool de candidatos y NDR en el buzon)';
 
@@ -174,9 +175,33 @@ final class DiagnoseBouncesCommand extends Command
 
         if ($token !== '' && count($ndrs) > 0 && $poolActual === 0) {
             $this->warn('  VEREDICTO: el token funciona y hay rebotes en el buzon, pero el pool');
-            $this->warn('  esta vacio. El bug es la carrera: se marca DELIVERED a los 5 min antes');
-            $this->warn('  de que llegue el NDR. Hay que ampliar la ventana y revisar tambien los');
-            $this->warn('  correos ya marcados DELIVERED contra el buzon.');
+            $this->warn('  esta vacio. El barrido (sweepRecentBounces) recupera esos rebotes');
+            $this->warn('  emparejandolos contra los correos enviados, aunque ya figuren entregados.');
+        }
+
+        // ── Barrido real (opcional): marca los rebotes encontrados ───────────
+        if ($this->option('sweep')) {
+            $this->newLine();
+            $this->info('[SWEEP] Ejecutando barrido real (marca los rebotes en la BD)...');
+
+            $checker = app(\App\Services\Notificaciones\GraphBounceCheckerService::class);
+            $res = $checker->sweepRecentBounces($dias);
+
+            $this->line('  NDR revisados     : ' . ($res['checked'] ?? 0));
+            $this->line('  Emparejados       : ' . ($res['matched'] ?? 0));
+            $this->line('  Nuevos rebotes    : ' . ($res['bounced'] ?? 0));
+            if (isset($res['message'])) {
+                $this->warn('  Mensaje: ' . $res['message']);
+            }
+
+            if (($res['bounced'] ?? 0) > 0) {
+                $this->info("  >> Se marcaron {$res['bounced']} correos como REBOTADOS. Ya aparecen en la pestaña Rebotados.");
+            } else {
+                $this->line('  >> No se marcaron nuevos rebotes (o ya estaban registrados).');
+            }
+        } else {
+            $this->newLine();
+            $this->line('  Para RECUPERAR los rebotes ahora, corra: php artisan notif:diagnose-bounces --days=7 --sweep');
         }
 
         return self::SUCCESS;

@@ -183,12 +183,27 @@ class NotificacionDashboardController extends Controller
     {
         try {
             $checker = app(GraphBounceCheckerService::class);
-            $result  = $checker->checkAllPending();
+
+            // 1) Chequeo clasico del pool SENT+PENDING (rebotes recientes).
+            $result = $checker->checkAllPending();
+
+            // 2) Barrido del buzon: pesca los rebotes TARDIOS de Outlook que ya
+            //    salieron del pool porque se marcaron DELIVERED a los 5 min.
+            //    Ventana de 7 dias para recuperar los que se acumularon.
+            $sweep = $checker->sweepRecentBounces(7);
+
+            $totalBounced = ($result['bounced'] ?? 0) + ($sweep['bounced'] ?? 0);
 
             return response()->json([
                 'success' => true,
-                'message' => "Verificación completada: {$result['checked']} revisados, {$result['bounced']} rebotados, {$result['delivered']} entregados.",
-                'data'    => $result,
+                'message' => "Verificación completada: {$totalBounced} rebotes detectados "
+                    . "({$sweep['bounced']} recuperados del buzón).",
+                'data'    => [
+                    'checked'   => $result['checked'] ?? 0,
+                    'bounced'   => $totalBounced,
+                    'delivered' => $result['delivered'] ?? 0,
+                    'sweep'     => $sweep,
+                ],
             ]);
         } catch (\Exception $e) {
             return response()->json([
