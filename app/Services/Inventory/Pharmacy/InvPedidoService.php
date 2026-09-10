@@ -112,14 +112,20 @@ class InvPedidoService
             // Almacén de la sucursal (para dejarlo trazado en observaciones, como el legacy).
             $almacen = $data['almacen'] ?? ($sucursalId ? ($this->branchAccess->getAlmacenPorSucursal($sucursalId)['warehouse'] ?? null) : null);
             $observaciones = $data['observaciones'] ?? null;
-            if ($almacen) {
+            // Solo agregar el almacén si aún no viene incluido en las observaciones
+            // (el frontend ya lo antepone), para no duplicar "Almacén: ...".
+            if ($almacen && !str_contains((string) $observaciones, 'Almacén:')) {
                 $observaciones = trim(($observaciones ? $observaciones . ' | ' : '') . 'Almacén: ' . $almacen);
             }
+
+            // El proveedor se define al generar la OC; en el pedido puede no venir.
+            // La columna es NOT NULL, así que se usa un valor por defecto.
+            $proveedor = trim((string) ($data['proveedor'] ?? '')) ?: 'Por definir';
 
             // Crear el pedido cabecera
             $pedido = InvPedido::create([
                 'numero_pedido'  => $numeroPedido,
-                'proveedor'      => $data['proveedor'] ?? null,
+                'proveedor'      => $proveedor,
                 'fecha_pedido'   => $data['fecha_pedido'] ?? now()->toDateString(),
                 'fecha_esperada' => $data['fecha_esperada'] ?? null,
                 'estado'         => 'BORRADOR', // Estado inicial
@@ -322,6 +328,29 @@ class InvPedidoService
 
         if ($pedido->estado !== 'SOLICITADO') {
             return ['success' => false, 'message' => 'Solo se pueden aprobar pedidos en estado SOLICITADO'];
+        }
+
+        return $this->cambiarEstado($id, 'APROBADO', $userId);
+    }
+
+    /**
+     * Confirmación por el Jefe de Almacén.
+     * Acepta pedidos en BORRADOR o SOLICITADO y los deja en APROBADO.
+     * Un pedido ya APROBADO/EN_TRANSITO/RECIBIDO no se vuelve a confirmar.
+     */
+    public function confirmarPedido(int $id, int $userId): array
+    {
+        $pedido = InvPedido::find($id);
+        if (!$pedido) {
+            return ['success' => false, 'message' => 'Pedido no encontrado'];
+        }
+
+        $estadoActual = strtoupper((string) $pedido->estado);
+        if (!in_array($estadoActual, ['BORRADOR', 'SOLICITADO'], true)) {
+            return [
+                'success' => false,
+                'message' => "El pedido no se puede confirmar en estado {$estadoActual}.",
+            ];
         }
 
         return $this->cambiarEstado($id, 'APROBADO', $userId);

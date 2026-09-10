@@ -214,6 +214,27 @@ class InvPedidoController extends Controller
     }
 
     /**
+     * Confirmar (aprobar) un pedido — acción del Jefe de Almacén.
+     * Protegida por el permiso 'confirmar-pedido' vía middleware en la ruta.
+     * PATCH /api/inventario/pedidos/{id}/confirmar
+     */
+    public function confirmar(string $id): JsonResponse
+    {
+        try {
+            $userId = auth()->user()->id ?? 1;
+            $result = $this->service->confirmarPedido((int) $id, $userId);
+
+            return response()->json($result, $result['success'] ? 200 : 400);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al confirmar el pedido',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Cancelar (eliminar) un pedido
      * DELETE /api/inventario/pedidos/{id}
      */
