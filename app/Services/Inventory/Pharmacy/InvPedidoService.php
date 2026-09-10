@@ -137,6 +137,9 @@ class InvPedidoService
                         'codigo_producto'     => $detalle['codigo_producto'] ?? null,
                         'producto_nombre'     => $detalle['producto_nombre'] ?? null,
                         'producto_tipo'       => $detalle['producto_tipo'] ?? null,
+                        'producto_marca'      => $detalle['producto_marca'] ?? null,
+                        'producto_promedio'   => $detalle['producto_promedio'] ?? null,
+                        'producto_rotacion'   => $detalle['producto_rotacion'] ?? null,
                         'cantidad_solicitada' => $detalle['cantidad_solicitada'] ?? 0,
                         'precio_unitario'     => $detalle['precio_unitario'] ?? 0,
                         'estado'              => 'PENDIENTE'
@@ -205,6 +208,9 @@ class InvPedidoService
                         'codigo_producto'     => $detalle['codigo_producto'] ?? null,
                         'producto_nombre'     => $detalle['producto_nombre'] ?? null,
                         'producto_tipo'       => $detalle['producto_tipo'] ?? null,
+                        'producto_marca'      => $detalle['producto_marca'] ?? null,
+                        'producto_promedio'   => $detalle['producto_promedio'] ?? null,
+                        'producto_rotacion'   => $detalle['producto_rotacion'] ?? null,
                         'cantidad_solicitada' => $detalle['cantidad_solicitada'] ?? 0,
                         'precio_unitario'     => $detalle['precio_unitario'] ?? 0,
                         'estado'              => 'PENDIENTE'

@@ -112,6 +112,11 @@ class InvPedidoController extends Controller
             'detalles.*.codigo_producto'     => 'required|string',
             'detalles.*.producto_nombre'     => 'required|string',
             'detalles.*.cantidad_solicitada' => 'required|numeric|min:0.01',
+            'detalles.*.producto_tipo'       => 'nullable|string|max:255',
+            'detalles.*.producto_marca'      => 'nullable|string|max:255',
+            'detalles.*.producto_promedio'   => 'nullable|numeric',
+            'detalles.*.producto_rotacion'   => 'nullable|string|max:50',
+            'detalles.*.precio_unitario'     => 'nullable|numeric',
         ]);
 
         if ($validator->fails()) {
