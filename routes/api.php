@@ -296,6 +296,9 @@ Route::post('/fabric/viewer/desktop/claim', [\App\Http\Controllers\Fabric\Fabric
     ->middleware('throttle:20,1');
 Route::get('/fabric/viewer/desktop/download', [\App\Http\Controllers\Fabric\FabricDesktopController::class, 'download'])
     ->middleware('throttle:10,1');
+// ── JadeOne Desktop — última versión publicada (para auto-actualización del .exe)
+Route::get('/fabric/viewer/desktop/version', [\App\Http\Controllers\Fabric\FabricDesktopController::class, 'version'])
+    ->middleware('throttle:60,1');
 
 // ── OData Endpoint PÚBLICO — sin auth:api (tiene su propia autenticación por token/Azure AD)
 // Excel/Power Query se conecta directamente a esta URL.
