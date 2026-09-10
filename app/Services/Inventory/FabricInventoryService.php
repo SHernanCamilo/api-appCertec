@@ -26,7 +26,8 @@ class FabricInventoryService
     ];
 
     public function __construct(
-        private readonly GraphFabricGatewayService $gateway
+        private readonly GraphFabricGatewayService $gateway,
+        private readonly \App\Services\Fabric\ODataParquetService $parquet
     ) {}
 
     private function getProductsSchema(): string
@@ -40,7 +41,12 @@ class FabricInventoryService
     }
 
     /**
-     * Consulta Fabric probando varias columnas de código (vistas legacy vs VW_*).
+     * Consulta un producto por código.
+     *
+     * Estrategia (igual que ActivoFijoService): primero el parquet local vía
+     * DuckDB (~90 ms, filtra en el servidor), y si el parquet no está disponible
+     * cae al GraphQL/vista SQL en vivo. Esto acelera la validación de productos
+     * en pedidos, OC y recepción sin saturar la vista.
      */
     private function queryProductByCode(string $code, ?int $limit = 1): ?array
     {
@@ -49,6 +55,32 @@ class FabricInventoryService
             return null;
         }
 
+        // 1) Camino rápido: parquet local (si está habilitado y generado).
+        if (config('fabric.inventory_products_parquet', true)) {
+            foreach (self::CODE_FILTER_KEYS as $filterKey) {
+                try {
+                    $res = $this->parquet->filter(
+                        $this->getProductsSchema(),
+                        $this->getProductsView(),
+                        [$filterKey => $code],
+                        $limit ?? 1,
+                        0,
+                        ['count' => false]
+                    );
+                } catch (\Throwable $e) {
+                    break; // parquet no disponible → fallback GraphQL
+                }
+                if (($res['success'] ?? false) && !empty($res['value'][0])) {
+                    return $res['value'][0];
+                }
+                // 409 = parquet no generado: no seguir probando columnas, ir al fallback.
+                if (($res['status'] ?? 0) === 409) {
+                    break;
+                }
+            }
+        }
+
+        // 2) Fallback: GraphQL / vista SQL en vivo.
         foreach (self::CODE_FILTER_KEYS as $filterKey) {
             $result = $this->gateway->queryAsSystem($this->getProductsSchema(), $this->getProductsView(), [
                 'filters' => [$filterKey => $code],
@@ -228,14 +260,23 @@ class FabricInventoryService
             return $this->catalogoEnMemoria;
         }
 
-        $indexado = [];
-        $chunk    = 20000;
-        $offset   = 0;
         $columnas = ['Codigo', 'Nombre', 'Tipo_producto', 'Codigo_CUM', 'Fabricante',
                      'Presentation', 'Concentracion', 'TipoRiesgo', 'Unidad_de_empaque',
                      'Costo_promedio', 'Precio_Venta', 'Estado', 'RegistroSanitario', 'Serial'];
 
-        // Paginar por si el catálogo supera el máximo por request del Graph.
+        // 1) Camino rápido: cargar el catálogo desde el parquet local.
+        if (config('fabric.inventory_products_parquet', true)) {
+            $indexado = $this->indexarCatalogoDesdeParquet($columnas);
+            if ($indexado !== null) {
+                return $this->catalogoEnMemoria = $indexado;
+            }
+        }
+
+        // 2) Fallback: GraphQL / vista SQL en vivo, paginando.
+        $indexado = [];
+        $chunk    = 20000;
+        $offset   = 0;
+
         do {
             $res = $this->gateway->queryAsSystem($this->getProductsSchema(), $this->getProductsView(), [
                 'columns' => $columnas,
@@ -257,6 +298,58 @@ class FabricInventoryService
         } while ($recibidas === $chunk && $offset < 200000); // tope de seguridad
 
         return $this->catalogoEnMemoria = $indexado;
+    }
+
+    /**
+     * Carga el catálogo completo desde el parquet local, paginando.
+     * Devuelve el índice [CODIGO_UPPER => fila normalizada] o null si el parquet
+     * no está disponible (para caer al fallback de GraphQL).
+     *
+     * @param array<int,string> $columnas
+     * @return array<string,array>|null
+     */
+    private function indexarCatalogoDesdeParquet(array $columnas): ?array
+    {
+        $indexado = [];
+        $chunk    = 20000;
+        $offset   = 0;
+
+        do {
+            try {
+                $res = $this->parquet->filter(
+                    $this->getProductsSchema(),
+                    $this->getProductsView(),
+                    [],
+                    $chunk,
+                    $offset,
+                    ['count' => false, 'columns' => $columnas]
+                );
+            } catch (\Throwable $e) {
+                return null; // parquet no disponible
+            }
+
+            // 409 = parquet no generado; si además aún no leímos nada, fallback.
+            if (($res['status'] ?? 0) === 409) {
+                return $offset === 0 ? null : $indexado;
+            }
+            if (!($res['success'] ?? false)) {
+                return $offset === 0 ? null : $indexado;
+            }
+
+            $filas = $res['value'] ?? [];
+            foreach ($filas as $row) {
+                $norm = $this->normalizeProductRow($row);
+                $cod  = strtoupper(trim((string) $norm['codigo']));
+                if ($cod !== '') {
+                    $indexado[$cod] = $norm;
+                }
+            }
+
+            $recibidas = count($filas);
+            $offset += $recibidas;
+        } while ($recibidas === $chunk && $offset < 200000); // tope de seguridad
+
+        return $indexado;
     }
 
     /**

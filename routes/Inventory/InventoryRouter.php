@@ -13,6 +13,8 @@ Route::apiResource('productos', App\Http\Controllers\Inventory\Pharmacy\InvProdu
 Route::get('dashboard/stats', [App\Http\Controllers\Inventory\Pharmacy\InvDashboardController::class, 'getStats']);
 
 // Pedidos
+// Las rutas específicas van ANTES del apiResource para que el wildcard {pedido} no las capture.
+Route::get('pedidos/sucursales-disponibles', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'sucursalesDisponibles']);
 Route::patch('pedidos/{pedido}/estado', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'cambiarEstado']);
 Route::apiResource('pedidos', App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class);
 

@@ -18,6 +18,24 @@ class InvRecepcionService
         protected PharmacyService $pharmacyService,
         protected FabricInventoryService $fabricService,
     ) {}
+
+    /**
+     * Deduce el id de sucursal a partir del prefijo del número de documento
+     * (ej. "FLA-2026-000178-OC" → prefijo FLA → sucursal Florencia). Sirve para
+     * OC históricas que no tienen sucursal_id. Devuelve null si no se puede.
+     */
+    private function resolverSucursalDesdeNumero(?string $numero): ?int
+    {
+        if (!$numero || !preg_match('/^([A-Z]{2,5})-/', strtoupper(trim($numero)), $m)) {
+            return null;
+        }
+        $empresaId = (int) config('inventory.empresa_id', 1);
+        $suc = \App\Models\Sucursal::where('id_Empresa', $empresaId)
+            ->whereRaw('UPPER(TRIM(prefijo)) = ?', [$m[1]])
+            ->first();
+        return $suc ? (int) $suc->id : null;
+    }
+
     /**
      * Obtener historial de recepciones o compras pendientes de recepción.
      * Si se envía status con estados de OC (confirmado, en_sitio, parcial),
@@ -471,8 +489,13 @@ class InvRecepcionService
                 return ['success' => false, 'message' => 'Orden de compra no encontrada'];
             }
 
-            // Generar número de recepción (Ej: REC-2024-001)
-            $numeroRecepcion = $this->sequenceService->generateSequence('INV', $userId, 'INV-RECEPCION');
+            // La recepción hereda la sucursal de la OC que se está recepcionando,
+            // para generar el consecutivo con el prefijo correcto (FLA, NVA, ...)
+            // sin depender de la sucursal del usuario (que puede ser admin sin sucursal).
+            $sucursalId = $compra->sucursal_id ?: $this->resolverSucursalDesdeNumero($compra->numero_orden_compra);
+
+            // Generar número de recepción (Ej: FLA-2026-000001)
+            $numeroRecepcion = $this->sequenceService->generateSequence('INV', $userId, 'INV-RECEPCION', $sucursalId);
 
             // Calcular items totales a recepcionar
             $itemsToReceive = array_filter($data['items'] ?? [], function ($item) {
