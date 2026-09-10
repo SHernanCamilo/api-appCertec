@@ -201,6 +201,7 @@ class InvProductoService
             $validatedItems[] = [
                 'product_code'  => $prod['codigo'] ?? $productCode,
                 'product_name'  => $prod['nombre'] ?? '',
+                'product_type'  => $prod['product_type'] ?? $prod['tipo_producto'] ?? $prod['Tipo_producto'] ?? '',
                 'quantity'      => $quantity,
                 'rotation_type' => $rotation,
                 'brand'         => $marca,
