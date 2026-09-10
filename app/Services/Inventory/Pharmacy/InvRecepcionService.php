@@ -260,6 +260,11 @@ class InvRecepcionService
 
         $items = $this->enrichWithExternalProductData($items);
 
+        // Si la OC ya tiene una recepción, rehidratar los campos de recepción
+        // (lote, vencimiento, cumplimientos, concepto, cantidad recibida, muestra...)
+        // para que al reabrir la vista Excel se vean los datos previos.
+        $items = $this->hidratarConRecepcionPrevia($compraId, $items);
+
         return [
             'success' => true,
             'orden_numero' => $compra->numero_orden_compra,
@@ -268,6 +273,81 @@ class InvRecepcionService
             'estado_compra' => $compra->estado,
             'data' => $items,
         ];
+    }
+
+    /**
+     * Si existe una recepción previa para la OC, sobrescribe en cada ítem los
+     * campos de recepción con lo guardado en inv_recepcion_detalles.
+     * Cruza por pedido_detalle_id y, como respaldo, por codigo_producto.
+     *
+     * @param array<int,array> $items
+     * @return array<int,array>
+     */
+    private function hidratarConRecepcionPrevia(int $compraId, array $items): array
+    {
+        if (empty($items)) {
+            return $items;
+        }
+
+        $recepcion = InvRecepcion::with('detalles')
+            ->where('compra_id', $compraId)
+            ->orderBy('id', 'desc')
+            ->first();
+
+        if (!$recepcion || $recepcion->detalles->isEmpty()) {
+            return $items;
+        }
+
+        // Índices para cruce rápido.
+        $porPedidoDetalle = [];
+        $porCodigo = [];
+        foreach ($recepcion->detalles as $d) {
+            if ($d->pedido_detalle_id) {
+                $porPedidoDetalle[(int) $d->pedido_detalle_id] = $d;
+            }
+            $cod = strtoupper(trim((string) $d->codigo_producto));
+            if ($cod !== '' && !isset($porCodigo[$cod])) {
+                $porCodigo[$cod] = $d;
+            }
+        }
+
+        foreach ($items as &$item) {
+            $det = null;
+            $pid = $item['pedido_detalle_id'] ?? null;
+            if ($pid && isset($porPedidoDetalle[(int) $pid])) {
+                $det = $porPedidoDetalle[(int) $pid];
+            } else {
+                $cod = strtoupper(trim((string) ($item['codigo_producto'] ?? '')));
+                $det = $porCodigo[$cod] ?? null;
+            }
+            if (!$det) {
+                continue;
+            }
+
+            // Sobrescribir con lo recepcionado (respetando lo que exista).
+            $item['cantidad_recibida']      = $det->cantidad_recibida ?? $item['cantidad_recibida'];
+            $item['muestra_poblacion']      = $det->muestra_poblacion ?? $item['muestra_poblacion'];
+            $item['muestra_exclusion']      = isset($det->muestra_exclusion) ? ((bool) $det->muestra_exclusion ? 1 : 0) : ($item['muestra_exclusion'] ?? 0);
+            $item['numero_lote']            = $det->numero_lote ?? $item['numero_lote'];
+            $item['fecha_vencimiento']      = $det->fecha_vencimiento ?? $item['fecha_vencimiento'];
+            $item['codigo_sanitario']       = $det->codigo_sanitario ?? $item['codigo_sanitario'];
+            $item['cum_recibido']           = $det->cum_recibido ?? ($item['cum_recibido'] ?? '');
+            $item['fabricante']             = $det->fabricante ?? ($item['fabricante'] ?? '');
+            $item['vida_util']              = $det->vida_util ?? ($item['vida_util'] ?? '');
+            $item['estado_invima']          = $det->estado_invima ?? ($item['estado_invima'] ?? '');
+            $item['invima_override_manual'] = isset($det->invima_override_manual) ? (int) $det->invima_override_manual : 0;
+            $item['aspecto_cumple']         = $det->aspecto_cumple ?? ($item['aspecto_cumple'] ?? null);
+            $item['embalaje_cumple']        = $det->embalaje_cumple ?? ($item['embalaje_cumple'] ?? null);
+            $item['contenido_cumple']       = $det->contenido_cumple ?? ($item['contenido_cumple'] ?? null);
+            $item['cadena_frio_temperatura']= $det->cadena_frio_temperatura ?? ($item['cadena_frio_temperatura'] ?? null);
+            $item['concepto_recepcion']     = $det->concepto_recepcion ?? ($item['concepto_recepcion'] ?? '');
+            $item['observaciones_recepcion']= $det->observaciones_recepcion ?? ($item['observaciones_recepcion'] ?? '');
+            $item['es_medicamento_vital']   = isset($det->es_medicamento_vital) ? (bool) $det->es_medicamento_vital : ($item['es_medicamento_vital'] ?? false);
+            $item['tiene_recepcion_previa'] = true;
+        }
+        unset($item);
+
+        return $items;
     }
 
     /**
