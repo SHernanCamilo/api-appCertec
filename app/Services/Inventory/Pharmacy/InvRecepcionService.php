@@ -179,11 +179,66 @@ class InvRecepcionService
     }
 
     /**
+     * Tabla de muestreo (niveles ISO 2859-1 + exclusiones) para que el frontend
+     * calcule el tamaño de muestra en vivo según la cantidad a recibir.
+     */
+    public function getTablaMuestreo(): array
+    {
+        return $this->pharmacyService->getTablaMuestreo();
+    }
+
+    /**
      * Obtener una recepción específica por ID
      */
     public function getById(int $id): ?InvRecepcion
     {
         return InvRecepcion::with(['detalles', 'compra', 'recibidoPor'])->find($id);
+    }
+
+    /**
+     * Detalle de una recepción para la vista "Completadas".
+     * El listado mezcla recepciones reales (id = recepción) con OC confirmadas
+     * (id = OC). Por eso resolvemos con fallback:
+     *   1) intentar por id de recepción,
+     *   2) si no, por la recepción más reciente de esa compra (compra_id),
+     *   3) si tampoco, devolver los ítems de la OC (getItemsForReception).
+     *
+     * @return array{success:bool, data:array, ...}
+     */
+    public function getDetalleRecepcion(int $id): array
+    {
+        // 1) ¿Es un id de recepción real?
+        $recepcion = InvRecepcion::with(['detalles', 'compra', 'recibidoPor'])->find($id);
+
+        // 2) Si no, quizá el id era de la OC: buscar su recepción más reciente.
+        if (!$recepcion) {
+            $recepcion = InvRecepcion::with(['detalles', 'compra', 'recibidoPor'])
+                ->where('compra_id', $id)
+                ->orderBy('id', 'desc')
+                ->first();
+        }
+
+        if ($recepcion && $recepcion->detalles && $recepcion->detalles->count() > 0) {
+            return [
+                'success'      => true,
+                'origen'       => 'recepcion',
+                'numero_recepcion'    => $recepcion->numero_recepcion,
+                'numero_orden_compra' => $recepcion->numero_orden_compra,
+                'fecha_recepcion'     => $recepcion->fecha_recepcion,
+                'recibido_por'        => $recepcion->recibidoPor?->name,
+                'proveedor'           => $recepcion->compra?->proveedor_nombre,
+                'data'                => $recepcion->detalles,
+            ];
+        }
+
+        // 3) Sin recepción real: mostrar los ítems de la OC (aún por recepcionar).
+        $items = $this->getItemsForReception($id);
+        if (($items['success'] ?? false)) {
+            $items['origen'] = 'orden_compra';
+            return $items;
+        }
+
+        return ['success' => false, 'message' => 'No se encontró la recepción ni la orden de compra.', 'data' => []];
     }
 
     /**

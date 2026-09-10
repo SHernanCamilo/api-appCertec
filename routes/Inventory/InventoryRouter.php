@@ -29,6 +29,8 @@ Route::patch('ordenes-compra/{orden}/estado', [App\Http\Controllers\Inventory\Ph
 Route::apiResource('ordenes-compra', App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class);
 
 // Recepciones Técnicas
+// Rutas específicas ANTES del apiResource para que el wildcard {recepcion} no las capture.
+Route::get('recepciones/tabla-muestreo', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'tablaMuestreo']);
 Route::patch('recepciones/{recepcion}/confirmar', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'confirmar']);
 Route::apiResource('recepciones', App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class);
 
