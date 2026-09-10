@@ -20,6 +20,26 @@ class InvRecepcionService
     ) {}
 
     /**
+     * Convierte un valor de cumplimiento a tinyint (1=Cumple, 0=No Cumple).
+     * Acepta 'Cumple'/'No Cumple' (string), 1/0 o boolean. Null → null.
+     */
+    private function cumpleToInt($valor): ?int
+    {
+        if ($valor === null || $valor === '') {
+            return null;
+        }
+        if (is_bool($valor)) {
+            return $valor ? 1 : 0;
+        }
+        if (is_numeric($valor)) {
+            return ((int) $valor) === 1 ? 1 : 0;
+        }
+        // String: solo "cumple" (exacto, sin "no") cuenta como 1.
+        $v = strtolower(trim((string) $valor));
+        return ($v === 'cumple') ? 1 : 0;
+    }
+
+    /**
      * Deduce el id de sucursal a partir del prefijo del número de documento
      * (ej. "FLA-2026-000178-OC" → prefijo FLA → sucursal Florencia). Sirve para
      * OC históricas que no tienen sucursal_id. Devuelve null si no se puede.
@@ -689,9 +709,10 @@ class InvRecepcionService
                     'estado_invima'              => $item['estado_invima'] ?? null,
                     'invima_observaciones'       => $item['invima_observaciones'] ?? null,
                     'invima_override_manual'     => !empty($item['invima_override_manual']) ? 1 : 0,
-                    'aspecto_cumple'             => $item['aspecto_cumple'] ?? null,
-                    'embalaje_cumple'            => $item['embalaje_cumple'] ?? null,
-                    'contenido_cumple'           => $item['contenido_cumple'] ?? null,
+                    // Las columnas son tinyint(1): convertir 'Cumple'/'No Cumple' → 1/0.
+                    'aspecto_cumple'             => $this->cumpleToInt($item['aspecto_cumple'] ?? null),
+                    'embalaje_cumple'            => $this->cumpleToInt($item['embalaje_cumple'] ?? null),
+                    'contenido_cumple'           => $this->cumpleToInt($item['contenido_cumple'] ?? null),
                     'cadena_frio_temperatura'    => $item['cadena_frio_temperatura'] ?? null,
                     'concepto_recepcion'         => $item['concepto_recepcion'] ?? null,
                     
