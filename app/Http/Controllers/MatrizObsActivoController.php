@@ -719,7 +719,20 @@ class MatrizObsActivoController extends Controller
         $this->aplicarFiltrosPermisos($query, $user);
         $this->aplicarFiltrosRequest($query, $request);
 
-        $resultado = $comparador->aplicarFechaYModalidad($request->input('items', []), $query);
+        try {
+            $resultado = $comparador->aplicarFechaYModalidad($request->input('items', []), $query);
+        } catch (\Throwable $e) {
+            Log::error('Comparador aplicar fecha/modalidad/MaxRam', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage() ?: 'Error al copiar los valores del Excel',
+            ], 422);
+        }
 
         return response()->json([
             'success' => true,

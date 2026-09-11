@@ -217,10 +217,10 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obs-activos
     Route::post('/comparador/excel', [App\Http\Controllers\MatrizObsActivoController::class, 'compararExcel']);
     Route::post('/comparador/aplicar-compra', [App\Http\Controllers\MatrizObsActivoController::class, 'aplicarCompraComparador']);
     
-    // CRUD básico
+    // CRUD básico: {id} solo numérico para no chocar con /comparador/...
     Route::get('/', [App\Http\Controllers\MatrizObsActivoController::class, 'index']);
-    Route::get('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'show']);
-    Route::put('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'update']);
+    Route::get('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'show'])->whereNumber('id');
+    Route::put('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'update'])->whereNumber('id');
 });
 
 // ─── Rutas de Cierre de Inventario - Matriz de Obsolescencia ─────────────────
