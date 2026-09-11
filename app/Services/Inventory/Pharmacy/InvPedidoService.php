@@ -26,7 +26,9 @@ class InvPedidoService
      */
     public function getSucursalesDisponibles(int $userId): array
     {
-        return $this->branchAccess->getSucursalesDisponibles($userId);
+        // Solo sucursales con secuencia del proceso PEDIDOS y con almacén de farmacia
+        // (unidades operativas reales), para no listar las administrativas.
+        return $this->branchAccess->getSucursalesDisponibles($userId, 'INV-PEDIDO', true);
     }
 
     /**

@@ -154,16 +154,24 @@ class BranchAccessService
      *
      * @return array{success:bool, data:array, meta:array}
      */
-    public function getSucursalesDisponibles(int $userId): array
+    public function getSucursalesDisponibles(int $userId, ?string $codigoProceso = null, bool $soloConAlmacen = false): array
     {
         $empresaId = (int) config('inventory.empresa_id', 1);
 
         // Sucursales con secuencia de inventario parametrizada (fuente de verdad).
+        // Si se indica un proceso (ej. INV-PEDIDO), se filtra por ese proceso puntual;
+        // si no, por el módulo INV en general.
         $conSecuencia = DB::table('config_sec_detalles as d')
             ->join('config_sec_secuencias as s', 's.id', '=', 'd.secuencia_id')
             ->join('seg_modulos as m', 'm.id', '=', 's.modulo_id')
+            ->when($codigoProceso, function ($q) use ($codigoProceso) {
+                // Filtro por el proceso específico (proceso_id → seg_modulos.codigo).
+                $q->join('seg_modulos as proc', 'proc.id', '=', 's.proceso_id')
+                  ->where('proc.codigo', $codigoProceso);
+            }, function ($q) {
+                $q->where('m.codigo', 'INV');
+            })
             ->where('s.empresa_id', $empresaId)
-            ->where('m.codigo', 'INV')
             ->whereNull('d.deleted_at')
             ->where('d.estado', true)
             ->whereNotNull('d.sucursal_id')
@@ -216,7 +224,14 @@ class BranchAccessService
                 'almacen'        => $almacen['warehouse'] ?? null,
                 'almacen_codigo' => $almacen['code'] ?? null,
             ];
-        })->values();
+        });
+
+        // Para pedidos: mostrar solo unidades operativas de farmacia (con almacén).
+        if ($soloConAlmacen) {
+            $data = $data->filter(fn ($s) => !empty($s['almacen']));
+        }
+
+        $data = $data->values();
 
         return [
             'success' => true,
