@@ -15,7 +15,7 @@ class InvPedido extends Model
     protected $fillable = [
         'numero_pedido', 'proveedor', 'fecha_pedido', 'fecha_esperada',
         'fecha_recibido', 'estado', 'total_articulos', 'observaciones',
-        'solicitado_por', 'recibido_por', 'aprobado_por', 'cancelado_por'
+        'sucursal_id', 'solicitado_por', 'recibido_por', 'aprobado_por', 'cancelado_por'
     ];
 
     public function detalles()

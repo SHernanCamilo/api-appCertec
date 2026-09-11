@@ -153,6 +153,41 @@ class FabricDesktopController extends Controller
     }
 
     /**
+     * GET /api/fabric/viewer/desktop/version  (público)
+     *
+     * Última versión publicada del .exe para que JadeOne Desktop decida si
+     * debe auto-actualizarse. La versión se toma de config('jadeone.desktop_version')
+     * si está definida; si no, del tamaño+fecha del .exe como huella.
+     *
+     * Response: { success, version, download_url, size, published_at }
+     */
+    public function version(): JsonResponse
+    {
+        $absolute = storage_path('app/' . self::SETUP_RELATIVE);
+        $exists   = is_file($absolute);
+
+        // La versión la escribe scripts/publish.ps1 en desktop/version.json
+        // (fuente de verdad = el build). Formato: { "version": "1.1.0" }
+        $version  = null;
+        $metaPath = storage_path('app/desktop/version.json');
+        if (is_file($metaPath)) {
+            $meta = json_decode((string) @file_get_contents($metaPath), true);
+            if (is_array($meta) && !empty($meta['version'])) {
+                $version = (string) $meta['version'];
+            }
+        }
+
+        return response()->json([
+            'success'      => true,
+            'available'    => $exists,
+            'version'      => $version,
+            'download_url' => url('/api/fabric/viewer/desktop/download'),
+            'size'         => $exists ? (int) @filesize($absolute) : 0,
+            'published_at' => $exists ? date('c', (int) @filemtime($absolute)) : null,
+        ]);
+    }
+
+    /**
      * GET /api/fabric/viewer/desktop/download  (público)
      *
      * Sirve JadeOneDesktop.exe publicado en storage/app/desktop/.

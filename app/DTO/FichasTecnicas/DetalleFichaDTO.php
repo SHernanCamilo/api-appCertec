@@ -25,6 +25,9 @@ final readonly class DetalleFichaDTO
         public float $valor = 0.0,
         public ?int $idObsItem = null,
         public ?string $novedad = null,
+        public ?string $cupsDescripcion = null,
+        public ?string $grupoDescripcion = null,
+        public ?string $subgrupoDescripcion = null,
     ) {
     }
 
@@ -49,6 +52,10 @@ final readonly class DetalleFichaDTO
             idObsItem:       ! empty($data['id_obs_item']) && (int) $data['id_obs_item'] > 0
                                 ? (int) $data['id_obs_item'] : null,
             novedad:         self::texto($data['novedad'] ?? null),
+            // Descripciones capturadas del catálogo (Fabric) al agregar el ítem.
+            cupsDescripcion:     self::texto($data['cups_descripcion'] ?? null),
+            grupoDescripcion:    self::texto($data['grupo_descripcion'] ?? null),
+            subgrupoDescripcion: self::texto($data['subgrupo_descripcion'] ?? null),
         );
     }
 
@@ -79,6 +86,9 @@ final readonly class DetalleFichaDTO
             'valor'            => $this->valor,
             'id_obs_item'      => $this->idObsItem,
             'novedad'          => $this->novedad,
+            'cups_descripcion'     => $this->cupsDescripcion,
+            'grupo_descripcion'    => $this->grupoDescripcion,
+            'subgrupo_descripcion' => $this->subgrupoDescripcion,
         ];
     }
 

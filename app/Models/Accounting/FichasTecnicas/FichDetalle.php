@@ -45,6 +45,9 @@ class FichDetalle extends Model
         'valor',
         'id_obs_item',
         'novedad',
+        'cups_descripcion',
+        'grupo_descripcion',
+        'subgrupo_descripcion',
     ];
 
     protected $casts = [

@@ -45,6 +45,203 @@ final class GraphBounceCheckerService
     }
 
     /**
+     * Barrido de rebotes REALES desde el buzón, emparejando contra los correos
+     * enviados aunque ya estén marcados DELIVERED.
+     *
+     * Por qué existe: los NDR de Outlook suelen tardar MÁS de 5 minutos en
+     * llegar. Para entonces, checkAllPending() y el worker ya marcaron el correo
+     * como DELIVERED y lo sacaron del pool SENT+PENDING, así que el rebote tardío
+     * nunca se detectaba. Este método invierte el enfoque: parte del buzón (donde
+     * están los rebotes de verdad) y busca a qué correo enviado corresponden.
+     *
+     * Es idempotente: si el correo ya está BOUNCED, no lo vuelve a tocar.
+     *
+     * @param  int $days Cuántos días hacia atrás inspeccionar el buzón.
+     * @return array{checked:int, matched:int, bounced:int, message?:string}
+     */
+    public function sweepRecentBounces(int $days = 3): array
+    {
+        if (!$this->enabled) {
+            return ['checked' => 0, 'matched' => 0, 'bounced' => 0, 'message' => 'Graph API deshabilitado'];
+        }
+
+        $token = $this->getAccessToken();
+        if (!$token) {
+            return ['checked' => 0, 'matched' => 0, 'bounced' => 0, 'message' => 'Sin token de Graph (revisar client_secret)'];
+        }
+
+        $ndrs = $this->fetchRecentNdrs($token, $days);
+        if ($ndrs === []) {
+            return ['checked' => 0, 'matched' => 0, 'bounced' => 0];
+        }
+
+        $matched = 0;
+        $bounced = 0;
+
+        foreach ($ndrs as $ndr) {
+            // Correos candidatos: los enviados en la ventana, ordenados del más
+            // reciente. Emparejamos por email destino o por message_id.
+            $log = $this->matchLogForNdr($ndr, $days);
+            if ($log === null) {
+                continue;
+            }
+
+            $matched++;
+
+            // Idempotente: si ya está rebotado, no duplicar.
+            if ($log->delivery_status === NotifEmailLog::DELIVERY_BOUNCED) {
+                continue;
+            }
+
+            $this->markAsBounced($log, $ndr['reason']);
+            $bounced++;
+        }
+
+        Log::channel('notificaciones')->info(
+            "[BOUNCE-SWEEP] NDR en buzon: " . count($ndrs) . " | Emparejados: {$matched} | Nuevos rebotes: {$bounced}"
+        );
+
+        return [
+            'checked' => count($ndrs),
+            'matched' => $matched,
+            'bounced' => $bounced,
+        ];
+    }
+
+    /**
+     * Trae los NDR (rebotes) del buzón de los últimos N días, ya clasificados
+     * con su motivo y el texto donde buscar el destinatario.
+     *
+     * @return list<array{email:?string, message_id:?string, reason:string, body:string}>
+     */
+    private function fetchRecentNdrs(string $token, int $days): array
+    {
+        $desde  = now()->subDays(max(1, $days))->startOfDay()->toISOString();
+        $filter = "receivedDateTime ge {$desde}"
+                . " and (from/emailAddress/address eq 'postmaster@outlook.com'"
+                . " or contains(subject, 'Undeliverable')"
+                . " or contains(subject, 'no se puede entregar')"
+                . " or contains(subject, 'No se puede entregar'))";
+
+        $out = [];
+        $url = "https://graph.microsoft.com/v1.0/users/{$this->senderEmail}/mailFolders/inbox/messages";
+        $params = [
+            '$filter'  => $filter,
+            '$select'  => 'subject,bodyPreview,body,receivedDateTime,from',
+            '$top'     => 100,
+            '$orderby' => 'receivedDateTime desc',
+        ];
+
+        try {
+            // Paginar hasta agotar (@odata.nextLink) o un tope de seguridad.
+            for ($page = 0; $page < 10; $page++) {
+                $response = $page === 0
+                    ? Http::withToken($token)->timeout(20)->get($url, $params)
+                    : Http::withToken($token)->timeout(20)->get($url);
+
+                if ($response->failed()) {
+                    Log::channel('notificaciones')->warning("[BOUNCE-SWEEP] Graph API error: {$response->status()}");
+                    break;
+                }
+
+                foreach ($response->json('value', []) as $msg) {
+                    $body    = strtolower(($msg['body']['content'] ?? '') . ' ' . ($msg['bodyPreview'] ?? ''));
+                    $subject = strtolower($msg['subject'] ?? '');
+
+                    $isNdr = str_contains($subject, 'undeliverable')
+                          || str_contains($subject, 'delivery status')
+                          || str_contains($subject, 'no se puede entregar')
+                          || str_contains($body, "couldn't be delivered")
+                          || str_contains($body, "wasn't found");
+
+                    if (!$isNdr) {
+                        continue;
+                    }
+
+                    $out[] = [
+                        'email'      => $this->extractRecipientEmail($body),
+                        'message_id' => null,
+                        'reason'     => $this->reasonFromBody($body),
+                        'body'       => $body,
+                    ];
+                }
+
+                $next = $response->json('@odata.nextLink');
+                if (!$next) {
+                    break;
+                }
+                $url = $next;
+            }
+        } catch (\Exception $e) {
+            Log::channel('notificaciones')->error("[BOUNCE-SWEEP] Error leyendo buzon: {$e->getMessage()}");
+        }
+
+        return $out;
+    }
+
+    /**
+     * Empareja un NDR con el correo enviado al que corresponde.
+     *
+     * Estrategia: el destinatario del rebote (extraído del cuerpo) contra
+     * email_to, entre los correos enviados en la ventana. Se prefiere el más
+     * reciente que aún no esté rebotado.
+     */
+    private function matchLogForNdr(array $ndr, int $days): ?NotifEmailLog
+    {
+        $email = $ndr['email'];
+        if ($email === null || $email === '') {
+            // Sin destinatario extraído: intentar por contenido del cuerpo.
+            return null;
+        }
+
+        return NotifEmailLog::where('status', NotifEmailLog::STATUS_SENT)
+            ->whereRaw('LOWER(email_to) = ?', [strtolower($email)])
+            ->where('created_at', '>', now()->subDays(max(1, $days))->startOfDay())
+            ->orderByRaw("CASE WHEN delivery_status = ? THEN 1 ELSE 0 END", [NotifEmailLog::DELIVERY_BOUNCED])
+            ->orderByDesc('created_at')
+            ->first();
+    }
+
+    /** Extrae el email del destinatario que aparece en el cuerpo del NDR. */
+    private function extractRecipientEmail(string $body): ?string
+    {
+        // El NDR menciona el destinatario fallido como una dirección de correo.
+        if (preg_match_all('/[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}/i', $body, $m)) {
+            foreach ($m[0] as $candidate) {
+                $c = strtolower($candidate);
+                // Descartar direcciones del propio sistema/postmaster.
+                if (str_contains($c, 'postmaster') || str_contains($c, 'outlook.com')
+                    || str_contains($c, 'notificaciones.apps')) {
+                    continue;
+                }
+                return $c;
+            }
+        }
+        return null;
+    }
+
+    /** Deriva el motivo del rebote a partir del cuerpo del NDR. */
+    private function reasonFromBody(string $body): string
+    {
+        if (str_contains($body, "wasn't found") || str_contains($body, 'not found')) {
+            return 'Destinatario no encontrado';
+        }
+        if (str_contains($body, 'mailbox full')) {
+            return 'Buzón lleno';
+        }
+        if (str_contains($body, 'invalid') || str_contains($body, 'does not exist')) {
+            return 'Email inválido';
+        }
+        if (str_contains($body, 'rejected') || str_contains($body, 'blocked')) {
+            return 'Email rechazado';
+        }
+        if (str_contains($body, "couldn't be delivered")) {
+            return 'Email no pudo ser entregado';
+        }
+        return 'Email rebotado';
+    }
+
+    /**
      * Verifica rebotes para todos los emails SENT + PENDING de las últimas 24h.
      * Llamado por el PendingEmailsWorkerJob.
      */

@@ -61,25 +61,31 @@ class InvRecepcionController extends Controller
                 }
             }
 
-            $recepcion = $this->service->getById((int) $id);
+            // Detalle con fallback: resuelve por id de recepción o por compra_id.
+            $result = $this->service->getDetalleRecepcion((int) $id);
 
-            if ($recepcion) {
-                return response()->json([
-                    'success' => true,
-                    'orden_numero' => $recepcion->numero_orden_compra,
-                    'proveedor' => $recepcion->compra?->proveedor_nombre,
-                    'data' => $recepcion->detalles ?? $recepcion,
-                ], 200);
-            }
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Recepción no encontrada',
-            ], 404);
+            return response()->json($result, ($result['success'] ?? false) ? 200 : 404);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener la recepción',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Tabla de muestreo (niveles + exclusiones) para el cálculo en vivo.
+     * GET /api/inventario/recepciones/tabla-muestreo
+     */
+    public function tablaMuestreo(): JsonResponse
+    {
+        try {
+            return response()->json($this->service->getTablaMuestreo(), 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener la tabla de muestreo',
                 'error'   => $e->getMessage(),
             ], 500);
         }

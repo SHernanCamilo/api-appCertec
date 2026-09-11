@@ -215,11 +215,12 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obs-activos
     // Comparador Excel vs BD (rutas específicas ANTES de /{id})
     Route::get('/comparador/plantilla', [App\Http\Controllers\MatrizObsActivoController::class, 'plantillaComparador']);
     Route::post('/comparador/excel', [App\Http\Controllers\MatrizObsActivoController::class, 'compararExcel']);
+    Route::post('/comparador/aplicar-compra', [App\Http\Controllers\MatrizObsActivoController::class, 'aplicarCompraComparador']);
     
-    // CRUD básico
+    // CRUD básico: {id} solo numérico para no chocar con /comparador/...
     Route::get('/', [App\Http\Controllers\MatrizObsActivoController::class, 'index']);
-    Route::get('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'show']);
-    Route::put('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'update']);
+    Route::get('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'show'])->whereNumber('id');
+    Route::put('/{id}', [App\Http\Controllers\MatrizObsActivoController::class, 'update'])->whereNumber('id');
 });
 
 // ─── Rutas de Cierre de Inventario - Matriz de Obsolescencia ─────────────────
@@ -296,6 +297,9 @@ Route::post('/fabric/viewer/desktop/claim', [\App\Http\Controllers\Fabric\Fabric
     ->middleware('throttle:20,1');
 Route::get('/fabric/viewer/desktop/download', [\App\Http\Controllers\Fabric\FabricDesktopController::class, 'download'])
     ->middleware('throttle:10,1');
+// ── JadeOne Desktop — última versión publicada (para auto-actualización del .exe)
+Route::get('/fabric/viewer/desktop/version', [\App\Http\Controllers\Fabric\FabricDesktopController::class, 'version'])
+    ->middleware('throttle:60,1');
 
 // ── OData Endpoint PÚBLICO — sin auth:api (tiene su propia autenticación por token/Azure AD)
 // Excel/Power Query se conecta directamente a esta URL.

@@ -46,6 +46,40 @@ class PharmacyService
     }
 
     /**
+     * Devuelve la tabla de muestreo (niveles ISO 2859-1) y las exclusiones activas.
+     * El frontend la usa para calcular el tamaño de muestra en vivo al cambiar
+     * la cantidad a recibir, sin llamar al backend celda por celda.
+     *
+     * @return array{success:bool, niveles:array, exclusiones:array}
+     */
+    public function getTablaMuestreo(): array
+    {
+        $niveles = InvMuestreoNivel::where('activo', true)
+            ->orderBy('lote_min')
+            ->get(['nivel_inspeccion', 'lote_min', 'lote_max', 'letra_codigo', 'tamano_muestra'])
+            ->map(fn ($n) => [
+                'nivel_inspeccion' => $n->nivel_inspeccion,
+                'lote_min'         => (int) $n->lote_min,
+                'lote_max'         => (int) $n->lote_max,
+                'letra_codigo'     => $n->letra_codigo,
+                'tamano_muestra'   => (int) $n->tamano_muestra,
+            ])->values()->all();
+
+        // Solo los códigos excluidos (muestreo 100%); el frontend compara por código.
+        $exclusiones = InvMuestreoExclusion::where('activo', true)
+            ->pluck('codigo_producto')
+            ->map(fn ($c) => (string) $c)
+            ->values()
+            ->all();
+
+        return [
+            'success'     => true,
+            'niveles'     => $niveles,
+            'exclusiones' => $exclusiones,
+        ];
+    }
+
+    /**
      * Calcular tamaño de muestra según ISO 2859-1 (NTC-ISO 2859-1).
      *
      * @param int $cantidadLote Cantidad del lote recibido

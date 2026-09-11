@@ -83,4 +83,9 @@ return [
     'inventory_products_schema' => env('FABRIC_INVENTORY_PRODUCTS_SCHEMA', 'in'),
     'inventory_products_view'   => env('FABRIC_INVENTORY_PRODUCTS_VIEW', 'VW_Inventory_Productos'),
 
+    // Validación de productos: leer desde el parquet local (DuckDB, rápido)
+    // con fallback automático a la vista SQL en vivo si el parquet no está listo.
+    // Poner en false para forzar siempre la vista SQL/GraphQL.
+    'inventory_products_parquet' => filter_var(env('FABRIC_INVENTORY_PRODUCTS_PARQUET', true), FILTER_VALIDATE_BOOLEAN),
+
 ];

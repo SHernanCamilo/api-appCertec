@@ -4,11 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Models\MatrizObsActivoC;
 use App\Models\MatrizObsActivoD;
+use App\Models\User;
 use App\Services\Inventory\MatrizObsComparadorService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -18,6 +20,18 @@ class MatrizObsActivoController extends Controller
      * Nombre calificado de la tabla principal (evita ambigüedad en consultas con JOIN)
      */
     private const TABLA = 'matzobs_activos_c';
+
+    private function usuarioConEmpresas(): ?User
+    {
+        $user = Auth::user();
+        if (!$user instanceof User) {
+            return null;
+        }
+
+        $user->load('empresas');
+
+        return $user;
+    }
 
     /**
      * Aplicar el filtro de permisos del usuario sobre la consulta.
@@ -117,7 +131,7 @@ class MatrizObsActivoController extends Controller
     public function getActivosPorPermisos(Request $request): JsonResponse
     {
         try {
-            $user = Auth::user();
+            $user = $this->usuarioConEmpresas();
             
             if (!$user) {
                 return response()->json([
@@ -126,9 +140,6 @@ class MatrizObsActivoController extends Controller
                 ], 401);
             }
 
-            // Cargar empresas del usuario con pivot
-            $user->load('empresas');
-            
             $query = MatrizObsActivoC::with(['detalle', 'empresa', 'sucursal', 'sede']);
 
             $this->aplicarFiltrosPermisos($query, $user);
@@ -224,7 +235,7 @@ class MatrizObsActivoController extends Controller
     public function getEstadisticas(): JsonResponse
     {
         try {
-            $user = Auth::user();
+            $user = $this->usuarioConEmpresas();
             
             if (!$user) {
                 return response()->json([
@@ -301,7 +312,7 @@ class MatrizObsActivoController extends Controller
     public function dashboard(Request $request): JsonResponse
     {
         try {
-            $user = Auth::user();
+            $user = $this->usuarioConEmpresas();
 
             if (!$user) {
                 return response()->json([
@@ -309,8 +320,6 @@ class MatrizObsActivoController extends Controller
                     'message' => 'Usuario no autenticado'
                 ], 401);
             }
-
-            $user->load('empresas');
 
             // ── Conteo por estado de obsolescencia ──────────────────────────
             $estadoQuery = MatrizObsActivoC::query();
@@ -417,7 +426,7 @@ class MatrizObsActivoController extends Controller
     public function opcionesFiltros(Request $request): JsonResponse
     {
         try {
-            $user = Auth::user();
+            $user = $this->usuarioConEmpresas();
 
             if (!$user) {
                 return response()->json([
@@ -425,8 +434,6 @@ class MatrizObsActivoController extends Controller
                     'message' => 'Usuario no autenticado'
                 ], 401);
             }
-
-            $user->load('empresas');
 
             $tipo = $request->get('tipo', 'empresa');
 
@@ -634,7 +641,7 @@ class MatrizObsActivoController extends Controller
             ],
         ]);
 
-        $user = Auth::user();
+        $user = $this->usuarioConEmpresas();
         if (!$user) {
             return response()->json([
                 'success' => false,
@@ -645,7 +652,6 @@ class MatrizObsActivoController extends Controller
         @set_time_limit(180);
         @ini_set('memory_limit', '512M');
 
-        $user->load('empresas');
         $query = MatrizObsActivoC::query();
         $this->aplicarFiltrosPermisos($query, $user);
         $this->aplicarFiltrosRequest($query, $request);
@@ -666,8 +672,14 @@ class MatrizObsActivoController extends Controller
                 'success' => true,
                 'message' => 'Comparación completada',
                 'data' => $resultado,
-            ]);
+            ], 200, [], JSON_INVALID_UTF8_SUBSTITUTE);
         } catch (\Throwable $e) {
+            Log::error('Comparador matriz obsolescencia', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage() ?: 'Error al comparar el archivo',
@@ -677,6 +689,56 @@ class MatrizObsActivoController extends Controller
                 \Illuminate\Support\Facades\Storage::delete($temporal);
             }
         }
+    }
+
+    /**
+     * Copia FECHA DE COMPRA y MODALIDAD DE COMPRA del Excel a los activos cruzados.
+     */
+    public function aplicarCompraComparador(Request $request, MatrizObsComparadorService $comparador): JsonResponse
+    {
+        $request->validate([
+            'items' => 'required|array|min:1|max:5000',
+            'items.*.id_activo' => 'required|integer',
+            'items.*.fecha_compra' => 'nullable|string',
+            'items.*.modalidad' => 'nullable|string|max:255',
+            'items.*.max_ram' => 'nullable',
+        ]);
+
+        $user = $this->usuarioConEmpresas();
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Usuario no autenticado',
+            ], 401);
+        }
+
+        @set_time_limit(180);
+        @ini_set('memory_limit', '512M');
+
+        $query = MatrizObsActivoC::query();
+        $this->aplicarFiltrosPermisos($query, $user);
+        $this->aplicarFiltrosRequest($query, $request);
+
+        try {
+            $resultado = $comparador->aplicarFechaYModalidad($request->input('items', []), $query);
+        } catch (\Throwable $e) {
+            Log::error('Comparador aplicar fecha/modalidad/MaxRam', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage() ?: 'Error al copiar los valores del Excel',
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Se copiaron fecha, modalidad y MaxRam en {$resultado['actualizados']} activos",
+            'data' => $resultado,
+        ]);
     }
 
     /**

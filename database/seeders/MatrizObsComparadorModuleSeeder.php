@@ -15,7 +15,7 @@ class MatrizObsComparadorModuleSeeder extends Seeder
 {
     public function run(): void
     {
-        $this->command?->info('Configurando módulo INV-MATRIX-COMPARADOR...');
+        $this->command?->info('Configurando módulo INV-MATRIX-COMPARAR...');
 
         $padre = Modulo::where('codigo', 'INV-MATRIZ')->first();
 
@@ -25,13 +25,13 @@ class MatrizObsComparadorModuleSeeder extends Seeder
         }
 
         $modulo = Modulo::updateOrCreate(
-            ['codigo' => 'INV-MATRIX-COMPARADOR'],
+            ['codigo' => 'INV-MATRIX-COMPARAR'],
             [
                 'id_modulo_padre' => $padre->id,
-                'nombre' => 'Comparador Matriz Obsolescencia',
-                'descripcion' => 'Compara un Excel de inventario contra los activos de la matriz de obsolescencia',
+                'nombre' => 'Comparar',
+                'descripcion' => 'Compara el Excel histórico de la matriz contra los activos actuales',
                 'icono' => 'bi bi-arrow-left-right',
-                'ruta' => '/inventario/matrizObsolescencia/comparadorMaObsolescencia',
+                'ruta' => '/inventario/matrizObsolescencia/comparar',
                 'orden' => 4,
                 'nivel' => ($padre->nivel ?? 1) + 1,
                 'estado' => 1,
@@ -80,10 +80,10 @@ class MatrizObsComparadorModuleSeeder extends Seeder
         );
 
         $perfil = Perfil::updateOrCreate(
-            ['codigo' => 'INV-MATRIX-COMPARADOR', 'id_modulo' => $modulo->id],
+            ['codigo' => 'INV-MATRIX-COMPARAR', 'id_modulo' => $modulo->id],
             [
-                'nombre' => 'Comparador Matriz Obsolescencia',
-                'descripcion' => 'Acceso al comparador Excel vs base de datos',
+                'nombre' => 'Comparar Matriz de Obsolescencia',
+                'descripcion' => 'Acceso a comparar el Excel histórico contra la matriz',
                 'puede_leer' => 1,
                 'puede_crear' => 0,
                 'puede_editar' => 0,
@@ -99,25 +99,40 @@ class MatrizObsComparadorModuleSeeder extends Seeder
             ->where(function ($query): void {
                 $query->where('es_admin', 1)
                     ->orWhere('codigo', 'super-admin')
+                    ->orWhere('codigo', 'like', '%super%')
                     ->orWhere('nombre', 'like', '%Super Administrador%')
-                    ->orWhereHas('perfiles.modulo', function ($q): void {
-                        $q->whereIn('codigo', [
-                            'INV-MATRIZ',
-                            'INV-MATRIX-DAHSBOARD',
-                            'INV-MATRIX-REPORTE',
-                            'INV-MATRIX-CIERRE',
-                        ]);
-                    });
+                    ->orWhere('nombre', 'like', '%Superadmin%');
             })
             ->get();
 
+        $rolesMatriz = Rol::query()
+            ->where('estado', 1)
+            ->whereHas('perfiles.modulo', function ($q): void {
+                $q->whereIn('codigo', [
+                    'INV-MATRIZ',
+                    'INV-MATRIX-DAHSBOARD',
+                    'INV-MATRIX-REPORTE',
+                    'INV-MATRIX-CIERRE',
+                ]);
+            })
+            ->get();
+
+        $roles = $roles->merge($rolesMatriz)->unique('id');
+
+        if ($roles->isEmpty()) {
+            $this->command?->error('No se encontró el rol Superadmin para asignar el perfil.');
+            return;
+        }
+
         foreach ($roles as $rol) {
             $rol->perfiles()->syncWithoutDetaching([$perfil->id]);
+            $this->command?->info("  Perfil asignado a: {$rol->nombre} ({$rol->codigo})");
         }
 
         app(SidebarService::class)->invalidateAllSidebarCache();
 
-        $this->command?->info("Módulo INV-MATRIX-COMPARADOR listo (ID: {$modulo->id}).");
+        $this->command?->info("Módulo INV-MATRIX-COMPARAR listo (ID: {$modulo->id}).");
+        $this->command?->info("Permisos: {$permisoVisible->codigo}, {$permisoComparar->codigo}");
         $this->command?->info('Cierra sesión y vuelve a entrar si el menú no aparece de inmediato.');
     }
 }

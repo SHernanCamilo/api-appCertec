@@ -44,6 +44,15 @@ class PendingEmailsWorkerJob implements ShouldQueue
                 Log::channel('notificaciones')->info("[WORKER] Bounce check: " . json_encode($bounceResult));
             }
 
+            // Barrido de rebotes TARDIOS: los NDR de Outlook llegan despues de
+            // los 5 min, cuando el correo ya se marco DELIVERED y salio del pool
+            // de arriba. Este barrido parte del buzon y reabre esos rebotes,
+            // aunque el correo ya figure como entregado. Ventana de 3 dias.
+            $sweep = $bounceChecker->sweepRecentBounces(3);
+            if (($sweep['bounced'] ?? 0) > 0) {
+                Log::channel('notificaciones')->warning("[WORKER] Bounce sweep: " . json_encode($sweep));
+            }
+
             // Segundo: resolver los que quedaron pendientes (fallback por tiempo)
             $this->resolveDelivered();
             $this->resolveExpired();

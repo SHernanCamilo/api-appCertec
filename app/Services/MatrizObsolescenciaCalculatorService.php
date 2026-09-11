@@ -217,9 +217,10 @@ class MatrizObsolescenciaCalculatorService
     
     /**
      * Calcular valoración de RAM basada en características mínimas y capacidad de expansión
-     * - Si tamano_ram == max_ram (sin capacidad de expansión) → Puntaje = 0
-     * - Si tamano_ram < ram_minima → Puntaje = 50
-     * - Si tamano_ram >= ram_minima Y max_ram > tamano_ram → Puntaje = 100
+     * - Si tamano_ram < ram_minima Y no se puede ampliar → 0
+     * - Si tamano_ram < ram_minima Y se puede ampliar → 50
+     * - Si tamano_ram >= ram_minima Y tamano_ram == max_ram (sin ampliación) → 50
+     * - Si tamano_ram >= ram_minima Y max_ram > tamano_ram → 100
      */
     protected function calcularValoracionRam($detalle)
     {
@@ -243,25 +244,27 @@ class MatrizObsolescenciaCalculatorService
         $maxRam = $detalle->max_ram;
         
         // Determinar valoración según la lógica especificada
-        // PRIORIDAD 1: Si RAM actual == MaxRAM (sin capacidad de expansión) → 0
-        if ($maxRam !== null && $tamanoRam == $maxRam) {
-            $valoracion = 0;
-            $razon = "Sin capacidad de expansión (RAM actual = MaxRAM)";
+        $puedeAmpliar = $maxRam !== null && $maxRam > $tamanoRam;
+
+        // PRIORIDAD 1: RAM < mínima
+        if ($tamanoRam < $ramMinima) {
+            if ($puedeAmpliar) {
+                $valoracion = 50;
+                $razon = "RAM menor al mínimo, pero se puede ampliar";
+            } else {
+                $valoracion = 0;
+                $razon = "RAM insuficiente y no se puede ampliar";
+            }
         }
-        // PRIORIDAD 2: Si RAM < mínima requerida → 50
-        elseif ($tamanoRam < $ramMinima) {
+        // PRIORIDAD 2: Cumple mínimo pero no se puede ampliar → 50
+        elseif ($maxRam !== null && $tamanoRam == $maxRam) {
             $valoracion = 50;
-            $razon = "RAM insuficiente (menor a mínima requerida)";
+            $razon = "Cumple mínimo, sin capacidad de expansión (RAM = MaxRAM)";
         }
-        // PRIORIDAD 3: Si RAM >= mínima Y tiene capacidad de expansión → 100
-        elseif ($tamanoRam >= $ramMinima && ($maxRam === null || $maxRam > $tamanoRam)) {
+        // PRIORIDAD 3: Cumple mínimo y se puede ampliar → 100
+        else {
             $valoracion = 100;
             $razon = "RAM cumple con mínimo y tiene capacidad de expansión";
-        }
-        // Caso por defecto
-        else {
-            $valoracion = 50;
-            $razon = "Caso por defecto";
         }
         
         $detalle->update(['valoracion_ram' => $valoracion]);
@@ -294,7 +297,7 @@ class MatrizObsolescenciaCalculatorService
         
         try {
             // Buscar el procesador en la tabla matzobs_procesadores
-            $procesadorDB = \DB::table('matzobs_procesadores')
+            $procesadorDB = DB::table('matzobs_procesadores')
                 ->where('nombre', $detalle->procesador)
                 ->first();
             
