@@ -710,11 +710,13 @@ class ActivoFijoService
     private function filasReporte(array $filtros = []): array
     {
         return $this->construirQueryReporte($filtros)->get()->map(function (TrazabilidadActivo $r) {
+            $esExterno = (bool) $r->es_externo;
             return [
                 'placa'                 => (string) ($r->placa ?? ''),
-                'articulo'              => (string) ($r->articulo_nombre ?? ''),
+                'articulo'              => (string) ($r->articulo_nombre ?? ($esExterno ? '' : '')),
                 'responsable'           => (string) ($r->novedad_responsable ?? ''),
-                'localizacion_indigo'   => (string) ($r->localizacion_original ?? ''),
+                // Los externos no existen en Indigo → N/A en las columnas de origen.
+                'localizacion_indigo'   => $esExterno ? 'N/A' : (string) ($r->localizacion_original ?? ''),
                 'localizacion_encontrada' => (string) ($r->novedad_localizacion ?? ''),
                 'tipo_inventario'       => (string) ($r->tipoInventario?->nombre ?? ''),
                 'estado_fisico'         => (string) ($r->novedad_estado_fisico ?? ''),
@@ -1029,19 +1031,29 @@ class ActivoFijoService
         foreach ($porPlaca as $tomas) {
             foreach ($tomas as $t) {
                 /** @var TrazabilidadActivo $t */
+                $esExterno = (bool) $t->es_externo;
                 $col = 1;
                 foreach ($camposComparables as $campoNovedad => $etiqueta) {
-                    $indigo  = $campoNovedad === 'novedad_localizacion'
-                        ? ($t->localizacion_original ?: $t->valorOrigenDe($campoNovedad))
-                        : $t->valorOrigenDe($campoNovedad);
-                    $novedad = $t->{$campoNovedad};
+                    // Valor de Indigo: los externos NO existen en Indigo → N/A.
+                    if ($esExterno) {
+                        $indigo = 'N/A';
+                    } elseif ($campoNovedad === 'novedad_localizacion') {
+                        $indigo = $t->localizacion_original ?: $t->valorOrigenDe($campoNovedad);
+                    } else {
+                        $indigo = $t->valorOrigenDe($campoNovedad);
+                    }
+
+                    // Valor de Novedad: para externos, placa/artículo/serie viven en
+                    // columnas base (placa, articulo_nombre, serie), no en novedad_*.
+                    $novedad = $this->valorNovedadCampo($t, $campoNovedad);
 
                     $sheet->setCellValueExplicit([$col, $row], (string) ($indigo ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
                     $sheet->setCellValueExplicit([$col + 1, $row], (string) ($novedad ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
 
-                    // Resaltar la celda de novedad cuando difiere de Indigo
-                    if ($novedad !== null && trim((string) $novedad) !== ''
-                        && mb_strtolower(trim((string) $novedad)) !== mb_strtolower(trim((string) ($indigo ?? '')))) {
+                    // Resaltar la celda de novedad cuando difiere de Indigo (o es externo con valor).
+                    $difiere = $novedad !== null && trim((string) $novedad) !== ''
+                        && ($esExterno || mb_strtolower(trim((string) $novedad)) !== mb_strtolower(trim((string) ($indigo ?? ''))));
+                    if ($difiere) {
                         $sheet->getStyle([$col + 1, $row])->applyFromArray([
                             'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => $amarillo]],
                             'font' => ['bold' => true],
@@ -1095,6 +1107,27 @@ class ActivoFijoService
         }
 
         return '';
+    }
+
+    /**
+     * Valor "Novedad" de un campo para el reporte. Contempla que los activos
+     * externos (no existen en Indigo) guardan placa/artículo/serie en las
+     * columnas base (placa, articulo_nombre, serie), no en los campos novedad_*.
+     */
+    private function valorNovedadCampo(TrazabilidadActivo $t, string $campoNovedad): ?string
+    {
+        $novedad = $t->{$campoNovedad};
+        if ($novedad !== null && trim((string) $novedad) !== '') {
+            return (string) $novedad;
+        }
+
+        // Respaldo desde columnas base (clave para activos externos).
+        return match ($campoNovedad) {
+            'novedad_placa'    => $t->placa,
+            'novedad_articulo' => $t->articulo_nombre,
+            'novedad_serie'    => $t->serie,
+            default            => null,
+        };
     }
 
     private function etiquetaResultado(string $resultado): string
