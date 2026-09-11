@@ -215,6 +215,7 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('matriz-obs-activos
     // Comparador Excel vs BD (rutas específicas ANTES de /{id})
     Route::get('/comparador/plantilla', [App\Http\Controllers\MatrizObsActivoController::class, 'plantillaComparador']);
     Route::post('/comparador/excel', [App\Http\Controllers\MatrizObsActivoController::class, 'compararExcel']);
+    Route::post('/comparador/aplicar-compra', [App\Http\Controllers\MatrizObsActivoController::class, 'aplicarCompraComparador']);
     
     // CRUD básico
     Route::get('/', [App\Http\Controllers\MatrizObsActivoController::class, 'index']);
