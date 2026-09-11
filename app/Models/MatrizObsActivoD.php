@@ -35,6 +35,7 @@ class MatrizObsActivoD extends Model
         'edad_v_util',
         'valoracion_edad',
         'tamano_ram',
+        'max_ram',
         'generacion_ram',
         'valoracion_ram',
         'procesador',
