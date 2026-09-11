@@ -20,7 +20,7 @@ class CargaMasivaExportService
      * Genera el archivo Excel con formato para carga masiva.
      *
      * @param int $idUnidad ID de la unidad funcional
-     * @param int $anio A+¦o
+     * @param int $anio Anio
      * @param int $mes Mes (1-12)
      * @return Spreadsheet
      */
@@ -35,13 +35,13 @@ class CargaMasivaExportService
 
         $spreadsheet = new Spreadsheet();
 
-        // Hoja 1: Llenado r+ípido
+        // Hoja 1: Llenado rapido
         $this->crearHojaLlenadoRapido($spreadsheet, $empleados, $plantillas, $unidad, $anio, $mes);
 
-        // Hoja 2: Detalle por d+¡a
+        // Hoja 2: Detalle por dia
         $this->crearHojaDetalleDia($spreadsheet, $empleados, $plantillas, $unidad, $anio, $mes, $diasEnMes);
 
-        // Hoja 3: C+¦digos v+ílidos (referencia)
+        // Hoja 3: Codigos validos (referencia)
         $this->crearHojaCodigosValidos($spreadsheet, $plantillas);
 
         // Activar hoja 1 por defecto
@@ -51,7 +51,7 @@ class CargaMasivaExportService
     }
 
     /**
-     * Hoja 1: Llenado r+ípido ÔÇö una columna "TURNO TODO EL MES" por empleado.
+     * Hoja 1: Llenado rapido ï¿½ï¿½ï¿½ una columna "TURNO TODO EL MES" por empleado.
      */
     private function crearHojaLlenadoRapido(
         Spreadsheet $spreadsheet,
@@ -62,16 +62,16 @@ class CargaMasivaExportService
         int $mes
     ): void {
         $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle('Llenado R+ípido');
+        $sheet->setTitle('Llenado Rapido');
 
         $nombreMes = Carbon::create($anio, $mes, 1)->translatedFormat('F Y');
 
         // Header informativo
         $sheet->setCellValue('A1', 'CARGA MASIVA DE TURNOS');
         $sheet->setCellValue('A2', "Unidad: {$unidad->nombre}");
-        $sheet->setCellValue('A3', "Per+¡odo: {$nombreMes}");
-        $sheet->setCellValue('A4', 'Instrucciones: Escriba el C+ôDIGO de plantilla en la columna "TURNO TODO EL MES".');
-        $sheet->setCellValue('A5', 'Use "D" para d+¡a de descanso. Deje vac+¡o para no asignar.');
+        $sheet->setCellValue('A3', "Periodo: {$nombreMes}");
+        $sheet->setCellValue('A4', 'Instrucciones: Escriba el CODIGO de plantilla en la columna "TURNO TODO EL MES".');
+        $sheet->setCellValue('A5', 'Use "D" para dia de descanso. Deje vacio para no asignar.');
 
         // Estilo header
         $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(14);
@@ -82,7 +82,7 @@ class CargaMasivaExportService
         $sheet->setCellValue("A{$row}", 'EMPLEADO');
         $sheet->setCellValue("B{$row}", 'ID');
         $sheet->setCellValue("C{$row}", 'TURNO TODO EL MES');
-        $sheet->setCellValue("D{$row}", 'TRABAJA S+üBADO');
+        $sheet->setCellValue("D{$row}", 'TRABAJA SABADO');
         $sheet->setCellValue("E{$row}", 'TRABAJA DOMINGO');
         $sheet->setCellValue("F{$row}", 'TRABAJA FESTIVOS');
 
@@ -106,21 +106,21 @@ class CargaMasivaExportService
             $sheet->setCellValue("A{$dataRow}", $emp['nombre']);
             $sheet->setCellValue("B{$dataRow}", $emp['id']);
             $sheet->setCellValue("C{$dataRow}", ''); // Turno
-            $sheet->setCellValue("D{$dataRow}", 'N'); // S+íbado por defecto No
+            $sheet->setCellValue("D{$dataRow}", 'N'); // Si por defecto No
             $sheet->setCellValue("E{$dataRow}", 'N'); // Domingo por defecto No
             $sheet->setCellValue("F{$dataRow}", 'N'); // Festivos por defecto No
 
-            // Validaci+¦n dropdown en columna C (c+¦digo plantilla)
+            // Validacion dropdown en columna C (codigo plantilla)
             $validation = $sheet->getCell("C{$dataRow}")->getDataValidation();
             $validation->setType(DataValidation::TYPE_LIST);
             $validation->setErrorStyle(DataValidation::STYLE_WARNING);
             $validation->setAllowBlank(true);
             $validation->setShowDropDown(true);
             $validation->setFormula1($listaValidacion);
-            $validation->setErrorTitle('C+¦digo inv+ílido');
-            $validation->setError('Use un c+¦digo de la hoja "C+¦digos V+ílidos"');
+            $validation->setErrorTitle('C+ï¿½digo invalido');
+            $validation->setError('Use un codigo de la hoja "Codigos Validos"');
 
-            // Validaci+¦n S/N para s+íbado, domingo, festivos
+            // Validacion S/N para sabado, domingo, festivos
             foreach (['D', 'E', 'F'] as $col) {
                 $val = $sheet->getCell("{$col}{$dataRow}")->getDataValidation();
                 $val->setType(DataValidation::TYPE_LIST);
@@ -131,7 +131,7 @@ class CargaMasivaExportService
             }
         }
 
-        // Ocultar columna ID (B) ÔÇö es para referencia interna
+        // Ocultar columna ID (B) ï¿½ï¿½ï¿½ es para referencia interna
         $sheet->getColumnDimension('B')->setVisible(false);
 
         // Auto-ancho
@@ -149,7 +149,7 @@ class CargaMasivaExportService
     }
 
     /**
-     * Hoja 2: Detalle por d+¡a ÔÇö matriz empleados +ù d+¡as del mes.
+     * Hoja 2: Detalle por dia ï¿½ï¿½ï¿½ matriz empleados +ï¿½ dias del mes.
      */
     private function crearHojaDetalleDia(
         Spreadsheet $spreadsheet,
@@ -161,13 +161,13 @@ class CargaMasivaExportService
         int $diasEnMes
     ): void {
         $sheet = $spreadsheet->createSheet();
-        $sheet->setTitle('Detalle por D+¡a');
+        $sheet->setTitle('Detalle por Dia');
 
         $nombreMes = Carbon::create($anio, $mes, 1)->translatedFormat('F Y');
 
         // Header
-        $sheet->setCellValue('A1', "DETALLE POR D+ìA ÔÇö {$unidad->nombre} ÔÇö {$nombreMes}");
-        $sheet->setCellValue('A2', 'Escriba el c+¦digo de plantilla en cada d+¡a. "D" = descanso. Vac+¡o = sin turno.');
+        $sheet->setCellValue('A1', "DETALLE POR DIA ï¿½ï¿½ï¿½ {$unidad->nombre} ï¿½ï¿½ï¿½ {$nombreMes}");
+        $sheet->setCellValue('A2', 'Escriba el codigo de plantilla en cada dia. "D" = descanso. Vacio = sin turno.');
         $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(12);
         $sheet->getStyle('A2')->getFont()->setItalic(true);
 
@@ -176,9 +176,9 @@ class CargaMasivaExportService
         $sheet->setCellValue("A{$headerRow}", 'EMPLEADO');
         $sheet->setCellValue("B{$headerRow}", 'ID');
 
-        // Columnas de d+¡as: C = d+¡a 1, D = d+¡a 2, etc.
+        // Columnas de dias: C = dia 1, D = dia 2, etc.
         for ($d = 1; $d <= $diasEnMes; $d++) {
-            $col = $this->numToCol($d + 1); // C=d+¡a1, D=d+¡a2, ...
+            $col = $this->numToCol($d + 1); // C=dia1, D=dia2, ...
             $fecha = Carbon::create($anio, $mes, $d);
             $diaSemana = mb_substr($fecha->translatedFormat('D'), 0, 3);
             $sheet->setCellValue("{$col}{$headerRow}", "{$d}\n{$diaSemana}");
@@ -199,7 +199,7 @@ class CargaMasivaExportService
             'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]],
         ]);
 
-        // Validaci+¦n dropdown
+        // Validacion dropdown
         $codigosValidos = array_merge(array_column($plantillas, 'codigo'), ['D']);
         $listaValidacion = '"' . implode(',', $codigosValidos) . '"';
 
@@ -209,7 +209,7 @@ class CargaMasivaExportService
             $sheet->setCellValue("A{$dataRow}", $emp['nombre']);
             $sheet->setCellValue("B{$dataRow}", $emp['id']);
 
-            // Validaci+¦n en cada celda de d+¡a
+            // Validacion en cada celda de dia
             for ($d = 1; $d <= $diasEnMes; $d++) {
                 $col = $this->numToCol($d + 1);
                 $validation = $sheet->getCell("{$col}{$dataRow}")->getDataValidation();
@@ -225,7 +225,7 @@ class CargaMasivaExportService
         $sheet->getColumnDimension('B')->setVisible(false);
         $sheet->getColumnDimension('A')->setAutoSize(true);
 
-        // Ancho columnas de d+¡as
+        // Ancho columnas de dias
         for ($d = 1; $d <= $diasEnMes; $d++) {
             $col = $this->numToCol($d + 1);
             $sheet->getColumnDimension($col)->setWidth(6);
@@ -239,27 +239,27 @@ class CargaMasivaExportService
     }
 
     /**
-     * Hoja 3: C+¦digos v+ílidos ÔÇö referencia de plantillas disponibles.
+     * Hoja 3: Codigos validos ï¿½ï¿½ï¿½ referencia de plantillas disponibles.
      */
     private function crearHojaCodigosValidos(Spreadsheet $spreadsheet, array $plantillas): void
     {
         $sheet = $spreadsheet->createSheet();
-        $sheet->setTitle('C+¦digos V+ílidos');
+        $sheet->setTitle('Codigos Validos');
 
         // Header
-        $sheet->setCellValue('A1', 'C+ôDIGOS DE PLANTILLA DISPONIBLES');
+        $sheet->setCellValue('A1', 'CODIGOS DE PLANTILLA DISPONIBLES');
         $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(12);
 
-        $sheet->setCellValue('A2', 'Use estos c+¦digos en las hojas "Llenado R+ípido" o "Detalle por D+¡a".');
-        $sheet->setCellValue('A3', 'El c+¦digo "D" siempre est+í disponible para marcar DESCANSO.');
+        $sheet->setCellValue('A2', 'Use estos codigos en las hojas "Llenado Rapido" o "Detalle por Dia".');
+        $sheet->setCellValue('A3', 'El codigo "D" siempre esta disponible para marcar DESCANSO.');
         $sheet->getStyle('A2:A3')->getFont()->setItalic(true);
 
         // Encabezados tabla
         $row = 5;
-        $sheet->setCellValue("A{$row}", 'C+ôDIGO');
+        $sheet->setCellValue("A{$row}", 'CODIGO');
         $sheet->setCellValue("B{$row}", 'NOMBRE');
         $sheet->setCellValue("C{$row}", 'HORARIO');
-        $sheet->setCellValue("D{$row}", 'DURACI+ôN');
+        $sheet->setCellValue("D{$row}", 'DURACION');
         $sheet->setCellValue("E{$row}", 'NOCTURNO');
 
         $sheet->getStyle("A{$row}:E{$row}")->applyFromArray([
@@ -271,8 +271,8 @@ class CargaMasivaExportService
         $row++;
         $sheet->setCellValue("A{$row}", 'D');
         $sheet->setCellValue("B{$row}", 'Descanso');
-        $sheet->setCellValue("C{$row}", 'ÔÇö');
-        $sheet->setCellValue("D{$row}", 'ÔÇö');
+        $sheet->setCellValue("C{$row}", 'ï¿½ï¿½ï¿½');
+        $sheet->setCellValue("D{$row}", 'ï¿½ï¿½ï¿½');
         $sheet->setCellValue("E{$row}", 'No');
         $sheet->getStyle("A{$row}:E{$row}")->getFont()->setItalic(true);
 
@@ -288,7 +288,7 @@ class CargaMasivaExportService
             $sheet->setCellValue("B{$row}", $p['nombre']);
             $sheet->setCellValue("C{$row}", $horario);
             $sheet->setCellValue("D{$row}", ($p['duracion_horas'] ?? '?') . 'h');
-            $sheet->setCellValue("E{$row}", $p['es_nocturno'] ? 'S+¡' : 'No');
+            $sheet->setCellValue("E{$row}", $p['es_nocturno'] ? 'Si' : 'No');
         }
 
         // Auto-ancho
@@ -303,7 +303,7 @@ class CargaMasivaExportService
 
     /**
      * Obtener empleados de la unidad funcional.
-     * Usa la misma l+¦gica que UnidadFuncionalController@empleados:
+     * Usa la misma l+ï¿½gica que UnidadFuncionalController@empleados:
      * tabla config_unidades_fun_usuarios JOIN config_person_tercero
      */
     private function obtenerEmpleados(int $idUnidad): array
@@ -324,7 +324,7 @@ class CargaMasivaExportService
             // Si la tabla no existe, intentar fallback
         }
 
-        // Fallback 1: config_unidades_fun_tercero (otra posible relaci+¦n)
+        // Fallback 1: config_unidades_fun_tercero (otra posible relaci+ï¿½n)
         try {
             $empleados = DB::table('config_unidades_fun_tercero as ut')
                 ->join('config_person_tercero as t', 't.id', '=', 'ut.id_tercero')
@@ -374,7 +374,7 @@ class CargaMasivaExportService
     }
 
     /**
-     * Convierte n+¦mero de columna (0-indexed) a letra Excel.
+     * Convierte n+ï¿½mero de columna (0-indexed) a letra Excel.
      * 0=A, 1=B, 2=C, ..., 25=Z, 26=AA, etc.
      */
     private function numToCol(int $num): string

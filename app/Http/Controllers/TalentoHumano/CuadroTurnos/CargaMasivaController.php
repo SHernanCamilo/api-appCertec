@@ -25,7 +25,7 @@ class CargaMasivaController extends Controller
      * GET /api/turnos/carga-masiva/formato
      *
      * Descarga el formato Excel pre-llenado con los empleados de la unidad,
-     * los d+¡as del mes y los c+¦digos de plantilla v+ílidos para la empresa.
+     * los d+?as del mes y los c+?digos de plantilla v+?lidos para la empresa.
      *
      * Query params: id_unidad, anio, mes
      */
@@ -89,7 +89,7 @@ class CargaMasivaController extends Controller
 
             return response()->json([
                 'success'  => true,
-                'message'  => "Importaci+¦n completada: {$resultado['exitosas']} turnos asignados.",
+                'message'  => "Importaci+?n completada: {$resultado['exitosas']} turnos asignados.",
                 'data'     => [
                     'exitosas' => $resultado['exitosas'],
                     'errores'  => $resultado['errores'],
@@ -99,7 +99,7 @@ class CargaMasivaController extends Controller
         } catch (\Exception $e) {
             @unlink($fullPath);
 
-            \Log::error('Carga masiva: error en importaci+¦n', [
+            \Log::error('Carga masiva: error en importaci+?n', [
                 'error' => $e->getMessage(),
                 'file'  => $e->getFile(),
                 'line'  => $e->getLine(),

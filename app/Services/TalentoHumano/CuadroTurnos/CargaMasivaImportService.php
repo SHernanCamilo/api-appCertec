@@ -16,16 +16,16 @@ class CargaMasivaImportService
     /**
      * Procesa un archivo Excel de carga masiva de turnos.
      *
-     * L+¦gica:
+     * L+?gica:
      *   1. Lee metadata oculta (id_unidad, anio, mes)
-     *   2. Lee Hoja 1 "Llenado R+ípido" ÔÇö turno completo para todo el mes
-     *   3. Lee Hoja 2 "Detalle por D+¡a" ÔÇö turno espec+¡fico por cada d+¡a
+     *   2. Lee Hoja 1 "Llenado R+?pido" ??? turno completo para todo el mes
+     *   3. Lee Hoja 2 "Detalle por D+?a" ??? turno espec+?fico por cada d+?a
      *   4. Hoja 2 tiene prioridad si ambas tienen datos para el mismo empleado
      *   5. Genera asignaciones con updateOrCreate
      *
      * @param string $filePath Ruta al archivo subido
      * @param int $idUnidad ID de unidad funcional (del request, para validar)
-     * @param int $anio A+¦o (del request)
+     * @param int $anio A+?o (del request)
      * @param int $mes Mes (del request)
      * @return array Resultado con exitosas, errores, totales
      */
@@ -33,7 +33,7 @@ class CargaMasivaImportService
     {
         $spreadsheet = IOFactory::load($filePath);
 
-        // Obtener plantillas v+ílidas para la empresa de esta unidad
+        // Obtener plantillas v+?lidas para la empresa de esta unidad
         $unidad = DB::table('config_unidades_funcionales')->find($idUnidad);
         $idEmpresa = $unidad->id_empresa ?? null;
         $plantillasMap = $this->obtenerMapaPlantillas($idEmpresa);
@@ -44,7 +44,7 @@ class CargaMasivaImportService
         if (!$idCuadro) {
             return [
                 'exitosas' => 0,
-                'errores' => [['fila' => 0, 'mensaje' => 'No se pudo obtener/crear el cuadro para este per+¡odo.']],
+                'errores' => [['fila' => 0, 'mensaje' => 'No se pudo obtener/crear el cuadro para este per+?odo.']],
                 'total' => 0,
             ];
         }
@@ -60,7 +60,7 @@ class CargaMasivaImportService
         $sheetRapido = $this->getSheet($spreadsheet, 0);
         $sheetDetalle = $this->getSheet($spreadsheet, 1);
 
-        // ÔöÇÔöÇÔöÇ Detectar si ambas hojas tienen datos para los mismos empleados ÔöÇÔöÇÔöÇ
+        // ????????? Detectar si ambas hojas tienen datos para los mismos empleados ?????????
         $empleadosHoja1 = $this->detectarEmpleadosConDatos($sheetRapido, 'rapida');
         $empleadosHoja2 = $this->detectarEmpleadosConDatos($sheetDetalle, 'detalle');
         $duplicados = array_intersect($empleadosHoja1, $empleadosHoja2);
@@ -70,13 +70,13 @@ class CargaMasivaImportService
                 'exitosas' => 0,
                 'errores' => [[
                     'fila' => 0,
-                    'mensaje' => 'Se detectaron empleados con datos en ambas hojas ("Llenado R+ípido" y "Detalle por D+¡a"). Debe usar solo una hoja por empleado. Empleados duplicados: ' . count($duplicados),
+                    'mensaje' => 'Se detectaron empleados con datos en ambas hojas ("Llenado R+?pido" y "Detalle por D+?a"). Debe usar solo una hoja por empleado. Empleados duplicados: ' . count($duplicados),
                 ]],
                 'total' => 0,
             ];
         }
 
-        // ÔöÇÔöÇÔöÇ HOJA 2: Detalle por D+¡a (tiene prioridad) ÔöÇÔöÇÔöÇ
+        // ????????? HOJA 2: Detalle por D+?a (tiene prioridad) ?????????
         if ($sheetDetalle) {
             $resultado = $this->procesarHojaDetalle(
                 $sheetDetalle, $plantillasMap, $idCuadro, $anio, $mes, $festivos
@@ -86,7 +86,7 @@ class CargaMasivaImportService
             $empleadosProcesados = $resultado['empleados_procesados'];
         }
 
-        // ÔöÇÔöÇÔöÇ HOJA 1: Llenado R+ípido (solo para empleados no procesados en hoja 2) ÔöÇÔöÇÔöÇ
+        // ????????? HOJA 1: Llenado R+?pido (solo para empleados no procesados en hoja 2) ?????????
         if ($sheetRapido) {
             $resultado = $this->procesarHojaRapida(
                 $sheetRapido, $plantillasMap, $idCuadro, $anio, $mes, $festivos, $empleadosProcesados
@@ -111,8 +111,8 @@ class CargaMasivaImportService
     }
 
     /**
-     * Procesa Hoja 1: Llenado R+ípido.
-     * Columna A = nombre, B = ID empleado, C = c+¦digo plantilla, D = s+íbado, E = domingo, F = festivos.
+     * Procesa Hoja 1: Llenado R+?pido.
+     * Columna A = nombre, B = ID empleado, C = c+?digo plantilla, D = s+?bado, E = domingo, F = festivos.
      */
     private function procesarHojaRapida(
         $sheet,
@@ -139,12 +139,12 @@ class CargaMasivaImportService
             // Si ya fue procesado en hoja 2, saltar
             if (in_array($idEmpleado, $empleadosYaProcesados)) continue;
 
-            // Leer configuraci+¦n de s+íbado/domingo/festivos
+            // Leer configuraci+?n de s+?bado/domingo/festivos
             $trabajaSabado = strtoupper(trim((string) $sheet->getCell("D{$row}")->getValue())) === 'S';
             $trabajaDomingo = strtoupper(trim((string) $sheet->getCell("E{$row}")->getValue())) === 'S';
             $trabajaFestivos = strtoupper(trim((string) $sheet->getCell("F{$row}")->getValue())) === 'S';
 
-            // Validar c+¦digo
+            // Validar c+?digo
             $esDescanso = strtoupper($codigo) === 'D';
             $plantilla = null;
 
@@ -153,17 +153,17 @@ class CargaMasivaImportService
                 if (!$plantilla) {
                     $errores[] = [
                         'fila' => $row,
-                        'mensaje' => "C+¦digo '{$codigo}' no es v+ílido para esta empresa.",
+                        'mensaje' => "C+?digo '{$codigo}' no es v+?lido para esta empresa.",
                     ];
                     continue;
                 }
             }
 
-            // Generar asignaci+¦n para cada d+¡a del mes
+            // Generar asignaci+?n para cada d+?a del mes
             for ($d = 1; $d <= $diasEnMes; $d++) {
                 $fecha = Carbon::create($anio, $mes, $d);
 
-                // Saltar s+íbados si no trabaja s+íbado
+                // Saltar s+?bados si no trabaja s+?bado
                 if ($fecha->isSaturday() && !$trabajaSabado) continue;
 
                 // Saltar domingos si no trabaja domingo
@@ -190,7 +190,7 @@ class CargaMasivaImportService
                 } catch (\Exception $e) {
                     $errores[] = [
                         'fila' => $row,
-                        'mensaje' => "Error d+¡a {$d}: " . $e->getMessage(),
+                        'mensaje' => "Error d+?a {$d}: " . $e->getMessage(),
                     ];
                 }
             }
@@ -200,8 +200,8 @@ class CargaMasivaImportService
     }
 
     /**
-     * Procesa Hoja 2: Detalle por D+¡a.
-     * Fila 4 = encabezados, A = nombre, B = ID, C en adelante = d+¡as 1,2,3...
+     * Procesa Hoja 2: Detalle por D+?a.
+     * Fila 4 = encabezados, A = nombre, B = ID, C en adelante = d+?as 1,2,3...
      */
     private function procesarHojaDetalle(
         $sheet,
@@ -226,8 +226,8 @@ class CargaMasivaImportService
             $tieneAlgunDato = false;
 
             for ($d = 1; $d <= $diasEnMes; $d++) {
-                // Columna C = d+¡a 1, D = d+¡a 2, etc.
-                $colIndex = $d + 1; // 0=A, 1=B, 2=C ÔåÆ d+¡a 1 en col index 2
+                // Columna C = d+?a 1, D = d+?a 2, etc.
+                $colIndex = $d + 1; // 0=A, 1=B, 2=C ??? d+?a 1 en col index 2
                 $col = $this->numToCol($colIndex);
                 $codigo = trim((string) $sheet->getCell("{$col}{$row}")->getValue());
 
@@ -243,7 +243,7 @@ class CargaMasivaImportService
                     if (!$plantilla) {
                         $errores[] = [
                             'fila' => $row,
-                            'mensaje' => "D+¡a {$d}: c+¦digo '{$codigo}' no v+ílido.",
+                            'mensaje' => "D+?a {$d}: c+?digo '{$codigo}' no v+?lido.",
                         ];
                         continue;
                     }
@@ -267,12 +267,12 @@ class CargaMasivaImportService
                 } catch (\Exception $e) {
                     $errores[] = [
                         'fila' => $row,
-                        'mensaje' => "D+¡a {$d}: " . $e->getMessage(),
+                        'mensaje' => "D+?a {$d}: " . $e->getMessage(),
                     ];
                 }
             }
 
-            // Marcar como procesado solo si ten+¡a datos
+            // Marcar como procesado solo si ten+?a datos
             if ($tieneAlgunDato) {
                 $empleadosProcesados[] = $idEmpleado;
             }
@@ -350,7 +350,7 @@ class CargaMasivaImportService
     }
 
     /**
-     * Obtiene una hoja por +¡ndice de forma segura.
+     * Obtiene una hoja por +?ndice de forma segura.
      */
     private function getSheet($spreadsheet, int $index)
     {
@@ -362,7 +362,7 @@ class CargaMasivaImportService
     }
 
     /**
-     * Detecta qu+® empleados tienen datos en una hoja.
+     * Detecta qu+? empleados tienen datos en una hoja.
      */
     private function detectarEmpleadosConDatos($sheet, string $tipo): array
     {
@@ -371,7 +371,7 @@ class CargaMasivaImportService
         $empleados = [];
 
         if ($tipo === 'rapida') {
-            // Hoja r+ípida: fila 8+, columna C tiene c+¦digo
+            // Hoja r+?pida: fila 8+, columna C tiene c+?digo
             $highestRow = $sheet->getHighestRow();
             for ($row = 8; $row <= $highestRow; $row++) {
                 $idEmpleado = (int) $sheet->getCell("B{$row}")->getValue();
@@ -389,9 +389,9 @@ class CargaMasivaImportService
                 $idEmpleado = (int) $sheet->getCell("B{$row}")->getValue();
                 if (!$idEmpleado) continue;
 
-                // Revisar si tiene alg+¦n dato en las columnas de d+¡as
+                // Revisar si tiene alg+?n dato en las columnas de d+?as
                 $tieneDatos = false;
-                for ($colIdx = 2; $colIdx <= 32; $colIdx++) { // C hasta AG (31 d+¡as)
+                for ($colIdx = 2; $colIdx <= 32; $colIdx++) { // C hasta AG (31 d+?as)
                     $col = $this->numToCol($colIdx);
                     $valor = trim((string) $sheet->getCell("{$col}{$row}")->getValue());
                     if (!empty($valor)) {
@@ -409,7 +409,7 @@ class CargaMasivaImportService
     }
 
     /**
-     * Convierte n+¦mero (0-indexed) a letra de columna Excel.
+     * Convierte n+?mero (0-indexed) a letra de columna Excel.
      */
     private function numToCol(int $num): string
     {

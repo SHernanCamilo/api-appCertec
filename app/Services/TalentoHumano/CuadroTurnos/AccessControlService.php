@@ -5,6 +5,7 @@ namespace App\Services\TalentoHumano\CuadroTurnos;
 use App\Models\User;
 use App\Models\Config\ConfigUnidadFuncional;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Servicio de Control de Acceso para Turnos
@@ -25,11 +26,69 @@ class AccessControlService
     protected $unidadesAsignadas = [];
     protected $empresasHabilitadas = [];
 
+    /**
+     * Cache en memoria por request: evita recalcular el nivel de acceso
+     * cuando el servicio se instancia varias veces para el mismo usuario.
+     * [userId => ['accessLevel' => ..., 'empresasAsignadas' => [...]]]
+     */
+    private static array $cachePorUsuario = [];
+
+    /**
+     * TTL (segundos) del cache persistente del nivel de acceso.
+     */
+    private const CACHE_TTL = 300;
+
+    /**
+     * Devuelve la clave de cache persistente para un usuario.
+     */
+    public static function cacheKey(int $userId): string
+    {
+        return "ct_access_level_{$userId}";
+    }
+
+    /**
+     * Invalida el cache persistente del nivel de acceso de un usuario.
+     * Llamar cuando cambien sus roles, empresas o unidades responsables.
+     */
+    public static function invalidarCache(int $userId): void
+    {
+        unset(self::$cachePorUsuario[$userId]);
+        Cache::forget(self::cacheKey($userId));
+    }
+
     public function __construct(User $user)
     {
         $this->user = $user;
         $this->empresasHabilitadas = config('cuadro_turnos.empresas_habilitadas', []);
-        $this->determineAccessLevel();
+
+        // 1) Cache en memoria del request actual (múltiples instanciaciones)
+        if (isset(self::$cachePorUsuario[$user->id])) {
+            $cache = self::$cachePorUsuario[$user->id];
+            $this->accessLevel = $cache['accessLevel'];
+            $this->empresasAsignadas = $cache['empresasAsignadas'];
+            return;
+        }
+
+        // 2) Cache persistente entre requests (Laravel Cache, TTL corto).
+        //    Evita recalcular load(rolesCustom, empresas) + query de unidades
+        //    responsables en cada petición al reentrar al módulo.
+        $cache = Cache::remember(
+            self::cacheKey($user->id),
+            self::CACHE_TTL,
+            function () {
+                $this->determineAccessLevel();
+                return [
+                    'accessLevel' => $this->accessLevel,
+                    'empresasAsignadas' => $this->empresasAsignadas,
+                ];
+            }
+        );
+
+        $this->accessLevel = $cache['accessLevel'];
+        $this->empresasAsignadas = $cache['empresasAsignadas'];
+
+        // Guardar tambien en memoria para el resto del request
+        self::$cachePorUsuario[$user->id] = $cache;
     }
 
     /**
@@ -40,15 +99,11 @@ class AccessControlService
         // Cargar relaciones necesarias
         $this->user->load(['rolesCustom', 'empresas']);
 
-        \Log::info('🔐 Determinando nivel de acceso', [
-            'user_id' => $this->user->id,
-            'user_name' => $this->user->name,
-        ]);
+        \Log::debug('Determinando nivel de acceso', ['user_id' => $this->user->id]);
 
         // NIVEL 1: Verificar SUPER_ADMIN
         if ($this->isSuperAdmin()) {
             $this->accessLevel = 'super_admin';
-            \Log::info('✅ Usuario es SUPER_ADMIN', ['user_id' => $this->user->id]);
             return;
         }
 
@@ -57,15 +112,9 @@ class AccessControlService
             ? $this->user->empresas->pluck('id')->toArray() 
             : [];
 
-        \Log::info('📊 Empresas del usuario', [
-            'user_id' => $this->user->id,
-            'empresas' => $this->empresasAsignadas,
-        ]);
-
         // NIVEL 2: Verificar TRANSVERSAL (sin empresa asignada)
         if (empty($this->empresasAsignadas)) {
             $this->accessLevel = 'transversal';
-            \Log::info('✅ Usuario es TRANSVERSAL (sin empresas)', ['user_id' => $this->user->id]);
             return;
         }
 
@@ -74,27 +123,20 @@ class AccessControlService
             ->where('id_user', $this->user->id)
             ->exists();
 
-        \Log::info('🔍 Verificando si es responsable de unidades', [
-            'user_id' => $this->user->id,
-            'es_responsable' => $tieneUnidadesResponsable,
-        ]);
-
         if ($tieneUnidadesResponsable) {
             $this->accessLevel = 'usuario_responsable_turno';
-            \Log::info('✅ Usuario es USUARIO_RESPONSABLE_TURNO (responsable de unidades específicas)', ['user_id' => $this->user->id]);
             return;
         }
 
         // NIVEL 3: EMPRESA_ADMIN (tiene empresas asignadas pero sin unidades específicas)
         if (!empty($this->empresasAsignadas)) {
             $this->accessLevel = 'empresa_admin';
-            \Log::info('✅ Usuario es EMPRESA_ADMIN', ['user_id' => $this->user->id]);
             return;
         }
 
         // Fallback: USUARIO_NORMAL
         $this->accessLevel = 'usuario_normal';
-        \Log::warning('⚠️ Fallback a USUARIO_NORMAL', ['user_id' => $this->user->id]);
+        \Log::debug('Fallback a USUARIO_NORMAL', ['user_id' => $this->user->id]);
     }
 
     /**
@@ -195,13 +237,7 @@ class AccessControlService
             ->pluck('id_unidad_funcional')
             ->toArray();
 
-        \Log::info('🔍 getUnidadesUsuarioResponsableTurno - Debug (Responsable)', [
-            'user_id' => $this->user->id,
-            'unidad_ids_from_responsable_table' => $unidadIds,
-        ]);
-
         if (empty($unidadIds)) {
-            \Log::warning('⚠️ Usuario responsable de 0 unidades', ['user_id' => $this->user->id]);
             return collect();
         }
 
@@ -214,20 +250,7 @@ class AccessControlService
             $query->whereIn('id_empresa', $this->empresasHabilitadas);
         }
 
-        $unidades = $query->orderBy('nombre')->get();
-
-        \Log::info('✅ Unidades donde usuario es responsable', [
-            'user_id' => $this->user->id,
-            'total_unidades' => $unidades->count(),
-            'unidades' => $unidades->map(fn($u) => [
-                'id' => $u->id,
-                'nombre' => $u->nombre,
-                'id_empresa' => $u->id_empresa,
-                'id_sede' => $u->id_sede,
-            ])->toArray(),
-        ]);
-
-        return $unidades;
+        return $query->orderBy('nombre')->get();
     }
 
     /**

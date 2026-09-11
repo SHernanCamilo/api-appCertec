@@ -49,6 +49,8 @@ Route::middleware(['auth:api'])->group(function () {
     // =========================================================================
     Route::get('unidades-funcionales/del-usuario', [UnidadFuncionalController::class, 'delUsuario']);
     Route::get('unidades-funcionales/{id}/empleados', [UnidadFuncionalController::class, 'empleados']);
+    // Endpoint combinado: empleados + ensure cuadro + verificar bloqueo (1 sola peticion)
+    Route::get('unidades-funcionales/{id}/contexto-cuadro', [UnidadFuncionalController::class, 'contextoCuadro']);
     Route::apiResource('unidades-funcionales', UnidadFuncionalController::class)
         ->names('turnos.unidades-funcionales');
 

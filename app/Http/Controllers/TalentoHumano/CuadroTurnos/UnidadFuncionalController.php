@@ -74,27 +74,14 @@ class UnidadFuncionalController extends Controller
                 ], 401);
             }
 
-            \Log::info('🔐 delUsuario() - Usuario actual', [
-                'user_id' => $user->id,
-                'user_email' => $user->email,
-            ]);
-
             // Usar el servicio de control de acceso
             $accessControl = new \App\Services\TalentoHumano\CuadroTurnos\AccessControlService($user);
             $unidades = $accessControl->getUnidades();
 
-            \Log::info('✅ delUsuario() - Unidades obtenidas', [
+            \Log::debug('delUsuario() - Unidades obtenidas', [
                 'user_id' => $user->id,
                 'access_level' => $accessControl->getAccessLevel(),
                 'total_unidades' => $unidades->count(),
-                'primer_unidad' => $unidades->first() ? [
-                    'id' => $unidades->first()->id,
-                    'nombre' => $unidades->first()->nombre,
-                    'id_empresa' => $unidades->first()->id_empresa,
-                    'id_sede' => $unidades->first()->id_sede,
-                    'empresa' => $unidades->first()->empresa,
-                    'sede' => $unidades->first()->sede,
-                ] : null,
             ]);
 
             // Transformar para asegurar que empresa y sede se incluyen
@@ -292,6 +279,137 @@ class UnidadFuncionalController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al obtener empleados: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/turnos/unidades-funcionales/{id}/contexto-cuadro?anio=&mes=
+     *
+     * Endpoint COMBINADO: devuelve en una sola respuesta lo que antes requeria
+     * 3 peticiones (empleados + ensure de cuadro + verificar bloqueo). Esto
+     * reduce los preflight OPTIONS de 3 a 1. La logica es la MISMA que la de
+     * los endpoints individuales; solo se agrupa.
+     */
+    public function contextoCuadro(Request $request, int $id): JsonResponse
+    {
+        $request->validate([
+            'anio' => 'required|integer|min:2020|max:2100',
+            'mes'  => 'required|integer|min:1|max:12',
+        ]);
+
+        try {
+            $anio = (int) $request->query('anio');
+            $mes  = (int) $request->query('mes');
+
+            $unidad = ConfigUnidadFuncional::findOrFail($id);
+            $user = auth()->user();
+
+            // Validar acceso (misma logica que empleados())
+            $accessControl = new \App\Services\TalentoHumano\CuadroTurnos\AccessControlService($user);
+            if (!$accessControl->tieneAccesoUnidad($id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No tienes acceso a esta unidad',
+                ], 403);
+            }
+
+            // ── 1) EMPLEADOS (misma query que empleados()) ──────────────────
+            $query = \DB::table('config_unidades_fun_usuarios as cfu')
+                ->join('config_person_tercero as t', 'cfu.id_user', '=', 't.id')
+                ->where('cfu.id_unidad_funcional', $id)
+                ->select(
+                    'cfu.id_user as id',
+                    't.nombre',
+                    't.email',
+                    't.numero_identificacion',
+                    't.id_empresa',
+                    'cfu.id_unidad_funcional as id_unidad',
+                    \DB::raw('CASE 
+                        WHEN cfu.id_user IN (
+                            SELECT id_user 
+                            FROM config_unidades_fun_responsable 
+                            WHERE id_unidad_funcional = cfu.id_unidad_funcional
+                        ) THEN 1 
+                        ELSE 0 
+                    END as es_responsable')
+                );
+
+            if ($accessControl->getAccessLevel() === 'usuario_responsable_turno') {
+                $query->whereIn('cfu.id_unidad_funcional', function ($subquery) use ($user) {
+                    $subquery->select('id_unidad_funcional')
+                        ->from('config_unidades_fun_responsable')
+                        ->where('id_user', $user->id);
+                });
+            }
+
+            $empleados = $query
+                ->orderBy('es_responsable', 'DESC')
+                ->orderBy('t.nombre', 'ASC')
+                ->get();
+
+            // ── 2) ENSURE CUADRO (misma logica que AsignacionController) ────
+            $grupo = \App\Models\TalentoHumano\CuadroTurnos\CtGrupo::where('id_unidad_funcional', $id)
+                ->where('estado', true)
+                ->first();
+
+            if (!$grupo) {
+                $grupo = \App\Models\TalentoHumano\CuadroTurnos\CtGrupo::create([
+                    'codigo' => $unidad->codigo . '_' . time(),
+                    'nombre' => $unidad->nombre,
+                    'descripcion' => 'Grupo generado automáticamente para cuadro de turnos',
+                    'id_empresa' => $unidad->id_empresa,
+                    'id_sede' => $unidad->id_sede,
+                    'id_unidad_funcional' => $id,
+                    'estado' => true,
+                ]);
+            }
+
+            $cuadro = \App\Models\TalentoHumano\CuadroTurnos\CtCuadro::where('id_grupo', $grupo->id)
+                ->where('anio', $anio)
+                ->where('mes', $mes)
+                ->first();
+
+            if (!$cuadro) {
+                $cuadro = \App\Models\TalentoHumano\CuadroTurnos\CtCuadro::create([
+                    'id_grupo' => $grupo->id,
+                    'anio' => $anio,
+                    'mes' => $mes,
+                    'estado' => 'borrador',
+                    'creado_por' => $user->id ?? 0,
+                ]);
+            }
+
+            // ── 3) VERIFICAR BLOQUEO (mismo servicio que verificar()) ───────
+            $cierreService = new \App\Services\TalentoHumano\CuadroTurnos\CierreCuadroService();
+            $bloqueado = $cierreService->estaBloqueado($id, $anio, $mes);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'empleados' => $empleados,
+                    'access_level' => $accessControl->getAccessLevel(),
+                    'cuadro' => [
+                        'id_cuadro' => $cuadro->id,
+                        'id_grupo'  => $grupo->id,
+                        'id_unidad' => $id,
+                        'anio'      => $anio,
+                        'mes'       => $mes,
+                        'estado'    => $cuadro->estado,
+                    ],
+                    'bloqueado' => $bloqueado,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Error en contextoCuadro():', [
+                'user_id' => auth()->id(),
+                'unidad_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener contexto del cuadro: ' . $e->getMessage(),
             ], 500);
         }
     }

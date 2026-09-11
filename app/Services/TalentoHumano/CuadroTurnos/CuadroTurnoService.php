@@ -523,17 +523,18 @@ class CuadroTurnoService
             ->orderBy('ha.fecha')
             ->get();
 
-        // Get empleado name - try to find in users first, if not found check config_person_tercero
-        $empleadoData = \DB::table('users')->find($idEmpleado);
-        
-        if (!$empleadoData) {
-            $empleadoData = \DB::table('config_person_tercero')->find($idEmpleado);
-        }
+        // El id_empleado corresponde a config_person_tercero (tras el merge)
+        $empleadoData = \DB::table('config_person_tercero')->find($idEmpleado);
+        $empleadoNombre = $empleadoData->nombre ?? 'Desconocido';
 
-        $empleadoNombre = $empleadoData ? ($empleadoData->name ?? $empleadoData->nombre ?? 'Desconocido') : 'Desconocido';
+        // Precargar TODAS las plantillas de una vez (evita N+1 queries)
+        $idsPlantillas = $asignaciones->pluck('id_plantilla')->filter()->unique()->values();
+        $plantillasMap = $idsPlantillas->isEmpty()
+            ? collect()
+            : \DB::table('humtal_ct_plantillas')->whereIn('id', $idsPlantillas)->get()->keyBy('id');
 
-        return $asignaciones->map(function ($a) use ($empleadoNombre) {
-            $plantilla = \DB::table('humtal_ct_plantillas')->find($a->id_plantilla);
+        return $asignaciones->map(function ($a) use ($empleadoNombre, $plantillasMap) {
+            $plantilla = $a->id_plantilla ? ($plantillasMap[$a->id_plantilla] ?? null) : null;
             
             // Usar override si existe, sino usar plantilla
             $horaInicio = $a->hora_inicio_override ?? ($plantilla->hora_inicio ?? '00:00:00');
@@ -576,10 +577,23 @@ class CuadroTurnoService
             $fechaInicio = Carbon::createFromDate($anio, $mes, 1)->startOfMonth()->toDateString();
             $fechaFin    = Carbon::createFromDate($anio, $mes, 1)->endOfMonth()->toDateString();
 
-            // Obtener datos del empleado desde config_person_tercero
-            $empleado = \DB::table('config_person_tercero')
-                ->where('id', $idEmpleado)
-                ->select('id', 'nombre', 'email')
+            // Obtener datos del empleado desde config_person_tercero,
+            // enriquecido con identificacion, unidad funcional y sede.
+            $empleado = \DB::table('config_person_tercero as t')
+                ->leftJoin('config_unidades_fun_usuarios as cfu', 'cfu.id_user', '=', 't.id')
+                ->leftJoin('config_unidades_funcionales as uf', 'uf.id', '=', 'cfu.id_unidad_funcional')
+                ->leftJoin('config_ubi_sede as s', 's.id', '=', 'uf.id_sede')
+                ->where('t.id', $idEmpleado)
+                ->select(
+                    't.id',
+                    't.nombre',
+                    't.email',
+                    't.numero_identificacion',
+                    'uf.id as id_unidad_funcional',
+                    'uf.nombre as unidad_funcional',
+                    's.id as id_sede',
+                    's.nombre as sede'
+                )
                 ->first();
 
             $turnos = $this->obtenerTurnosEmpleado($idEmpleado, $anio, $mes);

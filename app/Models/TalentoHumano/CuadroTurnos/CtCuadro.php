@@ -13,6 +13,7 @@ class CtCuadro extends Model
 
     // Estados del cuadro
     const ESTADO_BORRADOR   = 'borrador';
+    const ESTADO_CREADO     = 'creado';   // Generado por importacion/frecuencias; editable igual que borrador
     const ESTADO_PUBLICADO  = 'publicado';
     const ESTADO_CERRADO    = 'cerrado';
 
@@ -104,9 +105,15 @@ class CtCuadro extends Model
     // HELPERS
     // =========================================================================
 
+    /**
+     * Un cuadro es editable cuando NO esta publicado ni cerrado.
+     * Incluye 'borrador' (creado manualmente) y 'creado' (generado por
+     * importacion masiva o frecuencias), ademas de vacio/null por compatibilidad.
+     */
     public function esBorrador(): bool
     {
         return $this->estado === self::ESTADO_BORRADOR
+            || $this->estado === self::ESTADO_CREADO
             || $this->estado === ''
             || $this->estado === null;
     }
