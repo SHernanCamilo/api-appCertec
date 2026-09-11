@@ -343,14 +343,8 @@ class ActivoFijoService
             }
         }
 
-        if ($novedades === [] && trim((string) ($datos['observacion'] ?? '')) === '') {
-            return [
-                'success' => false,
-                'message' => 'Registre al menos una novedad o una observación.',
-                'code'    => 422,
-            ];
-        }
-
+        // Se permite guardar SIN novedades ni observación: deja constancia de que
+        // el activo fue revisado y coincide con Indigo (resultado sin_novedades).
         // Req. 7: clasificar el resultado antes de persistir
         $resultado = count($novedades) > 0 ? 'con_novedades' : 'sin_novedades';
 

@@ -18,6 +18,26 @@ class InvPedidoController extends Controller
     }
 
     /**
+     * Sucursales disponibles para crear un pedido (con almacén asociado).
+     * GET /api/inventario/pedidos/sucursales-disponibles
+     */
+    public function sucursalesDisponibles(): JsonResponse
+    {
+        try {
+            $userId = auth()->user()->id ?? 1;
+            $result = $this->service->getSucursalesDisponibles($userId);
+
+            return response()->json($result, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al obtener las sucursales disponibles',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Listar pedidos
      * GET /api/inventario/pedidos
      */
@@ -30,6 +50,8 @@ class InvPedidoController extends Controller
                 'proveedor' => $request->query('proveedor'),
                 'limit'     => $request->query('limit', 25),
                 'offset'    => $request->query('offset', 0),
+                // Restringe el listado a las sucursales con permiso del usuario.
+                'user_id'   => auth()->user()->id ?? null,
             ];
 
             $result = $this->service->getAll($filters);
@@ -84,10 +106,17 @@ class InvPedidoController extends Controller
             'fecha_pedido'   => 'nullable|date',
             'fecha_esperada' => 'nullable|date',
             'observaciones'  => 'nullable|string',
+            'sucursal_id'    => 'nullable|integer',
+            'almacen'        => 'nullable|string|max:255',
             'detalles'       => 'required|array|min:1',
             'detalles.*.codigo_producto'     => 'required|string',
             'detalles.*.producto_nombre'     => 'required|string',
             'detalles.*.cantidad_solicitada' => 'required|numeric|min:0.01',
+            'detalles.*.producto_tipo'       => 'nullable|string|max:255',
+            'detalles.*.producto_marca'      => 'nullable|string|max:255',
+            'detalles.*.producto_promedio'   => 'nullable|numeric',
+            'detalles.*.producto_rotacion'   => 'nullable|string|max:50',
+            'detalles.*.precio_unitario'     => 'nullable|numeric',
         ]);
 
         if ($validator->fails()) {
@@ -103,7 +132,10 @@ class InvPedidoController extends Controller
             $userId = auth()->user()->id ?? 1; // Fallback para dev local si auth falla
             $result = $this->service->create($request->all(), $userId);
 
-            return response()->json($result, $result['success'] ? 201 : 500);
+            // El service devuelve code=403 cuando el usuario no tiene acceso a la sucursal.
+            $statusCode = $result['success'] ? 201 : (int) ($result['code'] ?? 500);
+
+            return response()->json($result, $statusCode);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -176,6 +208,27 @@ class InvPedidoController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al cambiar estado',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Confirmar (aprobar) un pedido — acción del Jefe de Almacén.
+     * Protegida por el permiso 'confirmar-pedido' vía middleware en la ruta.
+     * PATCH /api/inventario/pedidos/{id}/confirmar
+     */
+    public function confirmar(string $id): JsonResponse
+    {
+        try {
+            $userId = auth()->user()->id ?? 1;
+            $result = $this->service->confirmarPedido((int) $id, $userId);
+
+            return response()->json($result, $result['success'] ? 200 : 400);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al confirmar el pedido',
                 'error'   => $e->getMessage(),
             ], 500);
         }

@@ -13,6 +13,11 @@ Route::apiResource('productos', App\Http\Controllers\Inventory\Pharmacy\InvProdu
 Route::get('dashboard/stats', [App\Http\Controllers\Inventory\Pharmacy\InvDashboardController::class, 'getStats']);
 
 // Pedidos
+// Las rutas específicas van ANTES del apiResource para que el wildcard {pedido} no las capture.
+Route::get('pedidos/sucursales-disponibles', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'sucursalesDisponibles']);
+// Confirmar/aprobar un pedido: solo el Jefe de Almacén (permiso 'confirmar-pedido').
+Route::patch('pedidos/{pedido}/confirmar', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'confirmar'])
+    ->middleware('check.permission:confirmar-pedido');
 Route::patch('pedidos/{pedido}/estado', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'cambiarEstado']);
 Route::apiResource('pedidos', App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class);
 
@@ -24,6 +29,8 @@ Route::patch('ordenes-compra/{orden}/estado', [App\Http\Controllers\Inventory\Ph
 Route::apiResource('ordenes-compra', App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class);
 
 // Recepciones Técnicas
+// Rutas específicas ANTES del apiResource para que el wildcard {recepcion} no las capture.
+Route::get('recepciones/tabla-muestreo', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'tablaMuestreo']);
 Route::patch('recepciones/{recepcion}/confirmar', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'confirmar']);
 Route::apiResource('recepciones', App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class);
 

@@ -6,16 +6,27 @@ use App\Models\Inventory\InvPedido;
 use App\Models\Inventory\InvPedidoDetalle;
 use App\Models\Inventory\InvPedidoTrazabilidad;
 use App\Services\Inventory\Pharmacy\InvSequenceService;
+use App\Services\Inventory\BranchAccessService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class InvPedidoService
 {
     protected InvSequenceService $sequenceService;
+    protected BranchAccessService $branchAccess;
 
-    public function __construct(InvSequenceService $sequenceService)
+    public function __construct(InvSequenceService $sequenceService, BranchAccessService $branchAccess)
     {
         $this->sequenceService = $sequenceService;
+        $this->branchAccess = $branchAccess;
+    }
+
+    /**
+     * Sucursales disponibles para el selector de pedidos (con almacén y permisos).
+     */
+    public function getSucursalesDisponibles(int $userId): array
+    {
+        return $this->branchAccess->getSucursalesDisponibles($userId);
     }
 
     /**
@@ -24,6 +35,19 @@ class InvPedidoService
     public function getAll(array $filters = []): array
     {
         $query = InvPedido::with(['detalles', 'solicitante', 'trazabilidad.usuario']);
+
+        // Restringir a las sucursales con permiso del usuario. Un admin/nacional
+        // ve todas; los demás solo ven los pedidos de sus sucursales. Los pedidos
+        // antiguos sin sucursal_id se muestran para no perder el histórico.
+        if (isset($filters['user_id'])) {
+            $sucursalesPermitidas = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
+            if ($sucursalesPermitidas !== null) {
+                $query->where(function ($q) use ($sucursalesPermitidas) {
+                    $q->whereIn('sucursal_id', $sucursalesPermitidas)
+                      ->orWhereNull('sucursal_id');
+                });
+            }
+        }
 
         if (!empty($filters['estado'])) {
             $query->where('estado', $filters['estado']);
@@ -73,19 +97,40 @@ class InvPedidoService
      */
     public function create(array $data, int $userId): array
     {
+        // Sucursal destino: define el consecutivo (prefijo) y el almacén del pedido.
+        $sucursalId = isset($data['sucursal_id']) ? (int) $data['sucursal_id'] : null;
+        if ($sucursalId && !$this->branchAccess->usuarioTieneAccesoSucursal($userId, $sucursalId)) {
+            return ['success' => false, 'code' => 403, 'message' => 'No tienes acceso a la sucursal seleccionada.'];
+        }
+
         DB::beginTransaction();
         try {
-            // Generar número de pedido (Ej: FLA-2026-001) usando InvSequenceService (wrapper de SecuenciaNumericaService)
-            $numeroPedido = $this->sequenceService->generateSequence('INV', $userId, 'INV-PEDIDO');
+            // Consecutivo por sucursal (Ej: FLA-2026-000005). Si no se indicó sucursal,
+            // el generador cae a la sucursal del usuario.
+            $numeroPedido = $this->sequenceService->generateSequence('INV', $userId, 'INV-PEDIDO', $sucursalId);
+
+            // Almacén de la sucursal (para dejarlo trazado en observaciones, como el legacy).
+            $almacen = $data['almacen'] ?? ($sucursalId ? ($this->branchAccess->getAlmacenPorSucursal($sucursalId)['warehouse'] ?? null) : null);
+            $observaciones = $data['observaciones'] ?? null;
+            // Solo agregar el almacén si aún no viene incluido en las observaciones
+            // (el frontend ya lo antepone), para no duplicar "Almacén: ...".
+            if ($almacen && !str_contains((string) $observaciones, 'Almacén:')) {
+                $observaciones = trim(($observaciones ? $observaciones . ' | ' : '') . 'Almacén: ' . $almacen);
+            }
+
+            // El proveedor se define al generar la OC; en el pedido puede no venir.
+            // La columna es NOT NULL, así que se usa un valor por defecto.
+            $proveedor = trim((string) ($data['proveedor'] ?? '')) ?: 'Por definir';
 
             // Crear el pedido cabecera
             $pedido = InvPedido::create([
                 'numero_pedido'  => $numeroPedido,
-                'proveedor'      => $data['proveedor'] ?? null,
+                'proveedor'      => $proveedor,
                 'fecha_pedido'   => $data['fecha_pedido'] ?? now()->toDateString(),
                 'fecha_esperada' => $data['fecha_esperada'] ?? null,
                 'estado'         => 'BORRADOR', // Estado inicial
-                'observaciones'  => $data['observaciones'] ?? null,
+                'observaciones'  => $observaciones,
+                'sucursal_id'    => $sucursalId,
                 'solicitado_por' => $userId,
                 'total_articulos'=> count($data['detalles'] ?? [])
             ]);
@@ -98,6 +143,9 @@ class InvPedidoService
                         'codigo_producto'     => $detalle['codigo_producto'] ?? null,
                         'producto_nombre'     => $detalle['producto_nombre'] ?? null,
                         'producto_tipo'       => $detalle['producto_tipo'] ?? null,
+                        'producto_marca'      => $detalle['producto_marca'] ?? null,
+                        'producto_promedio'   => $detalle['producto_promedio'] ?? null,
+                        'producto_rotacion'   => $detalle['producto_rotacion'] ?? null,
                         'cantidad_solicitada' => $detalle['cantidad_solicitada'] ?? 0,
                         'precio_unitario'     => $detalle['precio_unitario'] ?? 0,
                         'estado'              => 'PENDIENTE'
@@ -166,6 +214,9 @@ class InvPedidoService
                         'codigo_producto'     => $detalle['codigo_producto'] ?? null,
                         'producto_nombre'     => $detalle['producto_nombre'] ?? null,
                         'producto_tipo'       => $detalle['producto_tipo'] ?? null,
+                        'producto_marca'      => $detalle['producto_marca'] ?? null,
+                        'producto_promedio'   => $detalle['producto_promedio'] ?? null,
+                        'producto_rotacion'   => $detalle['producto_rotacion'] ?? null,
                         'cantidad_solicitada' => $detalle['cantidad_solicitada'] ?? 0,
                         'precio_unitario'     => $detalle['precio_unitario'] ?? 0,
                         'estado'              => 'PENDIENTE'
@@ -277,6 +328,29 @@ class InvPedidoService
 
         if ($pedido->estado !== 'SOLICITADO') {
             return ['success' => false, 'message' => 'Solo se pueden aprobar pedidos en estado SOLICITADO'];
+        }
+
+        return $this->cambiarEstado($id, 'APROBADO', $userId);
+    }
+
+    /**
+     * Confirmación por el Jefe de Almacén.
+     * Acepta pedidos en BORRADOR o SOLICITADO y los deja en APROBADO.
+     * Un pedido ya APROBADO/EN_TRANSITO/RECIBIDO no se vuelve a confirmar.
+     */
+    public function confirmarPedido(int $id, int $userId): array
+    {
+        $pedido = InvPedido::find($id);
+        if (!$pedido) {
+            return ['success' => false, 'message' => 'Pedido no encontrado'];
+        }
+
+        $estadoActual = strtoupper((string) $pedido->estado);
+        if (!in_array($estadoActual, ['BORRADOR', 'SOLICITADO'], true)) {
+            return [
+                'success' => false,
+                'message' => "El pedido no se puede confirmar en estado {$estadoActual}.",
+            ];
         }
 
         return $this->cambiarEstado($id, 'APROBADO', $userId);
