@@ -250,13 +250,19 @@ class InvOrdenCompraService
 
             if (!empty($data['detalles']) && is_array($data['detalles'])) {
                 foreach ($data['detalles'] as $detalle) {
+                    $codigo   = $detalle['codigo_producto_indigo'] ?? $detalle['codigo_producto'] ?? null;
+                    $cantidad = (float) ($detalle['cantidad_solicitada_compra'] ?? 0);
+                    // No insertar lineas basura: exigir codigo y cantidad > 0.
+                    if (empty($codigo) || $cantidad <= 0) {
+                        continue;
+                    }
                     InvOrdenCompraDetalle::create([
                         'compra_id'                  => $orden->id,
                         'pedido_detalle_id'          => $detalle['pedido_detalle_id'] ?? null,
-                        'codigo_producto_indigo'     => $detalle['codigo_producto_indigo'] ?? $detalle['codigo_producto'] ?? null,
+                        'codigo_producto_indigo'     => $codigo,
                         'producto_nombre'            => $detalle['producto_nombre'] ?? null,
                         'proveedor'                  => $detalle['proveedor'] ?? 'N/A',
-                        'cantidad_solicitada_compra' => $detalle['cantidad_solicitada_compra'],
+                        'cantidad_solicitada_compra' => $cantidad,
                         'precio_unitario_compra'     => $detalle['precio_unitario_compra'] ?? null,
                         'estado'                     => 'pendiente'
                     ]);
@@ -358,13 +364,19 @@ class InvOrdenCompraService
             if (isset($data['detalles']) && is_array($data['detalles'])) {
                 $orden->detalles()->delete();
                 foreach ($data['detalles'] as $detalle) {
+                    $codigo   = $detalle['codigo_producto_indigo'] ?? $detalle['codigo_producto'] ?? null;
+                    $cantidad = (float) ($detalle['cantidad_solicitada_compra'] ?? 0);
+                    // No insertar lineas basura: exigir codigo y cantidad > 0.
+                    if (empty($codigo) || $cantidad <= 0) {
+                        continue;
+                    }
                     InvOrdenCompraDetalle::create([
                         'compra_id'                  => $orden->id,
                         'pedido_detalle_id'          => $detalle['pedido_detalle_id'] ?? null,
-                        'codigo_producto_indigo'     => $detalle['codigo_producto_indigo'] ?? $detalle['codigo_producto'] ?? null,
+                        'codigo_producto_indigo'     => $codigo,
                         'producto_nombre'            => $detalle['producto_nombre'] ?? null,
                         'proveedor'                  => $detalle['proveedor'] ?? 'N/A',
-                        'cantidad_solicitada_compra' => $detalle['cantidad_solicitada_compra'] ?? 0,
+                        'cantidad_solicitada_compra' => $cantidad,
                         'precio_unitario_compra'     => $detalle['precio_unitario_compra'] ?? null,
                         'estado'                     => 'pendiente',
                     ]);
