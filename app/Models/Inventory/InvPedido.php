@@ -32,4 +32,25 @@ class InvPedido extends Model
     {
         return $this->belongsTo(User::class, 'solicitado_por');
     }
+
+    public function aprobador()
+    {
+        return $this->belongsTo(User::class, 'aprobado_por');
+    }
+
+    /**
+     * Nombre del usuario que creó el pedido (para la auditoría del detalle).
+     * Se expone en el JSON como 'solicitado_por_nombre'.
+     */
+    protected $appends = ['solicitado_por_nombre', 'aprobado_por_nombre'];
+
+    public function getSolicitadoPorNombreAttribute(): ?string
+    {
+        return $this->solicitante?->name;
+    }
+
+    public function getAprobadoPorNombreAttribute(): ?string
+    {
+        return $this->aprobador?->name;
+    }
 }

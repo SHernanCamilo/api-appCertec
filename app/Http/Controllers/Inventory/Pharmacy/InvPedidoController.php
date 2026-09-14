@@ -235,6 +235,28 @@ class InvPedidoController extends Controller
     }
 
     /**
+     * Rechazar un pedido — acción del Jefe de Almacén.
+     * Protegida por el permiso 'confirmar-pedido' vía middleware en la ruta.
+     * PATCH /api/inventario/pedidos/{id}/rechazar
+     */
+    public function rechazar(Request $request, string $id): JsonResponse
+    {
+        try {
+            $userId = auth()->user()->id ?? 1;
+            $motivo = $request->input('motivo');
+            $result = $this->service->rechazarPedido((int) $id, $userId, $motivo);
+
+            return response()->json($result, $result['success'] ? 200 : 400);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al rechazar el pedido',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Cancelar (eliminar) un pedido
      * DELETE /api/inventario/pedidos/{id}
      */

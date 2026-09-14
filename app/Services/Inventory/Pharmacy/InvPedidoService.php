@@ -36,7 +36,7 @@ class InvPedidoService
      */
     public function getAll(array $filters = []): array
     {
-        $query = InvPedido::with(['detalles', 'solicitante', 'trazabilidad.usuario']);
+        $query = InvPedido::with(['detalles', 'solicitante', 'aprobador', 'trazabilidad.usuario']);
 
         // Restringir a las sucursales con permiso del usuario. Un admin/nacional
         // ve todas; los demás solo ven los pedidos de sus sucursales. Los pedidos
@@ -91,7 +91,7 @@ class InvPedidoService
      */
     public function getById(int $id): ?InvPedido
     {
-        return InvPedido::with(['detalles', 'solicitante', 'trazabilidad.usuario'])->find($id);
+        return InvPedido::with(['detalles', 'solicitante', 'aprobador', 'trazabilidad.usuario'])->find($id);
     }
 
     /**
@@ -356,6 +356,41 @@ class InvPedidoService
         }
 
         return $this->cambiarEstado($id, 'APROBADO', $userId);
+    }
+
+    /**
+     * Rechazo por el Jefe de Almacén (misma autoridad que confirmar).
+     * Acepta pedidos en BORRADOR o SOLICITADO y los deja en RECHAZADO.
+     */
+    public function rechazarPedido(int $id, int $userId, ?string $motivo = null): array
+    {
+        $pedido = InvPedido::find($id);
+        if (!$pedido) {
+            return ['success' => false, 'message' => 'Pedido no encontrado'];
+        }
+
+        $estadoActual = strtoupper((string) $pedido->estado);
+        if (!in_array($estadoActual, ['BORRADOR', 'SOLICITADO'], true)) {
+            return [
+                'success' => false,
+                'message' => "El pedido no se puede rechazar en estado {$estadoActual}.",
+            ];
+        }
+
+        $pedido->update(['estado' => 'RECHAZADO', 'cancelado_por' => $userId]);
+
+        InvPedidoTrazabilidad::create([
+            'pedido_id'    => $pedido->id,
+            'estado'       => 'RECHAZADO',
+            'comentarios'  => trim('Pedido rechazado' . ($motivo ? ': ' . $motivo : '')),
+            'cambiado_por' => $userId,
+        ]);
+
+        return [
+            'success' => true,
+            'message' => 'Pedido rechazado',
+            'data'    => $pedido->fresh(['detalles', 'trazabilidad.usuario']),
+        ];
     }
 
     /**
