@@ -4,6 +4,7 @@ namespace App\Services\Inventory\Pharmacy;
 
 use App\Models\Inventory\InvOrdenCompra;
 use App\Models\Inventory\InvOrdenCompraDetalle;
+use App\Models\Inventory\InvPedido;
 use App\Models\Inventory\External\IndigoOrdenCompra;
 use App\Services\Inventory\Pharmacy\InvSequenceService;
 use App\Services\Inventory\Pharmacy\InvPedidoService;
@@ -226,9 +227,17 @@ class InvOrdenCompraService
      */
     public function create(array $data, int $userId): array
     {
+        // La OC hereda la sucursal del PEDIDO relacionado (fuente de verdad).
+        // Si viene pedido_id, se ignora cualquier sucursal_id enviado por el cliente.
         $sucursalId = isset($data['sucursal_id']) ? (int) $data['sucursal_id'] : null;
+        if (!empty($data['pedido_id'])) {
+            $pedido = InvPedido::find((int) $data['pedido_id']);
+            if ($pedido && $pedido->sucursal_id) {
+                $sucursalId = (int) $pedido->sucursal_id;
+            }
+        }
 
-        // Control de acceso: el usuario debe tener permiso sobre la sucursal elegida.
+        // Control de acceso: el usuario debe tener permiso sobre la sucursal resultante.
         if ($sucursalId && !$this->usuarioTieneAccesoSucursal($userId, $sucursalId)) {
             return ['success' => false, 'code' => 403, 'message' => 'No tienes acceso a la sucursal seleccionada.'];
         }
