@@ -348,7 +348,8 @@ class InvPedidoService
         }
 
         $estadoActual = strtoupper((string) $pedido->estado);
-        if (!in_array($estadoActual, ['BORRADOR', 'SOLICITADO'], true)) {
+        // Estados iniciales confirmables (flexible: cubre 'pendiente' y '' del flujo actual).
+        if (!in_array($estadoActual, ['BORRADOR', 'SOLICITADO', 'PENDIENTE', ''], true)) {
             return [
                 'success' => false,
                 'message' => "El pedido no se puede confirmar en estado {$estadoActual}.",
@@ -370,7 +371,8 @@ class InvPedidoService
         }
 
         $estadoActual = strtoupper((string) $pedido->estado);
-        if (!in_array($estadoActual, ['BORRADOR', 'SOLICITADO'], true)) {
+        // Estados iniciales rechazables (flexible: cubre 'pendiente' y '' del flujo actual).
+        if (!in_array($estadoActual, ['BORRADOR', 'SOLICITADO', 'PENDIENTE', ''], true)) {
             return [
                 'success' => false,
                 'message' => "El pedido no se puede rechazar en estado {$estadoActual}.",
