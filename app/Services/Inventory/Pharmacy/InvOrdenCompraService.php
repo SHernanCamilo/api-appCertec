@@ -252,7 +252,9 @@ class InvOrdenCompraService
                 foreach ($data['detalles'] as $detalle) {
                     InvOrdenCompraDetalle::create([
                         'compra_id'                  => $orden->id,
-                        'pedido_detalle_id'          => $detalle['pedido_detalle_id'],
+                        'pedido_detalle_id'          => $detalle['pedido_detalle_id'] ?? null,
+                        'codigo_producto_indigo'     => $detalle['codigo_producto_indigo'] ?? $detalle['codigo_producto'] ?? null,
+                        'producto_nombre'            => $detalle['producto_nombre'] ?? null,
                         'proveedor'                  => $detalle['proveedor'] ?? 'N/A',
                         'cantidad_solicitada_compra' => $detalle['cantidad_solicitada_compra'],
                         'precio_unitario_compra'     => $detalle['precio_unitario_compra'] ?? null,
