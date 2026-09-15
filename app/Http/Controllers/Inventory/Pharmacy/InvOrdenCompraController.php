@@ -33,8 +33,11 @@ class InvOrdenCompraController extends Controller
                 'fecha_hasta' => $request->query('fecha_hasta'),
                 'creado_por'  => $request->query('creado_por'),
                 'source'      => $request->query('source'),
+                'sucursal_id' => $request->query('sucursal_id'),
                 'limit'       => $request->query('perPage') ?? $request->query('limit', 25),
                 'offset'      => $request->query('offset', 0),
+                // Restringe el listado a las sucursales con permiso del usuario.
+                'user_id'     => auth('api')->id() ?? (auth()->user()->id ?? null),
             ];
 
             $result = $this->service->getAll($filters);

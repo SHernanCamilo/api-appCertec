@@ -8,16 +8,19 @@ use App\Models\Inventory\InvPedido;
 use App\Models\Inventory\External\IndigoOrdenCompra;
 use App\Services\Inventory\Pharmacy\InvSequenceService;
 use App\Services\Inventory\Pharmacy\InvPedidoService;
+use App\Services\Inventory\BranchAccessService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class InvOrdenCompraService
 {
     protected InvSequenceService $sequenceService;
+    protected BranchAccessService $branchAccess;
 
-    public function __construct(InvSequenceService $sequenceService)
+    public function __construct(InvSequenceService $sequenceService, BranchAccessService $branchAccess)
     {
         $this->sequenceService = $sequenceService;
+        $this->branchAccess = $branchAccess;
     }
     /**
      * Listar órdenes de compra.
@@ -52,6 +55,21 @@ class InvOrdenCompraService
                 $q->where('numero_orden_compra', 'LIKE', "%{$search}%")
                   ->orWhere('proveedor_nombre', 'LIKE', "%{$search}%");
             });
+        }
+
+        // Restringir por unidad operativa (sucursal) según los permisos del usuario:
+        //  - Admin / acceso recursivo total → ve TODAS las órdenes.
+        //  - Usuario con sucursales asignadas → solo ve las OC de ESAS sucursales.
+        if (isset($filters['user_id'])) {
+            $sucursalesPermitidas = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
+            if ($sucursalesPermitidas !== null) {
+                $query->whereIn('sucursal_id', $sucursalesPermitidas ?: [-1]);
+            }
+        }
+
+        // Filtro puntual de sucursal (respeta la restricción de permisos anterior).
+        if (!empty($filters['sucursal_id'])) {
+            $query->where('sucursal_id', (int) $filters['sucursal_id']);
         }
 
         $query->orderBy('id', 'desc');

@@ -8,6 +8,7 @@ use App\Models\Inventory\InvRecepcionDetalle;
 use App\Models\Inventory\InvPedidoDetalle;
 use App\Services\Inventory\FabricInventoryService;
 use App\Services\Inventory\Pharmacy\InvSequenceService;
+use App\Services\Inventory\BranchAccessService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -17,6 +18,7 @@ class InvRecepcionService
         protected InvSequenceService $sequenceService,
         protected PharmacyService $pharmacyService,
         protected FabricInventoryService $fabricService,
+        protected BranchAccessService $branchAccess,
     ) {}
 
     /**
@@ -54,6 +56,44 @@ class InvRecepcionService
             ->whereRaw('UPPER(TRIM(prefijo)) = ?', [$m[1]])
             ->first();
         return $suc ? (int) $suc->id : null;
+    }
+
+    /**
+     * Aplica el filtro por unidad operativa (sucursal) según los permisos del usuario.
+     *
+     * @param mixed       $query    Query builder de Eloquent (recepciones u OC).
+     * @param array       $filters  Debe traer 'user_id' y opcional 'sucursal_id'.
+     * @param string|null $relacion Nombre de la relación hacia la OC ('compra') cuando
+     *                              la tabla base NO tiene sucursal_id. null = filtra directo.
+     */
+    private function aplicarFiltroSucursal($query, array $filters, ?string $relacion): void
+    {
+        $sucursalesPermitidas = null;
+        if (isset($filters['user_id'])) {
+            $sucursalesPermitidas = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
+        }
+        $sucursalPuntual = !empty($filters['sucursal_id']) ? (int) $filters['sucursal_id'] : null;
+
+        // Admin/recursivo total y sin filtro puntual → no se restringe nada.
+        if ($sucursalesPermitidas === null && !$sucursalPuntual) {
+            return;
+        }
+
+        $aplicar = function ($q) use ($sucursalesPermitidas, $sucursalPuntual) {
+            if ($sucursalesPermitidas !== null) {
+                $q->whereIn('sucursal_id', $sucursalesPermitidas ?: [-1]);
+            }
+            if ($sucursalPuntual) {
+                $q->where('sucursal_id', $sucursalPuntual);
+            }
+        };
+
+        if ($relacion) {
+            // La tabla base no tiene sucursal_id: filtrar por la OC relacionada.
+            $query->whereHas($relacion, fn ($q) => $aplicar($q));
+        } else {
+            $aplicar($query);
+        }
     }
 
     /**
@@ -95,6 +135,10 @@ class InvRecepcionService
                   ->orWhere('oc_indigo', 'LIKE', "%{$search}%");
             });
         }
+
+        // Restringir por unidad operativa (sucursal). inv_recepciones no tiene
+        // sucursal_id, así que se filtra por la OC asociada (compra.sucursal_id).
+        $this->aplicarFiltroSucursal($query, $filters, 'compra');
 
         $query->orderBy('id', 'desc');
 
@@ -152,6 +196,10 @@ class InvRecepcionService
                   ->orWhere('proveedor_nombre', 'LIKE', "%{$search}%");
             });
         }
+
+        // Restringir por unidad operativa: aquí la consulta es sobre la OC, que sí
+        // tiene sucursal_id, por lo que se filtra directo sobre esa columna.
+        $this->aplicarFiltroSucursal($query, $filters, null);
 
         $query->orderBy('id', 'desc');
 
