@@ -626,29 +626,66 @@ class FabricInventoryService
      * Vista: ViewInternal.FQ45_V_CXP_Proveedores en ssindigo.database.windows.net
      * Cachea el resultado 30 minutos.
      */
-    public function getSuppliers(): array
+    public function getSuppliers(array $filters = []): array
     {
-        $cacheKey = 'inv_suppliers_sqlsrv';
-        $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
-        if ($cached) return $cached;
+        $soloActivos = !array_key_exists('solo_activos', $filters) || (bool) $filters['solo_activos'];
+        $busqueda    = trim((string) ($filters['search'] ?? ''));
 
-        try {
-            $data = \Illuminate\Support\Facades\DB::connection('sqlsrv_indigo')
-                ->table(\Illuminate\Support\Facades\DB::raw('ViewInternal.FQ45_V_CXP_Proveedores'))
-                ->select('*')
-                ->limit(5000)
-                ->get()
-                ->map(fn($row) => (array) $row)
-                ->toArray();
+        // Cache 30 min del catálogo completo normalizado (la búsqueda se filtra en memoria).
+        $cacheKey = 'inv_suppliers_sqlsrv_v2';
+        $catalogo = \Illuminate\Support\Facades\Cache::get($cacheKey);
 
-            $response = ['success' => true, 'data' => $data];
-            \Illuminate\Support\Facades\Cache::put($cacheKey, $response, 1800);
-            return $response;
-        } catch (\Exception $e) {
-            Log::error('FabricInventory: Error obteniendo proveedores de SQL Server', [
-                'error' => $e->getMessage(),
-            ]);
-            return ['success' => false, 'data' => [], 'message' => $e->getMessage()];
+        if ($catalogo === null) {
+            try {
+                // La vista vive en INDIGO026 (Azure), conexión 'sqlsrv_suppliers'.
+                $view = env('MSSQL_SUPPLIERS_VIEW', 'ViewInternal.FQ45_V_CXP_Proveedores');
+                $rows = \Illuminate\Support\Facades\DB::connection('sqlsrv_suppliers')
+                    ->table(\Illuminate\Support\Facades\DB::raw($view))
+                    ->get();
+
+                // Normalizar a un contrato estable para el frontend.
+                $catalogo = collect($rows)->map(function ($row) {
+                    $r = (array) $row;
+                    $nit = trim((string) ($r['Nit'] ?? ''));
+                    $dv  = trim((string) ($r['DV'] ?? ''));
+                    return [
+                        'nit'          => $nit,
+                        'nit_completo' => $dv !== '' ? "{$nit}-{$dv}" : $nit,
+                        'nombre'       => trim((string) ($r['Cliente'] ?? '')),
+                        'ciudad'       => trim((string) ($r['Ciudad'] ?? '')),
+                        'telefono'     => trim((string) ($r['Telefono'] ?? '')),
+                        'email'        => trim((string) ($r['Email'] ?? '')),
+                        'dias_plazo'   => $r['DiasDePlazo'] ?? null,
+                        'estado'       => strtoupper(trim((string) ($r['Estado'] ?? ''))),
+                    ];
+                })
+                ->filter(fn ($p) => $p['nombre'] !== '') // descartar filas sin nombre
+                ->sortBy('nombre', SORT_NATURAL | SORT_FLAG_CASE)
+                ->values()
+                ->all();
+
+                \Illuminate\Support\Facades\Cache::put($cacheKey, $catalogo, 1800);
+            } catch (\Exception $e) {
+                Log::error('FabricInventory: Error obteniendo proveedores de SQL Server', [
+                    'error' => $e->getMessage(),
+                ]);
+                return ['success' => false, 'data' => [], 'message' => 'No se pudieron cargar los proveedores.'];
+            }
         }
+
+        // Filtros en memoria (sobre el catálogo cacheado).
+        $data = collect($catalogo);
+        if ($soloActivos) {
+            $data = $data->filter(fn ($p) => $p['estado'] === 'ACTIVO');
+        }
+        if ($busqueda !== '') {
+            $needle = mb_strtolower($busqueda);
+            $data = $data->filter(fn ($p) =>
+                str_contains(mb_strtolower($p['nombre']), $needle) ||
+                str_contains(mb_strtolower($p['nit']), $needle)
+            );
+        }
+
+        return ['success' => true, 'data' => $data->values()->all()];
     }
 }

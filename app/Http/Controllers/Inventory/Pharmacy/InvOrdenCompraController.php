@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Inventory\Pharmacy;
 
 use App\Http\Controllers\Controller;
 use App\Services\Inventory\Pharmacy\InvOrdenCompraService;
+use App\Services\Inventory\FabricInventoryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -12,9 +13,32 @@ class InvOrdenCompraController extends Controller
 {
     protected InvOrdenCompraService $service;
 
-    public function __construct(InvOrdenCompraService $service)
-    {
+    public function __construct(
+        InvOrdenCompraService $service,
+        private FabricInventoryService $fabricService
+    ) {
         $this->service = $service;
+    }
+
+    /**
+     * Catálogo de proveedores desde la vista de Indigo (INDIGO026).
+     * GET /api/inventario/ordenes-compra/proveedores?search=&solo_activos=1
+     */
+    public function proveedores(Request $request): JsonResponse
+    {
+        try {
+            $result = $this->fabricService->getSuppliers([
+                'search'       => $request->query('search'),
+                'solo_activos' => $request->query('solo_activos', '1') !== '0',
+            ]);
+            return response()->json($result, $result['success'] ? 200 : 502);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudieron cargar los proveedores.',
+                'data'    => [],
+            ], 500);
+        }
     }
 
     /**
