@@ -45,13 +45,14 @@ class InvPedidoController extends Controller
     {
         try {
             $filters = [
-                'search'    => $request->query('search'),
-                'estado'    => $request->query('estado'),
-                'proveedor' => $request->query('proveedor'),
-                'limit'     => $request->query('limit', 25),
-                'offset'    => $request->query('offset', 0),
+                'search'      => $request->query('search'),
+                'estado'      => $request->query('estado'),
+                'proveedor'   => $request->query('proveedor'),
+                'sucursal_id' => $request->query('sucursal_id'),
+                'limit'       => $request->query('limit', 25),
+                'offset'      => $request->query('offset', 0),
                 // Restringe el listado a las sucursales con permiso del usuario.
-                'user_id'   => auth()->user()->id ?? null,
+                'user_id'     => auth('api')->id() ?? (auth()->user()->id ?? null),
             ];
 
             $result = $this->service->getAll($filters);

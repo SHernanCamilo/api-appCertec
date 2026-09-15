@@ -38,17 +38,24 @@ class InvPedidoService
     {
         $query = InvPedido::with(['detalles', 'solicitante', 'aprobador', 'trazabilidad.usuario']);
 
-        // Restringir a las sucursales con permiso del usuario. Un admin/nacional
-        // ve todas; los demás solo ven los pedidos de sus sucursales. Los pedidos
-        // antiguos sin sucursal_id se muestran para no perder el histórico.
+        // Restringir por unidad operativa (sucursal) según los permisos del usuario:
+        //  - Admin / acceso recursivo total  → getSucursalIdsPermitidas() = null → ve TODO.
+        //  - Usuario con sucursales asignadas → solo ve los pedidos de ESAS sucursales.
+        //    (Si tiene solo Neiva, solo ve pedidos de Neiva; si tiene 3, ve esas 3.)
+        // Los pedidos sin sucursal_id (histórico) solo los ve el admin, para no
+        // filtrar de más a un usuario de sucursal con datos que no le corresponden.
         if (isset($filters['user_id'])) {
             $sucursalesPermitidas = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
             if ($sucursalesPermitidas !== null) {
-                $query->where(function ($q) use ($sucursalesPermitidas) {
-                    $q->whereIn('sucursal_id', $sucursalesPermitidas)
-                      ->orWhereNull('sucursal_id');
-                });
+                // Si por alguna razón no tiene ninguna sucursal, no ve nada (lista vacía).
+                $query->whereIn('sucursal_id', $sucursalesPermitidas ?: [-1]);
             }
+        }
+
+        // Filtro puntual de sucursal (selector del listado). Debe respetar los permisos:
+        // solo se aplica sobre el subconjunto ya restringido arriba.
+        if (!empty($filters['sucursal_id'])) {
+            $query->where('sucursal_id', (int) $filters['sucursal_id']);
         }
 
         if (!empty($filters['estado'])) {
