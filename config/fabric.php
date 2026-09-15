@@ -58,6 +58,13 @@ return [
     // TTL de cache para queries repetidas (segundos)
     'query_cache_ttl' => (int) env('FABRIC_QUERY_CACHE_TTL', 30),
 
+    // Cada cuanto (segundos) se vuelve a preguntar a Graph-Fabric por la marca de
+    // frescura del parquet (/api/r2/status) para segmentar la cache de queries.
+    // Mas bajo = una regeneracion se refleja mas rapido, pero mas llamadas a
+    // r2/status. 15s es un buen equilibrio: el usuario ve datos nuevos casi al
+    // instante y no se golpea el endpoint en cada consulta.
+    'freshness_probe_ttl' => (int) env('FABRIC_FRESHNESS_PROBE_TTL', 15),
+
     // Activos fijos: usar el carril Parquet/DuckDB (rápido) para buscar activos,
     // con fallback automático a la vista SQL en vivo si el parquet no está listo.
     // Poner en false para forzar siempre la vista SQL.

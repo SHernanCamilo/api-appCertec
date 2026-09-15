@@ -1652,9 +1652,16 @@ class GraphFabricGatewayService
             ]
         );
 
-        // Cache de queries: misma consulta exacta → respuesta cacheada 30s
-        $cacheKey = 'fabric_qry:' . md5(json_encode($payload));
-        $cacheTtl = (int) config('fabric.query_cache_ttl', 30);
+        // Cache de queries: misma consulta exacta → respuesta cacheada.
+        //
+        // La clave incluye la MARCA DE FRESCURA del parquet: cuando Graph-Fabric
+        // regenera el parquet, esa marca cambia y la clave tambien, asi que el
+        // usuario ve automaticamente los datos nuevos sin esperar el TTL ni tener
+        // que correr `cache:clear`. Si el parquet no cambio, la clave se mantiene
+        // y la cache sigue aliviando rafagas de consultas identicas.
+        $freshness = $this->parquetFreshnessTag($schema, $view);
+        $cacheKey  = 'fabric_qry:' . $freshness . ':' . md5(json_encode($payload));
+        $cacheTtl  = (int) config('fabric.query_cache_ttl', 30);
 
         $cached = Cache::get($cacheKey);
         if ($cached !== null) {
@@ -2154,6 +2161,72 @@ class GraphFabricGatewayService
         }
 
         return $value;
+    }
+
+    /**
+     * Marca de frescura del parquet de una vista, para usar en la clave de cache
+     * de queries.
+     *
+     * Devuelve un identificador que cambia cada vez que Graph-Fabric regenera el
+     * parquet (usa `generated_at`; si no viene, cae a `age_hours`+`row_count`).
+     * Asi, tras una regeneracion, la clave de cache cambia y el usuario ve los
+     * datos nuevos de inmediato en vez de esperar a que expire el TTL.
+     *
+     * El resultado se cachea localmente unos segundos (`freshness_probe_ttl`,
+     * por defecto 15s) para no llamar a `/api/r2/status` en cada consulta y no
+     * anadir latencia perceptible. El costo es que, en el peor caso, una
+     * regeneracion tarda hasta ~15s en reflejarse (antes eran 30s fijos y sin
+     * garantia).
+     */
+    private function parquetFreshnessTag(string $schema, string $view): string
+    {
+        $probeTtl = (int) config('fabric.freshness_probe_ttl', 15);
+        $probeKey = 'fabric_fresh:' . $schema . '.' . $view;
+
+        $cached = Cache::get($probeKey);
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $tag = 'na'; // sin dato → no rompe la cache, solo no la segmenta por frescura
+
+        try {
+            $apiKey = config('fabric.api_key', '');
+            $req = Http::timeout(4)
+                       ->connectTimeout(3)
+                       ->acceptJson();
+            if ($apiKey !== '') {
+                $req = $req->withHeaders(['X-API-Key' => $apiKey]);
+            }
+
+            $response = $req->get($this->baseUrl . '/api/r2/status', [
+                'token'  => $this->tokenAdmin,
+                'schema' => $schema,
+                'view'   => $view,
+            ]);
+
+            if ($response->ok()) {
+                $data = $response->json() ?? [];
+                $stamp = $data['generated_at']
+                    ?? $data['last_generated']
+                    ?? (isset($data['age_hours'], $data['row_count'])
+                        ? $data['age_hours'] . '_' . $data['row_count']
+                        : null);
+
+                if ($stamp !== null && $stamp !== '') {
+                    $tag = substr(md5((string) $stamp), 0, 12);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Si no se puede consultar el estado, se degrada a 'na': la cache sigue
+            // funcionando por TTL como antes, sin bloquear la consulta.
+            Log::debug('parquetFreshnessTag: no se pudo consultar r2/status', [
+                'schema' => $schema, 'view' => $view, 'error' => $e->getMessage(),
+            ]);
+        }
+
+        Cache::put($probeKey, $tag, $probeTtl);
+        return $tag;
     }
 
     private function post(string $path, array $body, ?int $timeoutOverride = null): ?array
