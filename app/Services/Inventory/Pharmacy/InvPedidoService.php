@@ -58,8 +58,18 @@ class InvPedidoService
             $query->where('sucursal_id', (int) $filters['sucursal_id']);
         }
 
+        // Filtro por estado: acepta uno o varios separados por coma (ej. 'aprobado,en_proceso').
+        // Normaliza a minúsculas para no depender de mayúsculas del cliente.
         if (!empty($filters['estado'])) {
-            $query->where('estado', $filters['estado']);
+            $estados = array_values(array_filter(array_map(
+                fn ($e) => strtolower(trim((string) $e)),
+                explode(',', (string) $filters['estado'])
+            )));
+            if (count($estados) === 1) {
+                $query->whereRaw('LOWER(estado) = ?', [$estados[0]]);
+            } elseif (count($estados) > 1) {
+                $query->whereIn(DB::raw('LOWER(estado)'), $estados);
+            }
         }
 
         if (!empty($filters['proveedor'])) {
