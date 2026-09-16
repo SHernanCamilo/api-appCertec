@@ -721,6 +721,10 @@ class InvRecepcionService
             ]);
 
             $rejectedCount = 0;
+            // Acumula la cantidad recibida por pedido_detalle_id, para soportar el
+            // desdoblamiento (un renglón que llega en varios CUM/lote). Así el detalle
+            // del pedido guarda la SUMA de los fragmentos, no la del último.
+            $recibidoPorPedidoDetalle = [];
 
             // Procesar los detalles
             foreach ($itemsToReceive as $item) {
@@ -777,17 +781,23 @@ class InvRecepcionService
                 ]);
 
                 if (!empty($item['pedido_detalle_id'])) {
+                    $pdId = (int) $item['pedido_detalle_id'];
+                    // Acumular la cantidad recibida de todos los fragmentos de este renglón.
+                    $recibidoPorPedidoDetalle[$pdId] =
+                        ($recibidoPorPedidoDetalle[$pdId] ?? 0) + (float) ($item['cantidad_recibida'] ?? 0);
+
+                    // El lote/cum/vencimiento se toman del último fragmento capturado.
+                    // (El desglose completo por lote queda en inv_recepcion_detalles.)
                     $pedidoUpdates = array_filter([
                         'cum_recibido' => $item['cum_recibido'] ?? null,
                         'codigo_sanitario' => $item['codigo_sanitario'] ?? null,
-                        'cantidad_recibida' => $item['cantidad_recibida'] ?? null,
                         'numero_lote' => $item['numero_lote'] ?? null,
                         'fecha_vencimiento' => $item['fecha_vencimiento'] ?? null,
                     ], fn ($v) => $v !== null && $v !== '');
+                    // La cantidad recibida es la SUMA acumulada (soporta desdoblamiento).
+                    $pedidoUpdates['cantidad_recibida'] = $recibidoPorPedidoDetalle[$pdId];
 
-                    if (!empty($pedidoUpdates)) {
-                        InvPedidoDetalle::where('id', $item['pedido_detalle_id'])->update($pedidoUpdates);
-                    }
+                    InvPedidoDetalle::where('id', $pdId)->update($pedidoUpdates);
                 }
             }
 
