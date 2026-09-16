@@ -162,4 +162,29 @@ class InvRecepcionController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Finalizar/confirmar la recepción técnica de una ORDEN DE COMPRA.
+     * Acción exclusiva del Jefe de Almacén (permiso 'confirmar-recepcion' en la ruta).
+     * Marca la recepción como CONFIRMADA (solo lectura) y la OC como recibida.
+     * PATCH /api/inventario/recepciones/{compraId}/confirmar-tecnica
+     */
+    public function confirmarTecnica(Request $request, string $compraId): JsonResponse
+    {
+        try {
+            $userId = auth('api')->id();
+            if (!$userId) {
+                return response()->json(['success' => false, 'message' => 'No autenticado'], 401);
+            }
+
+            $result = $this->service->confirmarRecepcionTecnica((int) $compraId, (int) $userId);
+            return response()->json($result, $result['success'] ? 200 : ($result['code'] ?? 400));
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al confirmar la recepción técnica',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
 }

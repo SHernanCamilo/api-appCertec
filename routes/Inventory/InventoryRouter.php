@@ -38,6 +38,9 @@ Route::apiResource('ordenes-compra', App\Http\Controllers\Inventory\Pharmacy\Inv
 // Rutas específicas ANTES del apiResource para que el wildcard {recepcion} no las capture.
 Route::get('recepciones/tabla-muestreo', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'tablaMuestreo']);
 Route::patch('recepciones/{recepcion}/confirmar', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'confirmar']);
+// Finalizar la recepción técnica de una OC: SOLO el Jefe de Almacén (permiso confirmar-recepcion).
+Route::patch('recepciones/{compra}/confirmar-tecnica', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'confirmarTecnica'])
+    ->middleware('check.permission:confirmar-recepcion');
 Route::apiResource('recepciones', App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class);
 
 // =========================================================================

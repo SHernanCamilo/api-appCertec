@@ -14,6 +14,10 @@ use Illuminate\Support\Facades\Log;
 
 class InvRecepcionService
 {
+    /** Estados de una recepción técnica. */
+    private const ESTADO_RECEPCIONADO = 'RECEPCIONADO'; // parcial / en curso (editable)
+    private const ESTADO_CONFIRMADO   = 'CONFIRMADO';   // finalizada por el Jefe de Almacén (bloqueada)
+
     public function __construct(
         protected InvSequenceService $sequenceService,
         protected PharmacyService $pharmacyService,
@@ -333,12 +337,20 @@ class InvRecepcionService
         // para que al reabrir la vista Excel se vean los datos previos.
         $items = $this->hidratarConRecepcionPrevia($compraId, $items);
 
+        // Estado de la recepción de esta OC: solo se BLOQUEA (solo lectura total)
+        // cuando el Jefe de Almacén la CONFIRMA. Mientras es 'RECEPCIONADO' (parcial),
+        // se puede seguir recepcionando los productos que faltan.
+        $recepcion = InvRecepcion::where('compra_id', $compraId)->orderBy('id', 'desc')->first();
+        $recepcionConfirmada = $recepcion
+            && strtolower((string) $recepcion->estado) === strtolower(self::ESTADO_CONFIRMADO);
+
         return [
             'success' => true,
             'orden_numero' => $compra->numero_orden_compra,
             'proveedor' => $compra->proveedor_nombre,
             'oc_indigo' => $compra->oc_indigo,
             'estado_compra' => $compra->estado,
+            'recepcion_confirmada' => $recepcionConfirmada,
             'data' => $items,
         ];
     }
@@ -895,6 +907,72 @@ class InvRecepcionService
                 'success' => false,
                 'message' => 'Error al confirmar la recepción',
                 'error'   => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Finaliza/confirma la recepción técnica de una ORDEN DE COMPRA (por compra_id).
+     * Acción del Jefe de Almacén. A diferencia de guardar (parcial), esto:
+     *   - Valida que exista al menos una recepción con productos.
+     *   - Exige lote y vencimiento en los ítems aprobados/aceptados.
+     *   - Marca la recepción como CONFIRMADO (queda de solo lectura).
+     *   - Marca la OC como 'recibida'.
+     *
+     * @param int $compraId  ID de la orden de compra a finalizar.
+     */
+    public function confirmarRecepcionTecnica(int $compraId, int $userId): array
+    {
+        $compra = InvOrdenCompra::find($compraId);
+        if (!$compra) {
+            return ['success' => false, 'code' => 404, 'message' => 'Orden de compra no encontrada.'];
+        }
+
+        // Tomar la recepción más reciente de la OC (donde se acumularon los ítems).
+        $recepcion = InvRecepcion::with('detalles')
+            ->where('compra_id', $compraId)
+            ->orderBy('id', 'desc')
+            ->first();
+
+        if (!$recepcion || $recepcion->detalles->isEmpty()) {
+            return ['success' => false, 'code' => 409, 'message' => 'La orden no tiene productos recepcionados. Recepcione al menos un producto antes de confirmar.'];
+        }
+
+        if (strtolower((string) $recepcion->estado) === strtolower(self::ESTADO_CONFIRMADO)) {
+            return ['success' => false, 'code' => 409, 'message' => 'Esta recepción técnica ya fue confirmada.'];
+        }
+
+        DB::beginTransaction();
+        try {
+            // Validación farmacéutica: los ítems aprobados deben tener lote y vencimiento.
+            foreach ($recepcion->detalles as $detalle) {
+                $concepto = strtolower((string) $detalle->concepto_recepcion);
+                if (in_array($concepto, ['aprobado', 'aceptado'], true)) {
+                    if (empty($detalle->numero_lote) || empty($detalle->fecha_vencimiento)) {
+                        throw new \Exception("El producto '{$detalle->producto_nombre}' fue aprobado pero carece de Lote o Fecha de Vencimiento.");
+                    }
+                }
+            }
+
+            // Confirmar TODAS las recepciones de esta OC (por si hubo varias parciales).
+            InvRecepcion::where('compra_id', $compraId)->update(['estado' => self::ESTADO_CONFIRMADO]);
+
+            // La OC pasa a 'recibida' (proceso finalizado).
+            $compra->update(['estado' => 'recibida']);
+
+            DB::commit();
+
+            return [
+                'success' => true,
+                'message' => 'Recepción técnica confirmada. La orden de compra fue marcada como recibida.',
+                'data'    => ['compra_id' => $compraId, 'estado' => 'recibida'],
+            ];
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error al confirmar recepción técnica: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => $e->getMessage() ?: 'Error al confirmar la recepción técnica.',
             ];
         }
     }
