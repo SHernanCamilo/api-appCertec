@@ -339,6 +339,10 @@ final class GraphAsyncExportService
             'columns'     => empty($columns) ? null : $columns,
             'sort_col'    => (string) ($options['sort_col'] ?? ''),
             'sort_dir'    => strtoupper((string) ($options['sort_dir'] ?? 'ASC')),
+            // force_refresh: si viene true, Graph-Fabric invalida el parquet y lo
+            // regenera antes de servir (boton del rayo). Por defecto false: usa el
+            // parquet existente si esta fresco.
+            'force_refresh' => (bool) ($options['force_refresh'] ?? false),
             // OBLIGATORIOS
             'grupos'      => $grupos,
             'department'  => $department,
