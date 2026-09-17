@@ -67,4 +67,60 @@ class InvReporteController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * GET /api/inventario/reportes/tiempos
+     *
+     * Tablero de tiempos de gestión (Pedido → OC → Recepción) con filtros de
+     * fecha independientes por etapa.
+     *
+     * Filtros: pedido_desde, pedido_hasta, orden_desde, orden_hasta,
+     *          recepcion_desde, recepcion_hasta, proveedor, sucursal_id,
+     *          umbral_ok, umbral_alerta
+     */
+    public function tiempos(Request $request): JsonResponse
+    {
+        $userId = auth('api')->id();
+        if (!$userId) {
+            return response()->json(['success' => false, 'message' => 'No autenticado'], 401);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'pedido_desde'    => 'nullable|date',
+            'pedido_hasta'    => 'nullable|date|after_or_equal:pedido_desde',
+            'orden_desde'     => 'nullable|date',
+            'orden_hasta'     => 'nullable|date|after_or_equal:orden_desde',
+            'recepcion_desde' => 'nullable|date',
+            'recepcion_hasta' => 'nullable|date|after_or_equal:recepcion_desde',
+            'proveedor'       => 'nullable|string|max:200',
+            'sucursal_id'     => 'nullable|integer',
+            'umbral_ok'       => 'nullable|integer|min:1|max:365',
+            'umbral_alerta'   => 'nullable|integer|min:1|max:365',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error de validación',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        try {
+            $filters = $validator->validated();
+            $filters['user_id'] = (int) $userId;
+
+            return response()->json($this->service->tiemposGestion($filters), 200);
+        } catch (\Throwable $e) {
+            Log::error('Error en reporte de tiempos de farmacia: ' . $e->getMessage(), [
+                'exception' => $e,
+                'user_id'   => $userId,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al generar el reporte de tiempos. Intenta de nuevo.',
+            ], 500);
+        }
+    }
 }

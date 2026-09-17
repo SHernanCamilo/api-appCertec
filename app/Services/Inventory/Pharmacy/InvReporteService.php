@@ -436,6 +436,179 @@ class InvReporteService
         ])->all();
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  TIEMPOS DE GESTIÓN (Pedido → OC → Recepción)
+    //  Mide cuánto tarda cada etapa del ciclo de abastecimiento.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Tablero de tiempos de gestión. Reconstruye, por cada Orden de Compra, la
+     * cadena de trazabilidad hacia su pedido de origen (vía el detalle de la OC)
+     * y hacia su primera recepción, y calcula los días entre etapas:
+     *   - Pedido → OC        (fecha_pedido    → fecha_orden)
+     *   - OC → Recepción     (fecha_orden     → fecha_recepcion)  [tiempo del proveedor]
+     *   - Ciclo total        (fecha_pedido    → fecha_recepcion)
+     *
+     * Filtros admitidos (todos opcionales):
+     *   pedido_desde/pedido_hasta, orden_desde/orden_hasta,
+     *   recepcion_desde/recepcion_hasta, proveedor, sucursal_id, user_id
+     *
+     * @return array
+     */
+    public function tiemposGestion(array $filters = []): array
+    {
+        // Alcance por sucursal (permisos del usuario).
+        $sucursales = null;
+        if (!empty($filters['user_id'])) {
+            $sucursales = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
+        }
+        $sucursalId = !empty($filters['sucursal_id']) ? (int) $filters['sucursal_id'] : null;
+
+        // Umbrales de semáforo (días) para OC → Recepción. Configurables a futuro.
+        $umbralOk    = (int) ($filters['umbral_ok'] ?? 7);   // <= 7 días: a tiempo
+        $umbralAlerta = (int) ($filters['umbral_alerta'] ?? 15); // <= 15: alerta; > 15: crítico
+
+        // Consulta base: una fila por OC con la fecha del pedido de origen (la más
+        // antigua entre sus detalles) y la primera recepción registrada.
+        $q = DB::table('inv_ordenes_compra as c')
+            ->leftJoin('inv_orden_compra_detalles as cd', 'cd.compra_id', '=', 'c.id')
+            ->leftJoin('inv_pedido_detalles as pdd', 'pdd.id', '=', 'cd.pedido_detalle_id')
+            ->leftJoin('inv_pedidos as p', 'p.id', '=', 'pdd.pedido_id')
+            ->leftJoin('inv_recepciones as r', 'r.compra_id', '=', 'c.id')
+            ->selectRaw("
+                c.id,
+                c.numero_orden_compra,
+                c.proveedor_nombre,
+                c.fecha_orden,
+                LOWER(COALESCE(NULLIF(TRIM(c.estado), ''), 'pendiente')) as estado,
+                MIN(p.numero_pedido)   as numero_pedido,
+                MIN(p.fecha_pedido)    as fecha_pedido,
+                MIN(DATE(r.fecha_recepcion)) as fecha_recepcion
+            ")
+            ->groupBy('c.id', 'c.numero_orden_compra', 'c.proveedor_nombre', 'c.fecha_orden', 'c.estado');
+
+        // Filtros de fecha por etapa (cada uno independiente y opcional).
+        if (!empty($filters['orden_desde']))    $q->whereDate('c.fecha_orden', '>=', $filters['orden_desde']);
+        if (!empty($filters['orden_hasta']))    $q->whereDate('c.fecha_orden', '<=', $filters['orden_hasta']);
+        if (!empty($filters['pedido_desde']))   $q->whereDate('p.fecha_pedido', '>=', $filters['pedido_desde']);
+        if (!empty($filters['pedido_hasta']))   $q->whereDate('p.fecha_pedido', '<=', $filters['pedido_hasta']);
+        if (!empty($filters['recepcion_desde'])) $q->whereDate('r.fecha_recepcion', '>=', $filters['recepcion_desde']);
+        if (!empty($filters['recepcion_hasta'])) $q->whereDate('r.fecha_recepcion', '<=', $filters['recepcion_hasta']);
+        if (!empty($filters['proveedor']))      $q->where('c.proveedor_nombre', 'LIKE', '%' . $filters['proveedor'] . '%');
+
+        if ($sucursales !== null) {
+            $q->where(fn ($w) => $w->whereIn('c.sucursal_id', $sucursales)->orWhereNull('c.sucursal_id'));
+        }
+        if ($sucursalId) {
+            $q->where('c.sucursal_id', $sucursalId);
+        }
+
+        $rows = $q->orderByDesc('c.fecha_orden')->limit(500)->get();
+
+        // Calcular los días por etapa en PHP (más claro y portable que en SQL).
+        $detalle = [];
+        $accPedidoOc = [];   // días pedido → OC
+        $accOcRec    = [];   // días OC → recepción
+        $accCiclo    = [];   // días ciclo total
+        foreach ($rows as $r) {
+            $dPedidoOc = $this->diasEntre($r->fecha_pedido, $r->fecha_orden);
+            $dOcRec    = $this->diasEntre($r->fecha_orden, $r->fecha_recepcion);
+            $dCiclo    = $this->diasEntre($r->fecha_pedido, $r->fecha_recepcion);
+
+            if ($dPedidoOc !== null) $accPedidoOc[] = $dPedidoOc;
+            if ($dOcRec !== null)    $accOcRec[]    = $dOcRec;
+            if ($dCiclo !== null)    $accCiclo[]    = $dCiclo;
+
+            $detalle[] = [
+                'orden_id'            => (int) $r->id,
+                'numero_orden_compra' => $r->numero_orden_compra,
+                'numero_pedido'       => $r->numero_pedido,
+                'proveedor'           => $r->proveedor_nombre ?: 'Sin proveedor',
+                'estado'              => $r->estado,
+                'estado_label'        => $this->labelEstado($r->estado),
+                'fecha_pedido'        => $r->fecha_pedido,
+                'fecha_orden'         => $r->fecha_orden,
+                'fecha_recepcion'     => $r->fecha_recepcion,
+                'dias_pedido_oc'      => $dPedidoOc,
+                'dias_oc_recepcion'   => $dOcRec,
+                'dias_ciclo_total'    => $dCiclo,
+                // Semáforo sobre el tiempo del proveedor (OC → Recepción).
+                'semaforo'            => $dOcRec === null ? 'pendiente'
+                                        : ($dOcRec <= $umbralOk ? 'ok'
+                                        : ($dOcRec <= $umbralAlerta ? 'alerta' : 'critico')),
+            ];
+        }
+
+        // Recepciones pendientes: OC sin fecha de recepción (aún no llegaron).
+        $pendientes = count(array_filter($detalle, fn ($d) => $d['fecha_recepcion'] === null
+            && in_array($d['estado'], ['pendiente', 'confirmado', 'en_transito', 'en_sitio'], true)));
+
+        return [
+            'success' => true,
+            'data' => [
+                'umbrales' => ['ok' => $umbralOk, 'alerta' => $umbralAlerta],
+                'kpis' => [
+                    'ordenes_analizadas'    => count($detalle),
+                    'con_recepcion'         => count($accOcRec),
+                    'pendientes_recepcion'  => $pendientes,
+                    'prom_pedido_oc'        => $this->promedio($accPedidoOc),
+                    'prom_oc_recepcion'     => $this->promedio($accOcRec),
+                    'prom_ciclo_total'      => $this->promedio($accCiclo),
+                    'min_oc_recepcion'      => $accOcRec ? min($accOcRec) : null,
+                    'max_oc_recepcion'      => $accOcRec ? max($accOcRec) : null,
+                ],
+                // Para el gráfico de barras: promedio de días por etapa.
+                'promedios_por_etapa' => [
+                    ['etapa' => 'Pedido → OC',     'dias' => $this->promedio($accPedidoOc)],
+                    ['etapa' => 'OC → Recepción',  'dias' => $this->promedio($accOcRec)],
+                    ['etapa' => 'Ciclo total',     'dias' => $this->promedio($accCiclo)],
+                ],
+                // Distribución del tiempo del proveedor (OC → Recepción) por rangos.
+                'distribucion_oc_recepcion' => $this->distribuirDias($accOcRec, $umbralOk, $umbralAlerta),
+                'detalle' => $detalle,
+            ],
+        ];
+    }
+
+    /** Días calendario entre dos fechas 'Y-m-d' (o datetime). Null si falta alguna. */
+    private function diasEntre(?string $desde, ?string $hasta): ?int
+    {
+        if (empty($desde) || empty($hasta)) {
+            return null;
+        }
+        $a = strtotime(substr($desde, 0, 10));
+        $b = strtotime(substr($hasta, 0, 10));
+        if ($a === false || $b === false) {
+            return null;
+        }
+        return (int) floor(($b - $a) / 86400);
+    }
+
+    /** Promedio redondeado a 1 decimal (null si el arreglo está vacío). */
+    private function promedio(array $valores): ?float
+    {
+        if (empty($valores)) {
+            return null;
+        }
+        return round(array_sum($valores) / count($valores), 1);
+    }
+
+    /** Agrupa los días OC→Recepción en 3 rangos (a tiempo / alerta / crítico). */
+    private function distribuirDias(array $dias, int $umbralOk, int $umbralAlerta): array
+    {
+        $ok = $alerta = $critico = 0;
+        foreach ($dias as $d) {
+            if ($d <= $umbralOk) $ok++;
+            elseif ($d <= $umbralAlerta) $alerta++;
+            else $critico++;
+        }
+        return [
+            ['rango' => "≤ {$umbralOk} días",              'total' => $ok,      'nivel' => 'ok'],
+            ['rango' => "{$umbralOk}–{$umbralAlerta} días", 'total' => $alerta,  'nivel' => 'alerta'],
+            ['rango' => "> {$umbralAlerta} días",           'total' => $critico, 'nivel' => 'critico'],
+        ];
+    }
+
     /** Etiqueta legible de un estado (normalizado a minúsculas). */
     private function labelEstado(string $estado): string
     {
