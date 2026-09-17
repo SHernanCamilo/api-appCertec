@@ -378,12 +378,13 @@ class InvRecepcionService
             return $items;
         }
 
-        // Índices para cruce rápido.
-        $porPedidoDetalle = [];
+        // Agrupar TODOS los detalles por pedido_detalle_id (para reconstruir los
+        // fragmentos del desdoblamiento) y, como respaldo, indexar por código.
+        $porPedidoDetalle = [];   // pid => [detalles...] (varios si hubo desdoblamiento)
         $porCodigo = [];
         foreach ($recepcion->detalles as $d) {
             if ($d->pedido_detalle_id) {
-                $porPedidoDetalle[(int) $d->pedido_detalle_id] = $d;
+                $porPedidoDetalle[(int) $d->pedido_detalle_id][] = $d;
             }
             $cod = strtoupper(trim((string) $d->codigo_producto));
             if ($cod !== '' && !isset($porCodigo[$cod])) {
@@ -391,20 +392,8 @@ class InvRecepcionService
             }
         }
 
-        foreach ($items as &$item) {
-            $det = null;
-            $pid = $item['pedido_detalle_id'] ?? null;
-            if ($pid && isset($porPedidoDetalle[(int) $pid])) {
-                $det = $porPedidoDetalle[(int) $pid];
-            } else {
-                $cod = strtoupper(trim((string) ($item['codigo_producto'] ?? '')));
-                $det = $porCodigo[$cod] ?? null;
-            }
-            if (!$det) {
-                continue;
-            }
-
-            // Sobrescribir con lo recepcionado (respetando lo que exista).
+        // Aplica los campos guardados de un detalle sobre un item base.
+        $overlay = function (array $item, $det): array {
             $item['cantidad_recibida']      = $det->cantidad_recibida ?? $item['cantidad_recibida'];
             $item['muestra_poblacion']      = $det->muestra_poblacion ?? $item['muestra_poblacion'];
             $item['muestra_exclusion']      = isset($det->muestra_exclusion) ? ((bool) $det->muestra_exclusion ? 1 : 0) : ($item['muestra_exclusion'] ?? 0);
@@ -423,11 +412,39 @@ class InvRecepcionService
             $item['concepto_recepcion']     = $det->concepto_recepcion ?? ($item['concepto_recepcion'] ?? '');
             $item['observaciones_recepcion']= $det->observaciones_recepcion ?? ($item['observaciones_recepcion'] ?? '');
             $item['es_medicamento_vital']   = isset($det->es_medicamento_vital) ? (bool) $det->es_medicamento_vital : ($item['es_medicamento_vital'] ?? false);
+            $item['es_desdoblamiento']      = isset($det->es_desdoblamiento) ? (bool) $det->es_desdoblamiento : false;
             $item['tiene_recepcion_previa'] = true;
-        }
-        unset($item);
+            return $item;
+        };
 
-        return $items;
+        // Reconstruir la lista: por cada item base, el primer detalle es el padre
+        // y los demás (fragmentos) se agregan como filas hijas justo después.
+        $resultado = [];
+        foreach ($items as $item) {
+            $dets = null;
+            $pid = $item['pedido_detalle_id'] ?? null;
+            if ($pid && isset($porPedidoDetalle[(int) $pid])) {
+                $dets = $porPedidoDetalle[(int) $pid];
+            } elseif (isset($porCodigo[strtoupper(trim((string) ($item['codigo_producto'] ?? '')))])) {
+                $dets = [$porCodigo[strtoupper(trim((string) ($item['codigo_producto'] ?? '')))]];
+            }
+
+            if (!$dets) {
+                $resultado[] = $item;      // sin recepción previa: item tal cual
+                continue;
+            }
+
+            // Padre = primer detalle.
+            $resultado[] = $overlay($item, $dets[0]);
+            // Fragmentos = resto de detalles del mismo renglón.
+            for ($i = 1; $i < count($dets); $i++) {
+                $frag = $overlay($item, $dets[$i]);
+                $frag['es_desdoblamiento'] = true;
+                $resultado[] = $frag;
+            }
+        }
+
+        return $resultado;
     }
 
     /**
@@ -752,6 +769,9 @@ class InvRecepcionService
                 InvRecepcionDetalle::create([
                     'recepcion_id'               => $recepcion->id,
                     'pedido_detalle_id'          => $item['pedido_detalle_id'] ?? null,
+                    // Fragmento (hijo) de un renglón desdoblado + su CUM real.
+                    'es_desdoblamiento'          => !empty($item['es_desdoblamiento']) ? 1 : 0,
+                    'cum_recibido'               => $item['cum_recibido'] ?? null,
                     'codigo_producto'            => $item['codigo_producto'] ?? null,
                     'producto_nombre'            => $item['producto_nombre'] ?? null,
                     'marca'                      => $item['marca'] ?? null,
