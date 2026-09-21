@@ -24,7 +24,7 @@ class InvOrdenCompra extends Model
 
     protected $appends = [
         'total', 'items_count', 'creado_por_nombre',
-        'es_sincronizada', 'origen', 'puede_editar',
+        'es_sincronizada', 'origen', 'puede_editar', 'pedidos_relacionados',
     ];
 
     /**
@@ -111,5 +111,73 @@ class InvOrdenCompra extends Model
     public function recepciones()
     {
         return $this->hasMany(InvRecepcion::class, 'compra_id');
+    }
+
+    /**
+     * Pedidos vinculados a la OC por la relación N:N (inv_compras_pedidos).
+     * Se llena en las OC sincronizadas de Indigo (cuando la descripción trae el
+     * consecutivo del pedido) y en cualquier OC que se haya vinculado explícitamente.
+     */
+    public function pedidos()
+    {
+        return $this->belongsToMany(
+            InvPedido::class,
+            'inv_compras_pedidos',
+            'compra_id',
+            'pedido_id'
+        );
+    }
+
+    /**
+     * Accessor: pedidos relacionados a la OC, para mostrarlos en la vista.
+     *
+     * Combina DOS fuentes para cubrir tanto OC automáticas como manuales:
+     *   1. La relación N:N inv_compras_pedidos (típico de las OC de Indigo).
+     *   2. Los pedidos deducidos por el pedido_detalle_id de cada detalle
+     *      (típico de las OC creadas a mano desde el aplicativo).
+     *
+     * Devuelve una lista sin duplicados: [{ id, numero_pedido }].
+     */
+    public function getPedidosRelacionadosAttribute(): array
+    {
+        $mapa = []; // pedido_id => numero_pedido
+
+        // 1) Relación N:N (si está cargada o se puede cargar).
+        foreach ($this->pedidos as $ped) {
+            $mapa[(int) $ped->id] = $ped->numero_pedido;
+        }
+
+        // 2) Pedidos deducidos por los detalles (pedido_detalle_id → pedido).
+        //    Si las relaciones vienen eager-loaded (detalles.pedidoDetalle.pedido),
+        //    se usan directamente para evitar consultas N+1. Si no, se resuelven
+        //    con una única consulta por los ids faltantes.
+        $faltantes = [];
+        foreach ($this->detalles as $det) {
+            if (empty($det->pedido_detalle_id)) {
+                continue;
+            }
+            $pd = $det->relationLoaded('pedidoDetalle') ? $det->pedidoDetalle : null;
+            if ($pd && $pd->relationLoaded('pedido') && $pd->pedido) {
+                $mapa[(int) $pd->pedido->id] = $pd->pedido->numero_pedido;
+            } else {
+                $faltantes[] = (int) $det->pedido_detalle_id;
+            }
+        }
+
+        if (!empty($faltantes)) {
+            $porDetalle = InvPedidoDetalle::whereIn('id', array_unique($faltantes))
+                ->with('pedido:id,numero_pedido')
+                ->get();
+            foreach ($porDetalle as $det) {
+                if ($det->pedido) {
+                    $mapa[(int) $det->pedido->id] = $det->pedido->numero_pedido;
+                }
+            }
+        }
+
+        return collect($mapa)
+            ->map(fn ($numero, $id) => ['id' => (int) $id, 'numero_pedido' => $numero])
+            ->values()
+            ->all();
     }
 }

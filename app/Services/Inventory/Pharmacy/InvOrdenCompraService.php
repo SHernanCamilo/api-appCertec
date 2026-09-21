@@ -40,7 +40,13 @@ class InvOrdenCompraService
      */
     private function getLocalOrders(array $filters = []): array
     {
-        $query = InvOrdenCompra::with(['detalles', 'creador']);
+        // Eager loading: incluye los pedidos vinculados (N:N) y el pedido de cada
+        // detalle, para resolver "pedidos_relacionados" sin consultas N+1.
+        $query = InvOrdenCompra::with([
+            'detalles', 'creador', 'pedidos:id,numero_pedido',
+            'detalles.pedidoDetalle:id,pedido_id',
+            'detalles.pedidoDetalle.pedido:id,numero_pedido',
+        ]);
         $estado = strtolower((string) ($filters['estado'] ?? $filters['status'] ?? ''));
 
         if ($estado !== '') {
@@ -148,7 +154,11 @@ class InvOrdenCompraService
      */
     public function getById(int $id): ?InvOrdenCompra
     {
-        return InvOrdenCompra::with(['detalles', 'creador'])->find($id);
+        return InvOrdenCompra::with([
+            'detalles', 'creador', 'pedidos:id,numero_pedido',
+            'detalles.pedidoDetalle:id,pedido_id',
+            'detalles.pedidoDetalle.pedido:id,numero_pedido',
+        ])->find($id);
     }
 
     /**
