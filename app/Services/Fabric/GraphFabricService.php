@@ -192,17 +192,23 @@ class GraphFabricService
 
     /**
      * Desactiva (saca del schedule) una vista. schema y view van SEPARADOS.
+     *
+     * Graph-Fabric espera estos parámetros en la QUERY STRING, no en el body:
+     * enviarlos en el body (comportamiento por defecto de Http::delete) devuelve
+     * HTTP 422. Por eso se arma la URL con la query directamente.
      */
     public function scheduleDelete(string $schema, string $view): array
     {
+        $query = http_build_query([
+            'token'  => $this->token,
+            'schema' => $schema,
+            'view'   => $view,
+        ]);
+
         return $this->request(
             'delete',
-            '/api/r2/schedule',
-            [
-                'token'  => $this->token,
-                'schema' => $schema,
-                'view'   => $view,
-            ],
+            '/api/r2/schedule?' . $query,
+            [], // sin body: los params van en la query string
             self::TIMEOUT_ESTADO
         );
     }
