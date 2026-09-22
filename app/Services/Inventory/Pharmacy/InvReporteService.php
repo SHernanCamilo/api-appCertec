@@ -609,6 +609,164 @@ class InvReporteService
         ];
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  TRAZABILIDAD POR PRODUCTO
+    //  ¿En qué órdenes de compra está un producto, en qué estado, cuánto se
+    //  compró, cuánto se ha recepcionado y cuánto falta?
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Trazabilidad de un producto a través de las órdenes de compra.
+     *
+     * Filtros: q (código o nombre), codigo_producto, estado, sucursal_id, user_id.
+     *
+     * Devuelve:
+     *   - producto: resumen (código, nombre, totales comprado/recibido/pendiente)
+     *   - ordenes:  cada OC donde aparece el producto, con estado, cantidad
+     *               comprada, recibida y pendiente.
+     */
+    public function trazabilidadProducto(array $filters = []): array
+    {
+        $q       = trim((string) ($filters['q'] ?? $filters['codigo_producto'] ?? ''));
+        $estado  = strtolower(trim((string) ($filters['estado'] ?? '')));
+
+        if ($q === '') {
+            return ['success' => true, 'data' => ['producto' => null, 'ordenes' => [], 'total' => 0]];
+        }
+
+        // Alcance por sucursal (permisos del usuario).
+        $sucursales = null;
+        if (!empty($filters['user_id'])) {
+            $sucursales = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
+        }
+        $sucursalId = !empty($filters['sucursal_id']) ? (int) $filters['sucursal_id'] : null;
+
+        // Detalles de OC que coinciden con el producto (por código exacto/parcial o nombre).
+        $qDetalles = DB::table('inv_orden_compra_detalles as cd')
+            ->join('inv_ordenes_compra as c', 'c.id', '=', 'cd.compra_id')
+            ->select(
+                'c.id as orden_id',
+                'c.numero_orden_compra',
+                'c.oc_indigo',
+                'c.proveedor_nombre',
+                'c.fecha_orden',
+                DB::raw("LOWER(COALESCE(NULLIF(TRIM(c.estado), ''), 'pendiente')) as estado"),
+                'cd.id as detalle_id',
+                'cd.pedido_detalle_id',
+                'cd.codigo_producto_indigo as codigo_producto',
+                'cd.producto_nombre',
+                'cd.cantidad_solicitada_compra as cantidad_comprada'
+            )
+            ->where(function ($w) use ($q) {
+                $w->where('cd.codigo_producto_indigo', 'LIKE', '%' . $q . '%')
+                  ->orWhere('cd.producto_nombre', 'LIKE', '%' . $q . '%');
+            });
+
+        if ($estado !== '') {
+            $qDetalles->whereRaw("LOWER(COALESCE(NULLIF(TRIM(c.estado), ''), 'pendiente')) = ?", [$estado]);
+        }
+        if ($sucursales !== null) {
+            $qDetalles->where(fn ($x) => $x->whereIn('c.sucursal_id', $sucursales)->orWhereNull('c.sucursal_id'));
+        }
+        if ($sucursalId) {
+            $qDetalles->where('c.sucursal_id', $sucursalId);
+        }
+
+        $detalles = $qDetalles->orderByDesc('c.fecha_orden')->limit(500)->get();
+
+        if ($detalles->isEmpty()) {
+            return ['success' => true, 'data' => ['producto' => null, 'ordenes' => [], 'total' => 0]];
+        }
+
+        // Recibido por (recepción) para cada detalle: sumar cantidad_recibida de
+        // inv_recepcion_detalles cruzando por pedido_detalle_id (preferente) y, si
+        // no hay, por código de producto dentro de las recepciones de esa OC.
+        $ordenIds = $detalles->pluck('orden_id')->unique()->values()->all();
+        $pedDetIds = $detalles->pluck('pedido_detalle_id')->filter()->unique()->values()->all();
+
+        // a) recibido por pedido_detalle_id
+        $recibidoPorPedDet = [];
+        if (!empty($pedDetIds)) {
+            $recibidoPorPedDet = DB::table('inv_recepcion_detalles')
+                ->select('pedido_detalle_id', DB::raw('SUM(cantidad_recibida) as recibido'))
+                ->whereIn('pedido_detalle_id', $pedDetIds)
+                ->groupBy('pedido_detalle_id')
+                ->pluck('recibido', 'pedido_detalle_id')
+                ->toArray();
+        }
+
+        // b) recibido por (recepcion de la OC + codigo) para detalles SIN pedido_detalle_id
+        $recibidoPorOcCodigo = DB::table('inv_recepcion_detalles as rd')
+            ->join('inv_recepciones as r', 'r.id', '=', 'rd.recepcion_id')
+            ->select('r.compra_id', 'rd.codigo_producto', DB::raw('SUM(rd.cantidad_recibida) as recibido'))
+            ->whereIn('r.compra_id', $ordenIds)
+            ->groupBy('r.compra_id', 'rd.codigo_producto')
+            ->get()
+            ->keyBy(fn ($row) => $row->compra_id . '|' . strtoupper(trim((string) $row->codigo_producto)));
+
+        $ordenes = [];
+        $totComprado = 0.0;
+        $totRecibido = 0.0;
+        $nombreProducto = null;
+        $codigoProducto = null;
+
+        foreach ($detalles as $d) {
+            $comprado = (float) $d->cantidad_comprada;
+
+            // Recibido: primero por pedido_detalle_id; si no, por OC+código.
+            $recibido = 0.0;
+            if ($d->pedido_detalle_id && isset($recibidoPorPedDet[$d->pedido_detalle_id])) {
+                $recibido = (float) $recibidoPorPedDet[$d->pedido_detalle_id];
+            } else {
+                $key = $d->orden_id . '|' . strtoupper(trim((string) $d->codigo_producto));
+                if (isset($recibidoPorOcCodigo[$key])) {
+                    $recibido = (float) $recibidoPorOcCodigo[$key]->recibido;
+                }
+            }
+
+            $pendiente = max(0, $comprado - $recibido);
+            $totComprado += $comprado;
+            $totRecibido += $recibido;
+            $nombreProducto = $nombreProducto ?: $d->producto_nombre;
+            $codigoProducto = $codigoProducto ?: $d->codigo_producto;
+
+            $ordenes[] = [
+                'orden_id'            => (int) $d->orden_id,
+                'numero_orden_compra' => $d->numero_orden_compra,
+                'oc_indigo'           => $d->oc_indigo,
+                'proveedor'           => $d->proveedor_nombre ?: 'Sin proveedor',
+                'fecha_orden'         => $d->fecha_orden,
+                'estado'              => $d->estado,
+                'estado_label'        => $this->labelEstado($d->estado),
+                'codigo_producto'     => $d->codigo_producto,
+                'producto_nombre'     => $d->producto_nombre,
+                'cantidad_comprada'   => round($comprado, 2),
+                'cantidad_recibida'   => round($recibido, 2),
+                'cantidad_pendiente'  => round($pendiente, 2),
+                'recepcion_completa'  => $recibido >= $comprado && $comprado > 0,
+            ];
+        }
+
+        $totPendiente = max(0, $totComprado - $totRecibido);
+
+        return [
+            'success' => true,
+            'data' => [
+                'producto' => [
+                    'codigo_producto'    => $codigoProducto,
+                    'producto_nombre'    => $nombreProducto,
+                    'total_ordenes'      => count($ordenes),
+                    'total_comprado'     => round($totComprado, 2),
+                    'total_recibido'     => round($totRecibido, 2),
+                    'total_pendiente'    => round($totPendiente, 2),
+                    'avance_porcentaje'  => $totComprado > 0 ? round(($totRecibido / $totComprado) * 100, 1) : 0,
+                ],
+                'ordenes' => $ordenes,
+                'total'   => count($ordenes),
+            ],
+        ];
+    }
+
     /** Etiqueta legible de un estado (normalizado a minúsculas). */
     private function labelEstado(string $estado): string
     {

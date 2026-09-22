@@ -16,6 +16,8 @@ Route::get('dashboard/stats', [App\Http\Controllers\Inventory\Pharmacy\InvDashbo
 Route::get('reportes/dashboard', [App\Http\Controllers\Inventory\Pharmacy\InvReporteController::class, 'dashboard']);
 // Tablero de tiempos de gestión (Pedido → OC → Recepción)
 Route::get('reportes/tiempos', [App\Http\Controllers\Inventory\Pharmacy\InvReporteController::class, 'tiempos']);
+// Trazabilidad de un producto a través de las órdenes de compra
+Route::get('reportes/trazabilidad-producto', [App\Http\Controllers\Inventory\Pharmacy\InvReporteController::class, 'trazabilidadProducto']);
 
 // Pedidos
 // Las rutas específicas van ANTES del apiResource para que el wildcard {pedido} no las capture.

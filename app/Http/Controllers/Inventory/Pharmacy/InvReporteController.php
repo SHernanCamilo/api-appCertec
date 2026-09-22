@@ -123,4 +123,51 @@ class InvReporteController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * GET /api/inventario/reportes/trazabilidad-producto
+     *
+     * Trazabilidad de un producto en las órdenes de compra: en qué OC está, su
+     * estado y lo recepcionado vs. pendiente.
+     *
+     * Filtros: q (código o nombre), estado, sucursal_id
+     */
+    public function trazabilidadProducto(Request $request): JsonResponse
+    {
+        $userId = auth('api')->id();
+        if (!$userId) {
+            return response()->json(['success' => false, 'message' => 'No autenticado'], 401);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'q'           => 'nullable|string|max:150',
+            'estado'      => 'nullable|string|max:30',
+            'sucursal_id' => 'nullable|integer',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error de validación',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        try {
+            $filters = $validator->validated();
+            $filters['user_id'] = (int) $userId;
+
+            return response()->json($this->service->trazabilidadProducto($filters), 200);
+        } catch (\Throwable $e) {
+            Log::error('Error en trazabilidad de producto: ' . $e->getMessage(), [
+                'exception' => $e,
+                'user_id'   => $userId,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al generar la trazabilidad. Intenta de nuevo.',
+            ], 500);
+        }
+    }
 }
