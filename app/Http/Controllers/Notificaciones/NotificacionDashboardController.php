@@ -99,7 +99,9 @@ class NotificacionDashboardController extends Controller
             'identificacion'  => 'nullable|string|max:20',
             'fecha_desde'     => 'nullable|date',
             'fecha_hasta'     => 'nullable|date',
-            'per_page'        => 'nullable|integer|min:1|max:100',
+            // Hasta 500 para permitir exportaciones de un mes en pocas paginas
+            // (menos peticiones = no dispara el rate limit).
+            'per_page'        => 'nullable|integer|min:1|max:500',
         ]);
 
         $query = NotifEmailLog::select([
@@ -228,7 +230,8 @@ class NotificacionDashboardController extends Controller
             'busqueda'      => 'nullable|string|max:150',
             'fecha_desde'   => 'nullable|date',
             'fecha_hasta'   => 'nullable|date',
-            'per_page'      => 'nullable|integer|min:1|max:100',
+            // Hasta 500 para exportaciones (menos peticiones, no dispara throttle).
+            'per_page'      => 'nullable|integer|min:1|max:500',
             'page'          => 'nullable|integer|min:1',
         ]);
 
