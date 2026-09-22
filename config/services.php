@@ -80,4 +80,25 @@ return [
         'base_path' => env('GRAPH_BASE_PATH', 'Anticipos'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Graph-Fabric (API Python de parquets / R2 / datos en vivo)
+    |--------------------------------------------------------------------------
+    |
+    | Graph-Fabric es el dueño de TODA la lógica de generación de parquets
+    | (locks, cupo global, deduplicación, carriles). Laravel es solo el gateway.
+    |
+    | El token es de SERVICIO (admin): vive únicamente en el backend y NUNCA
+    | se expone al navegador. El front llama endpoints internos de Laravel que
+    | hacen de proxy hacia esta API.
+    |
+    | Reutiliza las variables de fabric.php para no duplicar configuración.
+    |
+    */
+    'graph_fabric' => [
+        // Mismos env que config/fabric.php para no duplicar configuración.
+        'url'   => env('GRAPH_FABRIC_URL') ?: env('GRAPHQL_URL', 'http://127.0.0.1:8001'),
+        'token' => env('GRAPH_FABRIC_TOKEN') ?: (env('TOKEN_ADMIN') ?: env('GRAPHQL_API_KEY', '')),
+    ],
+
 ];

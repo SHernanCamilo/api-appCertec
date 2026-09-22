@@ -6,6 +6,7 @@ use App\Models\Notificaciones\NotifEmailLog;
 use App\Models\Notificaciones\NotifEmailTrace;
 use App\Models\Notificaciones\NotifPlantilla;
 use App\Services\Fabric\GraphFabricGatewayService;
+use App\Services\Fabric\GraphFabricService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -15,9 +16,16 @@ class InterconsultaNotificationService
 {
     private GraphFabricGatewayService $graphFabric;
 
-    public function __construct(GraphFabricGatewayService $graphFabric)
-    {
+    /** Cliente de la ruta EN VIVO (sin parquet) para las interconsultas. */
+    private GraphFabricService $graphLive;
+
+    public function __construct(
+        GraphFabricGatewayService $graphFabric,
+        ?GraphFabricService $graphLive = null
+    ) {
         $this->graphFabric = $graphFabric;
+        // Opcional en la firma para no romper instanciaciones existentes.
+        $this->graphLive = $graphLive ?? app(GraphFabricService::class);
     }
 
     // =========================================================================
@@ -77,13 +85,50 @@ class InterconsultaNotificationService
      */
     public function consultarInterconsultasHoy(): array
     {
+        $columnas = [
+            'Ingreso', 'Identificacion', 'Paciente', 'Clinica',
+            'UnidadFuncional', 'Cama', 'Fecha_Orden', 'Orden',
+            'Especialidad_Ordenada', 'DiagnosticoPpal', 'Folio',
+            'EstadoOrden', 'Observaciones', 'Profesional', 'Email',
+        ];
+
+        // ─── Ruta EN VIVO (directo a Fabric, sin parquet ni cache) ───────────
+        //
+        // Las notificaciones deben salir sobre el estado ACTUAL de la
+        // interconsulta. El parquet puede tener minutos u horas de antiguedad,
+        // asi que la notificacion saldria tarde o sobre un estado viejo.
+        //
+        // NOTA: aun en vivo, Fabric tiene un lag interno de sincronizacion
+        // (~1 min normalmente). Es el piso fisico, no se puede bajar desde la
+        // aplicacion.
+        $enVivo = $this->graphLive->interconsultasEnVivo([], [
+            'columns'  => $columnas,
+            'sort_col' => 'Fecha_Orden',
+            'sort_dir' => 'desc',
+            'limit'    => 500,
+        ]);
+
+        if ($enVivo['ok'] ?? false) {
+            $data   = $enVivo['data'] ?? [];
+            $filas  = $data['value'] ?? [];
+            $source = (string) ($data['source'] ?? '');
+
+            Log::channel('notificaciones')->info('[INTERCONSULTAS] Consulta en vivo a Fabric', [
+                'source'     => $source,          // "fabric_live" confirma que no vino de parquet
+                'count'      => $data['count'] ?? count($filas),
+                'elapsed_ms' => $data['elapsed_ms'] ?? null,
+            ]);
+
+            return $this->soloConEmail($filas);
+        }
+
+        // ─── Respaldo: si la ruta en vivo no responde, no dejar sin notificar ─
+        Log::channel('notificaciones')->warning(
+            '[INTERCONSULTAS] Ruta en vivo no disponible (' . ($enVivo['message'] ?? 'sin detalle') . '). Usando consulta estandar.'
+        );
+
         $response = $this->graphFabric->queryAsSystem('ex', 'VW_HC_NotificacionesInterconsultas', [
-            'columns' => [
-                'Ingreso', 'Identificacion', 'Paciente', 'Clinica',
-                'UnidadFuncional', 'Cama', 'Fecha_Orden', 'Orden',
-                'Especialidad_Ordenada', 'DiagnosticoPpal', 'Folio',
-                'EstadoOrden', 'Observaciones', 'Profesional', 'Email',
-            ],
+            'columns'  => $columnas,
             'filters'  => [],
             'limit'    => 500,
             'offset'   => 0,
@@ -96,8 +141,18 @@ class InterconsultaNotificationService
             return [];
         }
 
-        // Filtrar registros sin email
-        return collect($response['data'] ?? [])
+        return $this->soloConEmail($response['data'] ?? []);
+    }
+
+    /**
+     * Descarta los registros sin correo destino.
+     *
+     * @param  array<int, array>  $filas
+     * @return array<int, array>
+     */
+    private function soloConEmail(array $filas): array
+    {
+        return collect($filas)
             ->filter(fn ($item) => !empty(trim($item['Email'] ?? '')))
             ->values()
             ->all();

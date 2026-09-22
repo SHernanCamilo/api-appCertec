@@ -147,6 +147,27 @@ Route::middleware(['auth:api'])->group(function () {
             ->where('schema', '[a-z]+')->where('view', '[A-Za-z0-9_]+');
         Route::get('/parquet-config/status', [\App\Http\Controllers\Fabric\BiParquetConfigController::class, 'status']);
 
+        // ─────────────────────────────────────────────────────────────────────
+        // Monitor de Parquets — proxy hacia Graph-Fabric.
+        //
+        // El navegador llama SIEMPRE estas rutas; el token de servicio (admin)
+        // nunca sale del backend. Forzar usa warm+polling (no bloqueante).
+        // ─────────────────────────────────────────────────────────────────────
+        Route::prefix('parquet-monitor')->group(function () {
+            // A. Forzar generación (botón rayo)
+            Route::post('/force', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'force']);
+            Route::get('/force/status', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'forceStatus']);
+
+            // B. Monitoreo
+            Route::get('/schedule', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'schedule']);
+            Route::get('/live', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'live']);
+
+            // C. Gestión del schedule
+            Route::post('/schedule', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'upsert']);
+            Route::delete('/schedule', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'remove']);
+            Route::post('/schedule/run', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'run']);
+        });
+
         // SSE Stream — sin JWT, el jobId es token implícito (no pasa por auth middleware)
         // Se registra en routes/api.php fuera del grupo auth.
     });
