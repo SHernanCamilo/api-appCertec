@@ -105,10 +105,17 @@ class InterconsultaNotificationService
         // Se filtra por el DIA ACTUAL (rango BETWEEN sobre Fecha_Orden): el job
         // solo procesa interconsultas de hoy, asi que traer solo esas es mas
         // liviano para Fabric y mas preciso que pedir 500 filas sin filtro.
-        $hoy = now()->timezone('America/Bogota')->format('Y-m-d');
+        //
+        // IMPORTANTE: Fecha_Orden es datetime. El rango debe ir de 00:00:00 a
+        // 23:59:59; usar solo la fecha (["hoy","hoy"]) da un rango vacio porque
+        // Fabric lo interpreta como medianoche a medianoche. Verificado contra la
+        // API: ["hoy","hoy"] -> 0 filas; ["hoy 00:00:00","hoy 23:59:59"] -> ok.
+        $hoy   = now()->timezone('America/Bogota')->format('Y-m-d');
+        $desde = "{$hoy} 00:00:00";
+        $hasta = "{$hoy} 23:59:59";
 
         $enVivo = $this->graphLive->interconsultasEnVivo(
-            ['Fecha_Orden' => [$hoy, $hoy]],
+            ['Fecha_Orden' => [$desde, $hasta]],
             [
                 'columns'  => $columnas,
                 'sort_col' => 'Fecha_Orden',
