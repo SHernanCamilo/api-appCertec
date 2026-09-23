@@ -101,12 +101,21 @@ class InterconsultaNotificationService
         // NOTA: aun en vivo, Fabric tiene un lag interno de sincronizacion
         // (~1 min normalmente). Es el piso fisico, no se puede bajar desde la
         // aplicacion.
-        $enVivo = $this->graphLive->interconsultasEnVivo([], [
-            'columns'  => $columnas,
-            'sort_col' => 'Fecha_Orden',
-            'sort_dir' => 'desc',
-            'limit'    => 500,
-        ]);
+        //
+        // Se filtra por el DIA ACTUAL (rango BETWEEN sobre Fecha_Orden): el job
+        // solo procesa interconsultas de hoy, asi que traer solo esas es mas
+        // liviano para Fabric y mas preciso que pedir 500 filas sin filtro.
+        $hoy = now()->timezone('America/Bogota')->format('Y-m-d');
+
+        $enVivo = $this->graphLive->interconsultasEnVivo(
+            ['Fecha_Orden' => [$hoy, $hoy]],
+            [
+                'columns'  => $columnas,
+                'sort_col' => 'Fecha_Orden',
+                'sort_dir' => 'desc',
+                'limit'    => 500,
+            ]
+        );
 
         if ($enVivo['ok'] ?? false) {
             $data   = $enVivo['data'] ?? [];
