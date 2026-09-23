@@ -25,12 +25,15 @@ class InvRecepcionController extends Controller
     {
         try {
             $filters = [
-                'search'    => $request->query('search'),
-                'estado'    => $request->query('estado'),
-                'status'    => $request->query('status'),
-                'compra_id' => $request->query('compra_id'),
-                'limit'     => $request->query('limit', 25),
-                'offset'    => $request->query('offset', 0),
+                'search'      => $request->query('search'),
+                'estado'      => $request->query('estado'),
+                'status'      => $request->query('status'),
+                'compra_id'   => $request->query('compra_id'),
+                'sucursal_id' => $request->query('sucursal_id'),
+                'limit'       => $request->query('limit', 25),
+                'offset'      => $request->query('offset', 0),
+                // Restringe el listado a las sucursales con permiso del usuario.
+                'user_id'     => auth('api')->id() ?? (auth()->user()->id ?? null),
             ];
 
             $result = $this->service->getAll($filters);
@@ -155,6 +158,31 @@ class InvRecepcionController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al confirmar',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Finalizar/confirmar la recepción técnica de una ORDEN DE COMPRA.
+     * Acción exclusiva del Jefe de Almacén (permiso 'confirmar-recepcion' en la ruta).
+     * Marca la recepción como CONFIRMADA (solo lectura) y la OC como recibida.
+     * PATCH /api/inventario/recepciones/{compraId}/confirmar-tecnica
+     */
+    public function confirmarTecnica(Request $request, string $compraId): JsonResponse
+    {
+        try {
+            $userId = auth('api')->id();
+            if (!$userId) {
+                return response()->json(['success' => false, 'message' => 'No autenticado'], 401);
+            }
+
+            $result = $this->service->confirmarRecepcionTecnica((int) $compraId, (int) $userId);
+            return response()->json($result, $result['success'] ? 200 : ($result['code'] ?? 400));
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al confirmar la recepción técnica',
                 'error'   => $e->getMessage(),
             ], 500);
         }

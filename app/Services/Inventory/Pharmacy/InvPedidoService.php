@@ -36,23 +36,40 @@ class InvPedidoService
      */
     public function getAll(array $filters = []): array
     {
-        $query = InvPedido::with(['detalles', 'solicitante', 'trazabilidad.usuario']);
+        $query = InvPedido::with(['detalles', 'solicitante', 'aprobador', 'trazabilidad.usuario']);
 
-        // Restringir a las sucursales con permiso del usuario. Un admin/nacional
-        // ve todas; los demás solo ven los pedidos de sus sucursales. Los pedidos
-        // antiguos sin sucursal_id se muestran para no perder el histórico.
+        // Restringir por unidad operativa (sucursal) según los permisos del usuario:
+        //  - Admin / acceso recursivo total  → getSucursalIdsPermitidas() = null → ve TODO.
+        //  - Usuario con sucursales asignadas → solo ve los pedidos de ESAS sucursales.
+        //    (Si tiene solo Neiva, solo ve pedidos de Neiva; si tiene 3, ve esas 3.)
+        // Los pedidos sin sucursal_id (histórico) solo los ve el admin, para no
+        // filtrar de más a un usuario de sucursal con datos que no le corresponden.
         if (isset($filters['user_id'])) {
             $sucursalesPermitidas = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
             if ($sucursalesPermitidas !== null) {
-                $query->where(function ($q) use ($sucursalesPermitidas) {
-                    $q->whereIn('sucursal_id', $sucursalesPermitidas)
-                      ->orWhereNull('sucursal_id');
-                });
+                // Si por alguna razón no tiene ninguna sucursal, no ve nada (lista vacía).
+                $query->whereIn('sucursal_id', $sucursalesPermitidas ?: [-1]);
             }
         }
 
+        // Filtro puntual de sucursal (selector del listado). Debe respetar los permisos:
+        // solo se aplica sobre el subconjunto ya restringido arriba.
+        if (!empty($filters['sucursal_id'])) {
+            $query->where('sucursal_id', (int) $filters['sucursal_id']);
+        }
+
+        // Filtro por estado: acepta uno o varios separados por coma (ej. 'aprobado,en_proceso').
+        // Normaliza a minúsculas para no depender de mayúsculas del cliente.
         if (!empty($filters['estado'])) {
-            $query->where('estado', $filters['estado']);
+            $estados = array_values(array_filter(array_map(
+                fn ($e) => strtolower(trim((string) $e)),
+                explode(',', (string) $filters['estado'])
+            )));
+            if (count($estados) === 1) {
+                $query->whereRaw('LOWER(estado) = ?', [$estados[0]]);
+            } elseif (count($estados) > 1) {
+                $query->whereIn(DB::raw('LOWER(estado)'), $estados);
+            }
         }
 
         if (!empty($filters['proveedor'])) {
@@ -91,7 +108,7 @@ class InvPedidoService
      */
     public function getById(int $id): ?InvPedido
     {
-        return InvPedido::with(['detalles', 'solicitante', 'trazabilidad.usuario'])->find($id);
+        return InvPedido::with(['detalles', 'solicitante', 'aprobador', 'trazabilidad.usuario'])->find($id);
     }
 
     /**
@@ -124,13 +141,17 @@ class InvPedidoService
             // La columna es NOT NULL, así que se usa un valor por defecto.
             $proveedor = trim((string) ($data['proveedor'] ?? '')) ?: 'Por definir';
 
-            // Crear el pedido cabecera
+            // Crear el pedido cabecera.
+            // IMPORTANTE: el enum de inv_pedidos.estado es en minúsculas
+            // ('pendiente','en_proceso','recibido','aprobado','rechazado','cancelado').
+            // Escribir 'BORRADOR' hacía que MySQL guardara cadena vacía. El estado
+            // inicial correcto es 'pendiente'.
             $pedido = InvPedido::create([
                 'numero_pedido'  => $numeroPedido,
                 'proveedor'      => $proveedor,
                 'fecha_pedido'   => $data['fecha_pedido'] ?? now()->toDateString(),
                 'fecha_esperada' => $data['fecha_esperada'] ?? null,
-                'estado'         => 'BORRADOR', // Estado inicial
+                'estado'         => 'pendiente', // Estado inicial (valor válido del enum)
                 'observaciones'  => $observaciones,
                 'sucursal_id'    => $sucursalId,
                 'solicitado_por' => $userId,
@@ -150,20 +171,20 @@ class InvPedidoService
                         'producto_rotacion'   => $detalle['producto_rotacion'] ?? null,
                         'cantidad_solicitada' => $detalle['cantidad_solicitada'] ?? 0,
                         'precio_unitario'     => $detalle['precio_unitario'] ?? 0,
-                        'estado'              => 'PENDIENTE'
+                        'estado'              => 'pendiente'
                     ]);
                 }
             }
 
-            DB::commit();
-
-            // Trazabilidad
+            // Trazabilidad dentro de la transacción (si falla, no queda pedido sin traza).
             InvPedidoTrazabilidad::create([
                 'pedido_id' => $pedido->id,
-                'estado' => 'BORRADOR',
+                'estado' => 'pendiente',
                 'comentarios' => 'Creación de pedido',
                 'cambiado_por' => $userId
             ]);
+
+            DB::commit();
 
             return [
                 'success' => true,
@@ -193,8 +214,11 @@ class InvPedidoService
             return ['success' => false, 'message' => 'Pedido no encontrado'];
         }
 
-        if ($pedido->estado !== 'BORRADOR') {
-            return ['success' => false, 'message' => 'Solo se pueden editar pedidos en estado BORRADOR'];
+        // Solo se editan pedidos aún no gestionados. Se normaliza a minúsculas y se
+        // aceptan los estados iniciales equivalentes (incluye histórico con '').
+        $estadoEd = strtolower(trim((string) $pedido->estado));
+        if (!in_array($estadoEd, ['pendiente', 'borrador', 'solicitado', ''], true)) {
+            return ['success' => false, 'message' => 'Solo se pueden editar pedidos pendientes (sin gestionar).'];
         }
 
         DB::beginTransaction();
@@ -221,7 +245,7 @@ class InvPedidoService
                         'producto_rotacion'   => $detalle['producto_rotacion'] ?? null,
                         'cantidad_solicitada' => $detalle['cantidad_solicitada'] ?? 0,
                         'precio_unitario'     => $detalle['precio_unitario'] ?? 0,
-                        'estado'              => 'PENDIENTE'
+                        'estado'              => 'pendiente'
                     ]);
                 }
             }
@@ -251,42 +275,60 @@ class InvPedidoService
     public function cambiarEstado(int $id, string $nuevoEstado, int $userId): array
     {
         $pedido = InvPedido::find($id);
-        
+
         if (!$pedido) {
             return ['success' => false, 'message' => 'Pedido no encontrado'];
         }
 
-        $nuevoEstado = strtoupper($nuevoEstado);
-        $estadosPermitidos = ['BORRADOR', 'SOLICITADO', 'APROBADO', 'EN_TRANSITO', 'RECIBIDO', 'CANCELADO'];
-        
-        if (!in_array($nuevoEstado, $estadosPermitidos)) {
-            return ['success' => false, 'message' => 'Estado no válido'];
+        // Normalizar el estado a un valor VÁLIDO del enum de inv_pedidos:
+        // ('pendiente','en_proceso','recibido','aprobado','rechazado','cancelado').
+        // Se acepta la entrada en mayúsculas o sinónimos y se mapea a minúsculas.
+        $mapa = [
+            'BORRADOR'    => 'pendiente',
+            'PENDIENTE'   => 'pendiente',
+            'SOLICITADO'  => 'pendiente',
+            'APROBADO'    => 'aprobado',
+            'CONFIRMADO'  => 'aprobado',
+            'EN_PROCESO'  => 'en_proceso',
+            'EN_TRANSITO' => 'en_proceso',
+            'RECIBIDO'    => 'recibido',
+            'RECIBIDA'    => 'recibido',
+            'RECHAZADO'   => 'rechazado',
+            'CANCELADO'   => 'cancelado',
+            'CANCELADA'   => 'cancelado',
+        ];
+
+        $clave = strtoupper(trim($nuevoEstado));
+        $estadoFinal = $mapa[$clave] ?? null;
+        if (!$estadoFinal) {
+            return ['success' => false, 'message' => "Estado no válido: {$nuevoEstado}"];
         }
 
-        // Lógica para registrar quién hace el cambio
-        $updates = ['estado' => $nuevoEstado];
-        
-        if ($nuevoEstado === 'APROBADO') {
+        // Registrar quién hace el cambio según el estado destino.
+        $updates = ['estado' => $estadoFinal];
+        if ($estadoFinal === 'aprobado') {
             $updates['aprobado_por'] = $userId;
-        } elseif ($nuevoEstado === 'CANCELADO') {
+        } elseif ($estadoFinal === 'cancelado' || $estadoFinal === 'rechazado') {
             $updates['cancelado_por'] = $userId;
-        } elseif ($nuevoEstado === 'RECIBIDO') {
+        } elseif ($estadoFinal === 'recibido') {
             $updates['recibido_por'] = $userId;
             $updates['fecha_recibido'] = now()->toDateString();
         }
 
-        $pedido->update($updates);
-
-        InvPedidoTrazabilidad::create([
-            'pedido_id' => $pedido->id,
-            'estado' => $nuevoEstado,
-            'comentarios' => 'Cambio de estado a ' . $nuevoEstado,
-            'cambiado_por' => $userId
-        ]);
+        // El cambio de estado y su trazabilidad van juntos en una transacción.
+        DB::transaction(function () use ($pedido, $updates, $estadoFinal, $userId) {
+            $pedido->update($updates);
+            InvPedidoTrazabilidad::create([
+                'pedido_id'    => $pedido->id,
+                'estado'       => $estadoFinal,
+                'comentarios'  => 'Cambio de estado a ' . $estadoFinal,
+                'cambiado_por' => $userId,
+            ]);
+        });
 
         return [
             'success' => true,
-            'message' => 'Estado del pedido actualizado a ' . $nuevoEstado,
+            'message' => 'Estado del pedido actualizado a ' . strtoupper($estadoFinal),
             'data'    => $pedido->fresh(['detalles', 'trazabilidad.usuario'])
         ];
     }
@@ -310,11 +352,12 @@ class InvPedidoService
             return ['success' => false, 'message' => 'Pedido no encontrado'];
         }
 
-        if ($pedido->estado !== 'BORRADOR') {
-            return ['success' => false, 'message' => 'Solo se pueden confirmar pedidos en estado BORRADOR'];
+        $estado = strtolower(trim((string) $pedido->estado));
+        if (!in_array($estado, ['pendiente', 'borrador', ''], true)) {
+            return ['success' => false, 'message' => 'Solo se pueden confirmar pedidos pendientes.'];
         }
 
-        return $this->cambiarEstado($id, 'SOLICITADO', $userId);
+        return $this->cambiarEstado($id, 'aprobado', $userId);
     }
 
     /**
@@ -328,11 +371,12 @@ class InvPedidoService
             return ['success' => false, 'message' => 'Pedido no encontrado'];
         }
 
-        if ($pedido->estado !== 'SOLICITADO') {
-            return ['success' => false, 'message' => 'Solo se pueden aprobar pedidos en estado SOLICITADO'];
+        $estado = strtolower(trim((string) $pedido->estado));
+        if (!in_array($estado, ['pendiente', 'solicitado', ''], true)) {
+            return ['success' => false, 'message' => 'Solo se pueden aprobar pedidos pendientes.'];
         }
 
-        return $this->cambiarEstado($id, 'APROBADO', $userId);
+        return $this->cambiarEstado($id, 'aprobado', $userId);
     }
 
     /**
@@ -347,15 +391,54 @@ class InvPedidoService
             return ['success' => false, 'message' => 'Pedido no encontrado'];
         }
 
-        $estadoActual = strtoupper((string) $pedido->estado);
-        if (!in_array($estadoActual, ['BORRADOR', 'SOLICITADO'], true)) {
+        $estadoActual = strtolower(trim((string) $pedido->estado));
+        // Estados iniciales confirmables (flexible: cubre 'pendiente' y '' del histórico).
+        if (!in_array($estadoActual, ['borrador', 'solicitado', 'pendiente', ''], true)) {
             return [
                 'success' => false,
                 'message' => "El pedido no se puede confirmar en estado {$estadoActual}.",
             ];
         }
 
-        return $this->cambiarEstado($id, 'APROBADO', $userId);
+        return $this->cambiarEstado($id, 'aprobado', $userId);
+    }
+
+    /**
+     * Rechazo por el Jefe de Almacén (misma autoridad que confirmar).
+     * Acepta pedidos pendientes/borrador/solicitado y los deja en 'rechazado'.
+     */
+    public function rechazarPedido(int $id, int $userId, ?string $motivo = null): array
+    {
+        $pedido = InvPedido::find($id);
+        if (!$pedido) {
+            return ['success' => false, 'message' => 'Pedido no encontrado'];
+        }
+
+        $estadoActual = strtolower(trim((string) $pedido->estado));
+        // Estados iniciales rechazables (flexible: cubre 'pendiente' y '' del histórico).
+        if (!in_array($estadoActual, ['borrador', 'solicitado', 'pendiente', ''], true)) {
+            return [
+                'success' => false,
+                'message' => "El pedido no se puede rechazar en estado {$estadoActual}.",
+            ];
+        }
+
+        // Estado + trazabilidad en una transacción (valor 'rechazado' válido del enum).
+        DB::transaction(function () use ($pedido, $userId, $motivo) {
+            $pedido->update(['estado' => 'rechazado', 'cancelado_por' => $userId]);
+            InvPedidoTrazabilidad::create([
+                'pedido_id'    => $pedido->id,
+                'estado'       => 'rechazado',
+                'comentarios'  => trim('Pedido rechazado' . ($motivo ? ': ' . $motivo : '')),
+                'cambiado_por' => $userId,
+            ]);
+        });
+
+        return [
+            'success' => true,
+            'message' => 'Pedido rechazado',
+            'data'    => $pedido->fresh(['detalles', 'trazabilidad.usuario']),
+        ];
     }
 
     /**
@@ -389,10 +472,12 @@ class InvPedidoService
 
                 $totalComprado = $compradoAnteriormente + $item['cantidad_solicitada_compra'];
 
+                // El enum de inv_pedido_detalles.estado es minúsculas:
+                // ('pendiente','en_transito','parcial','completo','recibido','rechazado').
                 if ($totalComprado >= $detallePedido->cantidad_solicitada) {
-                    $detallePedido->estado = 'COMPLETO';
+                    $detallePedido->estado = 'completo';
                 } elseif ($totalComprado > 0) {
-                    $detallePedido->estado = 'PARCIAL';
+                    $detallePedido->estado = 'parcial';
                 }
                 $detallePedido->save();
 
@@ -415,24 +500,28 @@ class InvPedidoService
      */
     private function evaluarEstadoGeneralPedido(int $pedidoId, int $userId): void
     {
+        // Comparaciones en minúsculas (los estados de detalle se guardan así).
+        // Antes se comparaba contra 'COMPLETO'/'PARCIAL' y nunca coincidía, por lo
+        // que el pedido jamás avanzaba tras comprar. Se corrige a minúsculas.
         $detalles = InvPedidoDetalle::where('pedido_id', $pedidoId)->get();
         $total = $detalles->count();
-        $completos = $detalles->where('estado', 'COMPLETO')->count();
-        $parciales = $detalles->where('estado', 'PARCIAL')->count();
+        $completos = $detalles->filter(fn ($d) => strtolower((string) $d->estado) === 'completo')->count();
+        $parciales = $detalles->filter(fn ($d) => strtolower((string) $d->estado) === 'parcial')->count();
 
         $pedido = InvPedido::find($pedidoId);
-        if (!$pedido || in_array($pedido->estado, ['CANCELADO', 'RECIBIDO'])) {
+        $estadoActual = strtolower(trim((string) ($pedido->estado ?? '')));
+        if (!$pedido || in_array($estadoActual, ['cancelado', 'rechazado', 'recibido'], true)) {
             return;
         }
 
-        $nuevoEstado = $pedido->estado;
-        if ($completos == $total) {
-            $nuevoEstado = 'EN_TRANSITO';
-        } elseif ($completos > 0 || $parciales > 0) {
-            $nuevoEstado = 'EN_TRANSITO'; // O un estado intermedio
+        // Cuando hay compras (completas o parciales) el pedido pasa a 'en_proceso'
+        // (el enum de inv_pedidos no tiene 'en_transito').
+        $nuevoEstado = $estadoActual;
+        if ($total > 0 && ($completos > 0 || $parciales > 0)) {
+            $nuevoEstado = 'en_proceso';
         }
 
-        if ($nuevoEstado !== $pedido->estado) {
+        if ($nuevoEstado !== $estadoActual) {
             $this->cambiarEstado($pedidoId, $nuevoEstado, $userId);
         }
     }

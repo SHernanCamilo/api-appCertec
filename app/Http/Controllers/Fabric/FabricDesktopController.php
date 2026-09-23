@@ -24,6 +24,14 @@ class FabricDesktopController extends Controller
     private const CACHE_PREFIX = 'fabric_desktop_ticket:';
     private const SETUP_RELATIVE = 'desktop/JadeOneDesktop.exe';
 
+    /**
+     * Versión mínima del .exe que se acepta en el claim. Las versiones más
+     * antiguas (o las que no envían versión, como las 1.0.0 previas al
+     * auto-update) quedan bloqueadas y forzadas a descargar la nueva.
+     * Se puede sobreescribir con config('jadeone.min_desktop_version').
+     */
+    private const MIN_DESKTOP_VERSION = '1.4.0';
+
     public function __construct(
         private GraphFabricGatewayService $gateway
     ) {}
@@ -116,8 +124,27 @@ class FabricDesktopController extends Controller
     public function claim(Request $request): JsonResponse
     {
         $request->validate([
-            'ticket' => 'required|string|size:32|regex:/^[a-f0-9]+$/',
+            'ticket'      => 'required|string|size:32|regex:/^[a-f0-9]+$/',
+            'app_version' => 'nullable|string|max:20|regex:/^[0-9]+(\.[0-9]+){0,3}$/',
         ]);
+
+        // ── Gate de versión mínima ──────────────────────────────────────────
+        // Si la app no envía versión (ejecutables viejos, previos al auto-update)
+        // o envía una menor a la mínima, se rechaza el claim y se le indica que
+        // debe actualizar. Así se fuerza a todos a la versión nueva.
+        $minVersion = (string) config('jadeone.min_desktop_version', self::MIN_DESKTOP_VERSION);
+        $appVersion = (string) $request->input('app_version', '');
+        if ($appVersion === '' || version_compare($appVersion, $minVersion, '<')) {
+            return response()->json([
+                'success'         => false,
+                'update_required' => true,
+                'min_version'     => $minVersion,
+                'download_url'    => url('/api/fabric/viewer/desktop/download'),
+                'message'         => "Su versión de JadeOne Desktop está desactualizada"
+                    . ($appVersion !== '' ? " ({$appVersion})" : "")
+                    . ". Debe actualizar a la {$minVersion} o superior para continuar.",
+            ], 426); // 426 Upgrade Required
+        }
 
         $key     = self::CACHE_PREFIX . $request->input('ticket');
         $payload = Cache::pull($key);

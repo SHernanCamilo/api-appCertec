@@ -209,9 +209,10 @@ class FabricInventoryService
         }
 
         // Estrategia según el tamaño del lote:
-        //  - Lote pequeño (≤ UMBRAL): consulta individual por código (más barato que
-        //    descargar el catálogo completo de ~35k productos).
-        //  - Lote grande: descarga el catálogo una sola vez y filtra en memoria.
+        //  - Lote pequeño (≤ UMBRAL): consulta individual por código.
+        //  - Lote mediano/grande: 1 sola consulta al parquet con filtro IN sobre
+        //    los códigos del lote (rápido, ~ms), en vez de descargar 35k productos.
+        //  - Fallback: catálogo completo indexado si el parquet-IN no está disponible.
         $umbral = 12;
 
         if (count($codes) <= $umbral) {
@@ -227,7 +228,15 @@ class FabricInventoryService
             return $results;
         }
 
-        // Lote grande: usar el catálogo completo indexado (1 sola descarga).
+        // Lote grande: intentar parquet con filtro IN (1-N chunks, muy rápido).
+        if (config('fabric.inventory_products_parquet', true)) {
+            $porParquet = $this->findByCodesParquet($codes);
+            if ($porParquet !== null) {
+                return $porParquet;
+            }
+        }
+
+        // Fallback: catálogo completo indexado (1 sola descarga).
         $catalogo = $this->getCatalogIndexedByCode();
 
         $results = [];
@@ -235,6 +244,81 @@ class FabricInventoryService
             $key = strtoupper($code);
             if (isset($catalogo[$key])) {
                 $results[$code] = $catalogo[$key];
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * Busca varios códigos con UNA consulta al parquet usando filtro IN, en
+     * chunks para no exceder límites del endpoint. Devuelve el mapa
+     * [codigoOriginal => filaNormalizada] o null si el parquet no respondió
+     * (para que el llamador use el fallback del catálogo completo).
+     *
+     * @param array<int,string> $codes
+     * @return array<string,array>|null
+     */
+    private function findByCodesParquet(array $codes): ?array
+    {
+        $columnas = ['Codigo', 'Nombre', 'Tipo_producto', 'Codigo_CUM', 'Fabricante',
+                     'Presentation', 'Concentracion', 'TipoRiesgo', 'Unidad_de_empaque',
+                     'Costo_promedio', 'Precio_Venta', 'Estado', 'RegistroSanitario', 'Serial'];
+
+        // Índice de la fila normalizada por código en mayúsculas.
+        $indexado = [];
+        // Se usa la primera columna de código (Codigo) para el filtro IN.
+        $filterKey = self::CODE_FILTER_KEYS[0];
+        $huboRespuesta = false;
+
+        // Chunks de 200 códigos por request (equilibra tamaño de URL y viajes).
+        foreach (array_chunk($codes, 200) as $grupo) {
+            try {
+                $res = $this->parquet->filter(
+                    $this->getProductsSchema(),
+                    $this->getProductsView(),
+                    [$filterKey => array_values($grupo)], // lista → IN
+                    count($grupo) + 50, // margen por si hay duplicados
+                    0,
+                    ['count' => false, 'columns' => $columnas]
+                );
+            } catch (\Throwable $e) {
+                return null; // parquet no disponible → fallback
+            }
+
+            $status = (int) ($res['status'] ?? 0);
+            if ($status === 409) {
+                return null; // parquet no generado, pero servicio vivo → fallback al catálogo
+            }
+            if ($status >= 500) {
+                // Servicio de datos caído (502/503): el fallback al catálogo también
+                // fallaría y tardaría. Devolver lo acumulado sin reintentar.
+                return $huboRespuesta ? $indexado : [];
+            }
+            if (!($res['success'] ?? false)) {
+                return null;
+            }
+
+            $huboRespuesta = true;
+            foreach (($res['value'] ?? []) as $row) {
+                $norm = $this->normalizeProductRow($row);
+                $cod  = strtoupper(trim((string) $norm['codigo']));
+                if ($cod !== '') {
+                    $indexado[$cod] = $norm;
+                }
+            }
+        }
+
+        if (!$huboRespuesta) {
+            return null;
+        }
+
+        // Mapear al código original solicitado.
+        $results = [];
+        foreach ($codes as $code) {
+            $key = strtoupper(trim($code));
+            if (isset($indexado[$key])) {
+                $results[$code] = $indexado[$key];
             }
         }
 
@@ -542,29 +626,66 @@ class FabricInventoryService
      * Vista: ViewInternal.FQ45_V_CXP_Proveedores en ssindigo.database.windows.net
      * Cachea el resultado 30 minutos.
      */
-    public function getSuppliers(): array
+    public function getSuppliers(array $filters = []): array
     {
-        $cacheKey = 'inv_suppliers_sqlsrv';
-        $cached = \Illuminate\Support\Facades\Cache::get($cacheKey);
-        if ($cached) return $cached;
+        $soloActivos = !array_key_exists('solo_activos', $filters) || (bool) $filters['solo_activos'];
+        $busqueda    = trim((string) ($filters['search'] ?? ''));
 
-        try {
-            $data = \Illuminate\Support\Facades\DB::connection('sqlsrv_indigo')
-                ->table(\Illuminate\Support\Facades\DB::raw('ViewInternal.FQ45_V_CXP_Proveedores'))
-                ->select('*')
-                ->limit(5000)
-                ->get()
-                ->map(fn($row) => (array) $row)
-                ->toArray();
+        // Cache 30 min del catálogo completo normalizado (la búsqueda se filtra en memoria).
+        $cacheKey = 'inv_suppliers_sqlsrv_v2';
+        $catalogo = \Illuminate\Support\Facades\Cache::get($cacheKey);
 
-            $response = ['success' => true, 'data' => $data];
-            \Illuminate\Support\Facades\Cache::put($cacheKey, $response, 1800);
-            return $response;
-        } catch (\Exception $e) {
-            Log::error('FabricInventory: Error obteniendo proveedores de SQL Server', [
-                'error' => $e->getMessage(),
-            ]);
-            return ['success' => false, 'data' => [], 'message' => $e->getMessage()];
+        if ($catalogo === null) {
+            try {
+                // La vista vive en INDIGO026 (Azure), conexión 'sqlsrv_suppliers'.
+                $view = env('MSSQL_SUPPLIERS_VIEW', 'ViewInternal.FQ45_V_CXP_Proveedores');
+                $rows = \Illuminate\Support\Facades\DB::connection('sqlsrv_suppliers')
+                    ->table(\Illuminate\Support\Facades\DB::raw($view))
+                    ->get();
+
+                // Normalizar a un contrato estable para el frontend.
+                $catalogo = collect($rows)->map(function ($row) {
+                    $r = (array) $row;
+                    $nit = trim((string) ($r['Nit'] ?? ''));
+                    $dv  = trim((string) ($r['DV'] ?? ''));
+                    return [
+                        'nit'          => $nit,
+                        'nit_completo' => $dv !== '' ? "{$nit}-{$dv}" : $nit,
+                        'nombre'       => trim((string) ($r['Cliente'] ?? '')),
+                        'ciudad'       => trim((string) ($r['Ciudad'] ?? '')),
+                        'telefono'     => trim((string) ($r['Telefono'] ?? '')),
+                        'email'        => trim((string) ($r['Email'] ?? '')),
+                        'dias_plazo'   => $r['DiasDePlazo'] ?? null,
+                        'estado'       => strtoupper(trim((string) ($r['Estado'] ?? ''))),
+                    ];
+                })
+                ->filter(fn ($p) => $p['nombre'] !== '') // descartar filas sin nombre
+                ->sortBy('nombre', SORT_NATURAL | SORT_FLAG_CASE)
+                ->values()
+                ->all();
+
+                \Illuminate\Support\Facades\Cache::put($cacheKey, $catalogo, 1800);
+            } catch (\Exception $e) {
+                Log::error('FabricInventory: Error obteniendo proveedores de SQL Server', [
+                    'error' => $e->getMessage(),
+                ]);
+                return ['success' => false, 'data' => [], 'message' => 'No se pudieron cargar los proveedores.'];
+            }
         }
+
+        // Filtros en memoria (sobre el catálogo cacheado).
+        $data = collect($catalogo);
+        if ($soloActivos) {
+            $data = $data->filter(fn ($p) => $p['estado'] === 'ACTIVO');
+        }
+        if ($busqueda !== '') {
+            $needle = mb_strtolower($busqueda);
+            $data = $data->filter(fn ($p) =>
+                str_contains(mb_strtolower($p['nombre']), $needle) ||
+                str_contains(mb_strtolower($p['nit']), $needle)
+            );
+        }
+
+        return ['success' => true, 'data' => $data->values()->all()];
     }
 }

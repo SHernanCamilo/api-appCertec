@@ -4,19 +4,23 @@ namespace App\Services\Inventory\Pharmacy;
 
 use App\Models\Inventory\InvOrdenCompra;
 use App\Models\Inventory\InvOrdenCompraDetalle;
+use App\Models\Inventory\InvPedido;
 use App\Models\Inventory\External\IndigoOrdenCompra;
 use App\Services\Inventory\Pharmacy\InvSequenceService;
 use App\Services\Inventory\Pharmacy\InvPedidoService;
+use App\Services\Inventory\BranchAccessService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class InvOrdenCompraService
 {
     protected InvSequenceService $sequenceService;
+    protected BranchAccessService $branchAccess;
 
-    public function __construct(InvSequenceService $sequenceService)
+    public function __construct(InvSequenceService $sequenceService, BranchAccessService $branchAccess)
     {
         $this->sequenceService = $sequenceService;
+        $this->branchAccess = $branchAccess;
     }
     /**
      * Listar órdenes de compra.
@@ -36,7 +40,13 @@ class InvOrdenCompraService
      */
     private function getLocalOrders(array $filters = []): array
     {
-        $query = InvOrdenCompra::with(['detalles', 'creador']);
+        // Eager loading: incluye los pedidos vinculados (N:N) y el pedido de cada
+        // detalle, para resolver "pedidos_relacionados" sin consultas N+1.
+        $query = InvOrdenCompra::with([
+            'detalles', 'creador', 'pedidos:id,numero_pedido',
+            'detalles.pedidoDetalle:id,pedido_id',
+            'detalles.pedidoDetalle.pedido:id,numero_pedido',
+        ]);
         $estado = strtolower((string) ($filters['estado'] ?? $filters['status'] ?? ''));
 
         if ($estado !== '') {
@@ -51,6 +61,21 @@ class InvOrdenCompraService
                 $q->where('numero_orden_compra', 'LIKE', "%{$search}%")
                   ->orWhere('proveedor_nombre', 'LIKE', "%{$search}%");
             });
+        }
+
+        // Restringir por unidad operativa (sucursal) según los permisos del usuario:
+        //  - Admin / acceso recursivo total → ve TODAS las órdenes.
+        //  - Usuario con sucursales asignadas → solo ve las OC de ESAS sucursales.
+        if (isset($filters['user_id'])) {
+            $sucursalesPermitidas = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
+            if ($sucursalesPermitidas !== null) {
+                $query->whereIn('sucursal_id', $sucursalesPermitidas ?: [-1]);
+            }
+        }
+
+        // Filtro puntual de sucursal (respeta la restricción de permisos anterior).
+        if (!empty($filters['sucursal_id'])) {
+            $query->where('sucursal_id', (int) $filters['sucursal_id']);
         }
 
         $query->orderBy('id', 'desc');
@@ -129,7 +154,11 @@ class InvOrdenCompraService
      */
     public function getById(int $id): ?InvOrdenCompra
     {
-        return InvOrdenCompra::with(['detalles', 'creador'])->find($id);
+        return InvOrdenCompra::with([
+            'detalles', 'creador', 'pedidos:id,numero_pedido',
+            'detalles.pedidoDetalle:id,pedido_id',
+            'detalles.pedidoDetalle.pedido:id,numero_pedido',
+        ])->find($id);
     }
 
     /**
@@ -226,9 +255,17 @@ class InvOrdenCompraService
      */
     public function create(array $data, int $userId): array
     {
+        // La OC hereda la sucursal del PEDIDO relacionado (fuente de verdad).
+        // Si viene pedido_id, se ignora cualquier sucursal_id enviado por el cliente.
         $sucursalId = isset($data['sucursal_id']) ? (int) $data['sucursal_id'] : null;
+        if (!empty($data['pedido_id'])) {
+            $pedido = InvPedido::find((int) $data['pedido_id']);
+            if ($pedido && $pedido->sucursal_id) {
+                $sucursalId = (int) $pedido->sucursal_id;
+            }
+        }
 
-        // Control de acceso: el usuario debe tener permiso sobre la sucursal elegida.
+        // Control de acceso: el usuario debe tener permiso sobre la sucursal resultante.
         if ($sucursalId && !$this->usuarioTieneAccesoSucursal($userId, $sucursalId)) {
             return ['success' => false, 'code' => 403, 'message' => 'No tienes acceso a la sucursal seleccionada.'];
         }
@@ -250,11 +287,19 @@ class InvOrdenCompraService
 
             if (!empty($data['detalles']) && is_array($data['detalles'])) {
                 foreach ($data['detalles'] as $detalle) {
+                    $codigo   = $detalle['codigo_producto_indigo'] ?? $detalle['codigo_producto'] ?? null;
+                    $cantidad = (float) ($detalle['cantidad_solicitada_compra'] ?? 0);
+                    // No insertar lineas basura: exigir codigo y cantidad > 0.
+                    if (empty($codigo) || $cantidad <= 0) {
+                        continue;
+                    }
                     InvOrdenCompraDetalle::create([
                         'compra_id'                  => $orden->id,
-                        'pedido_detalle_id'          => $detalle['pedido_detalle_id'],
+                        'pedido_detalle_id'          => $detalle['pedido_detalle_id'] ?? null,
+                        'codigo_producto_indigo'     => $codigo,
+                        'producto_nombre'            => $detalle['producto_nombre'] ?? null,
                         'proveedor'                  => $detalle['proveedor'] ?? 'N/A',
-                        'cantidad_solicitada_compra' => $detalle['cantidad_solicitada_compra'],
+                        'cantidad_solicitada_compra' => $cantidad,
                         'precio_unitario_compra'     => $detalle['precio_unitario_compra'] ?? null,
                         'estado'                     => 'pendiente'
                     ]);
@@ -356,13 +401,19 @@ class InvOrdenCompraService
             if (isset($data['detalles']) && is_array($data['detalles'])) {
                 $orden->detalles()->delete();
                 foreach ($data['detalles'] as $detalle) {
+                    $codigo   = $detalle['codigo_producto_indigo'] ?? $detalle['codigo_producto'] ?? null;
+                    $cantidad = (float) ($detalle['cantidad_solicitada_compra'] ?? 0);
+                    // No insertar lineas basura: exigir codigo y cantidad > 0.
+                    if (empty($codigo) || $cantidad <= 0) {
+                        continue;
+                    }
                     InvOrdenCompraDetalle::create([
                         'compra_id'                  => $orden->id,
                         'pedido_detalle_id'          => $detalle['pedido_detalle_id'] ?? null,
-                        'codigo_producto_indigo'     => $detalle['codigo_producto_indigo'] ?? $detalle['codigo_producto'] ?? null,
+                        'codigo_producto_indigo'     => $codigo,
                         'producto_nombre'            => $detalle['producto_nombre'] ?? null,
                         'proveedor'                  => $detalle['proveedor'] ?? 'N/A',
-                        'cantidad_solicitada_compra' => $detalle['cantidad_solicitada_compra'] ?? 0,
+                        'cantidad_solicitada_compra' => $cantidad,
                         'precio_unitario_compra'     => $detalle['precio_unitario_compra'] ?? null,
                         'estado'                     => 'pendiente',
                     ]);

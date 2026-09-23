@@ -12,7 +12,8 @@ class InvRecepcionDetalle extends Model
     protected $table = 'inv_recepcion_detalles';
 
     protected $fillable = [
-        'recepcion_id', 'pedido_detalle_id', 'codigo_producto', 'producto_nombre',
+        'recepcion_id', 'pedido_detalle_id', 'es_desdoblamiento', 'cum_recibido',
+        'codigo_producto', 'producto_nombre',
         'marca', 'tipo_producto', 'forma_farmaceutica', 'concentracion', 'unidad_empaque',
         'cantidad_solicitada', 'cantidad_recibida', 'muestra_poblacion', 'muestra_exclusion',
         'numero_lote', 'fecha_vencimiento',

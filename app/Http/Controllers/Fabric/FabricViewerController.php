@@ -395,6 +395,11 @@ class FabricViewerController extends Controller
                 'sort_col' => $request->input('sort_col', ''),
                 'sort_dir' => $request->input('sort_dir', 'asc'),
                 'max_rows' => (int) $request->input('max_rows', 1_000_000),
+                // force_refresh: el boton del rayo del Monitor lo envia para pedir a
+                // Graph-Fabric que INVALIDE el parquet y lo regenere, en vez de servir
+                // el que ya tiene. Antes se ignoraba aqui y nunca llegaba a Graph, por
+                // eso el rayo "a veces no hacia nada".
+                'force_refresh' => $request->boolean('force_refresh', false),
             ]
         );
 

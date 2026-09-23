@@ -11,6 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Laravel\Socialite\Facades\Socialite;
 use Tymon\JWTAuth\Facades\JWTAuth;
 use Illuminate\Support\Str;
+use GuzzleHttp\Client as GuzzleClient;
 
 class MicrosoftAuthController extends Controller
 {
@@ -21,6 +22,30 @@ class MicrosoftAuthController extends Controller
     {
         $this->sidebarService = $sidebarService;
         $this->userGrupSyncService = $userGrupSyncService;
+    }
+
+    /**
+     * Driver de Socialite (Microsoft) con timeout en el cliente HTTP.
+     *
+     * Sin esto, el intercambio del `code` con Microsoft (token + perfil en Graph)
+     * NO tiene timeout: si Microsoft o la red tardan, `->user()` se cuelga
+     * indefinidamente y el popup del frontend queda pegado en "Procesando
+     * autenticacion..." sin error ni respuesta. Con timeout, el request falla
+     * rapido y el frontend muestra el error en vez de congelarse.
+     */
+    private function microsoftDriver()
+    {
+        $driver = Socialite::driver('microsoft')->stateless();
+
+        // setHttpClient existe en el AbstractProvider de Socialite.
+        if (method_exists($driver, 'setHttpClient')) {
+            $driver->setHttpClient(new GuzzleClient([
+                'timeout'         => 15,
+                'connect_timeout' => 10,
+            ]));
+        }
+
+        return $driver;
     }
 
     /**
@@ -184,10 +209,8 @@ class MicrosoftAuthController extends Controller
     public function handleMicrosoftCallback(Request $request): JsonResponse
     {
         try {
-            // Obtener usuario de Microsoft
-            $microsoftUser = Socialite::driver('microsoft')
-                ->stateless()
-                ->user();
+            // Obtener usuario de Microsoft (con timeout en el cliente HTTP)
+            $microsoftUser = $this->microsoftDriver()->user();
 
             // Verificar si el dominio está permitido
             $email = $microsoftUser->getEmail();
@@ -420,7 +443,7 @@ class MicrosoftAuthController extends Controller
         try {
             // Determinar redirect_uri según el origin del frontend
             $origin = $request->header('Origin') ?? $request->header('Referer') ?? '';
-            $driver = Socialite::driver('microsoft')->stateless();
+            $driver = $this->microsoftDriver();
 
             if (str_contains($origin, 'trycloudflare.com')) {
                 $tunnelHost = parse_url($origin, PHP_URL_HOST);

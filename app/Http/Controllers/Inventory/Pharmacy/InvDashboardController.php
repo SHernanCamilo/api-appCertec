@@ -23,9 +23,14 @@ class InvDashboardController extends Controller
             $totalOrdenes = InvOrdenCompra::count();
             $totalProductos = InvProducto::count();
             
-            // Suma del total de las órdenes de compra activas o recibidas (excluyendo canceladas)
-            $valorTotalCompras = InvOrdenCompra::whereNotIn('estado', ['CANCELADA', 'RECHAZADA'])
-                ->sum('total');
+            // Suma del total de las órdenes de compra activas (excluyendo canceladas).
+            // OJO: inv_ordenes_compra NO tiene columna 'total' ('total' es un accessor
+            // del modelo), por eso el valor se calcula desde los detalles en SQL.
+            // Los estados se comparan en minúsculas porque así se persisten en el enum.
+            $valorTotalCompras = DB::table('inv_orden_compra_detalles as cd')
+                ->join('inv_ordenes_compra as c', 'c.id', '=', 'cd.compra_id')
+                ->whereNotIn(DB::raw('LOWER(c.estado)'), ['cancelada', 'rechazada'])
+                ->sum(DB::raw('cd.cantidad_solicitada_compra * COALESCE(cd.precio_unitario_compra, 0)'));
 
             // Podríamos agrupar pedidos por estado
             $pedidosPorEstado = InvPedido::select('estado', DB::raw('count(*) as total'))

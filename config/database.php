@@ -111,11 +111,11 @@ return [
         // ─────────────────────────────────────────────────────────────────
         'digipharma' => [
             'driver'         => 'mysql',
-            'host'           => env('DIGIPHARMA_HOST', '192.168.12.20'),
+            'host'           => env('DIGIPHARMA_HOST'),
             'port'           => env('DIGIPHARMA_PORT', '3306'),
-            'database'       => env('DIGIPHARMA_DATABASE', 'digipharma'),
-            'username'       => env('DIGIPHARMA_USERNAME', 'digipharma_app'),
-            'password'       => env('DIGIPHARMA_PASSWORD', 'kD21c2P7wQW9'),
+            'database'       => env('DIGIPHARMA_DATABASE'),
+            'username'       => env('DIGIPHARMA_USERNAME'),
+            'password'       => env('DIGIPHARMA_PASSWORD'),
             'charset'        => 'utf8mb4',
             'collation'      => 'utf8mb4_unicode_ci',
             'prefix'         => '',
@@ -129,14 +129,33 @@ return [
         // ─────────────────────────────────────────────────────────────────
         'sqlsrv_indigo' => [
             'driver'         => 'sqlsrv',
-            'host'           => env('MSSQL_PURCHASEORDER_HOST', '192.168.10.9'),
-            'port'           => env('MSSQL_PURCHASEORDER_PORT', '1433'),
-            'database'       => env('MSSQL_PURCHASEORDER_DB', 'INDIGO777'),
-            'username'       => env('MSSQL_PURCHASEORDER_USER', 'Pr_Genesis'),
-            'password'       => env('MSSQL_PURCHASEORDER_PASS', 'Genesis2021#'),
+            'host'           => env('MSSQL_PURCHASEORDER_HOST'),
+            'port'           => env('MSSQL_PURCHASEORDER_PORT'),
+            'database'       => env('MSSQL_PURCHASEORDER_DB'),
+            'username'       => env('MSSQL_PURCHASEORDER_USER'),
+            'password'       => env('MSSQL_PURCHASEORDER_PASS'),
             'charset'        => 'utf8',
             'prefix'         => '',
             'prefix_indexes' => true,
+        ],
+
+        // ─────────────────────────────────────────────────────────────────
+        // ERP INDIGO026 (Proveedores) — SQL Server en Azure
+        // Vista: ViewInternal.FQ45_V_CXP_Proveedores
+        // ─────────────────────────────────────────────────────────────────
+        'sqlsrv_suppliers' => [
+            'driver'                   => 'sqlsrv',
+            'host'                     => env('MSSQL_SUPPLIERS_HOST'),
+            'port'                     => env('MSSQL_SUPPLIERS_PORT', '1433'),
+            'database'                 => env('MSSQL_SUPPLIERS_DB'),
+            'username'                 => env('MSSQL_SUPPLIERS_USER'),
+            'password'                 => env('MSSQL_SUPPLIERS_PASS'),
+            'charset'                  => 'utf8',
+            'prefix'                   => '',
+            'prefix_indexes'           => true,
+            'encrypt'                  => 'yes',
+            'trust_server_certificate' => 'true',
+            'login_timeout'            => 30,
         ],
 
         // ─────────────────────────────────────────────────────────────────

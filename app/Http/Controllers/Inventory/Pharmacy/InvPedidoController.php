@@ -45,13 +45,14 @@ class InvPedidoController extends Controller
     {
         try {
             $filters = [
-                'search'    => $request->query('search'),
-                'estado'    => $request->query('estado'),
-                'proveedor' => $request->query('proveedor'),
-                'limit'     => $request->query('limit', 25),
-                'offset'    => $request->query('offset', 0),
+                'search'      => $request->query('search'),
+                'estado'      => $request->query('estado'),
+                'proveedor'   => $request->query('proveedor'),
+                'sucursal_id' => $request->query('sucursal_id'),
+                'limit'       => $request->query('limit', 25),
+                'offset'      => $request->query('offset', 0),
                 // Restringe el listado a las sucursales con permiso del usuario.
-                'user_id'   => auth()->user()->id ?? null,
+                'user_id'     => auth('api')->id() ?? (auth()->user()->id ?? null),
             ];
 
             $result = $this->service->getAll($filters);
@@ -229,6 +230,28 @@ class InvPedidoController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Error al confirmar el pedido',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Rechazar un pedido — acción del Jefe de Almacén.
+     * Protegida por el permiso 'confirmar-pedido' vía middleware en la ruta.
+     * PATCH /api/inventario/pedidos/{id}/rechazar
+     */
+    public function rechazar(Request $request, string $id): JsonResponse
+    {
+        try {
+            $userId = auth()->user()->id ?? 1;
+            $motivo = $request->input('motivo');
+            $result = $this->service->rechazarPedido((int) $id, $userId, $motivo);
+
+            return response()->json($result, $result['success'] ? 200 : 400);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al rechazar el pedido',
                 'error'   => $e->getMessage(),
             ], 500);
         }

@@ -12,11 +12,20 @@ Route::apiResource('productos', App\Http\Controllers\Inventory\Pharmacy\InvProdu
 // Dashboard
 Route::get('dashboard/stats', [App\Http\Controllers\Inventory\Pharmacy\InvDashboardController::class, 'getStats']);
 
+// Reportes unificados de Farmacia (tablero BI: pedidos + OC + recepciones)
+Route::get('reportes/dashboard', [App\Http\Controllers\Inventory\Pharmacy\InvReporteController::class, 'dashboard']);
+// Tablero de tiempos de gestión (Pedido → OC → Recepción)
+Route::get('reportes/tiempos', [App\Http\Controllers\Inventory\Pharmacy\InvReporteController::class, 'tiempos']);
+// Trazabilidad de un producto a través de las órdenes de compra
+Route::get('reportes/trazabilidad-producto', [App\Http\Controllers\Inventory\Pharmacy\InvReporteController::class, 'trazabilidadProducto']);
+
 // Pedidos
 // Las rutas específicas van ANTES del apiResource para que el wildcard {pedido} no las capture.
 Route::get('pedidos/sucursales-disponibles', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'sucursalesDisponibles']);
-// Confirmar/aprobar un pedido: solo el Jefe de Almacén (permiso 'confirmar-pedido').
+// Confirmar/aprobar y rechazar un pedido: solo el Jefe de Almacén (permiso 'confirmar-pedido').
 Route::patch('pedidos/{pedido}/confirmar', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'confirmar'])
+    ->middleware('check.permission:confirmar-pedido');
+Route::patch('pedidos/{pedido}/rechazar', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'rechazar'])
     ->middleware('check.permission:confirmar-pedido');
 Route::patch('pedidos/{pedido}/estado', [App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class, 'cambiarEstado']);
 Route::apiResource('pedidos', App\Http\Controllers\Inventory\Pharmacy\InvPedidoController::class);
@@ -24,6 +33,7 @@ Route::apiResource('pedidos', App\Http\Controllers\Inventory\Pharmacy\InvPedidoC
 // Órdenes de Compra
 // Las rutas específicas van ANTES del apiResource para que el wildcard {orden} no las capture.
 Route::get('ordenes-compra/sucursales-disponibles', [App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class, 'sucursalesDisponibles']);
+Route::get('ordenes-compra/proveedores', [App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class, 'proveedores']);
 Route::post('ordenes-compra/sync', [App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class, 'sync']);
 Route::patch('ordenes-compra/{orden}/estado', [App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class, 'cambiarEstado']);
 Route::apiResource('ordenes-compra', App\Http\Controllers\Inventory\Pharmacy\InvOrdenCompraController::class);
@@ -32,6 +42,9 @@ Route::apiResource('ordenes-compra', App\Http\Controllers\Inventory\Pharmacy\Inv
 // Rutas específicas ANTES del apiResource para que el wildcard {recepcion} no las capture.
 Route::get('recepciones/tabla-muestreo', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'tablaMuestreo']);
 Route::patch('recepciones/{recepcion}/confirmar', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'confirmar']);
+// Finalizar la recepción técnica de una OC: SOLO el Jefe de Almacén (permiso confirmar-recepcion).
+Route::patch('recepciones/{compra}/confirmar-tecnica', [App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class, 'confirmarTecnica'])
+    ->middleware('check.permission:confirmar-recepcion');
 Route::apiResource('recepciones', App\Http\Controllers\Inventory\Pharmacy\InvRecepcionController::class);
 
 // =========================================================================

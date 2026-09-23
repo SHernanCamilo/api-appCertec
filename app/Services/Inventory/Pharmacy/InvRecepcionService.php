@@ -8,15 +8,21 @@ use App\Models\Inventory\InvRecepcionDetalle;
 use App\Models\Inventory\InvPedidoDetalle;
 use App\Services\Inventory\FabricInventoryService;
 use App\Services\Inventory\Pharmacy\InvSequenceService;
+use App\Services\Inventory\BranchAccessService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class InvRecepcionService
 {
+    /** Estados de una recepción técnica. */
+    private const ESTADO_RECEPCIONADO = 'RECEPCIONADO'; // parcial / en curso (editable)
+    private const ESTADO_CONFIRMADO   = 'CONFIRMADO';   // finalizada por el Jefe de Almacén (bloqueada)
+
     public function __construct(
         protected InvSequenceService $sequenceService,
         protected PharmacyService $pharmacyService,
         protected FabricInventoryService $fabricService,
+        protected BranchAccessService $branchAccess,
     ) {}
 
     /**
@@ -54,6 +60,44 @@ class InvRecepcionService
             ->whereRaw('UPPER(TRIM(prefijo)) = ?', [$m[1]])
             ->first();
         return $suc ? (int) $suc->id : null;
+    }
+
+    /**
+     * Aplica el filtro por unidad operativa (sucursal) según los permisos del usuario.
+     *
+     * @param mixed       $query    Query builder de Eloquent (recepciones u OC).
+     * @param array       $filters  Debe traer 'user_id' y opcional 'sucursal_id'.
+     * @param string|null $relacion Nombre de la relación hacia la OC ('compra') cuando
+     *                              la tabla base NO tiene sucursal_id. null = filtra directo.
+     */
+    private function aplicarFiltroSucursal($query, array $filters, ?string $relacion): void
+    {
+        $sucursalesPermitidas = null;
+        if (isset($filters['user_id'])) {
+            $sucursalesPermitidas = $this->branchAccess->getSucursalIdsPermitidas((int) $filters['user_id']);
+        }
+        $sucursalPuntual = !empty($filters['sucursal_id']) ? (int) $filters['sucursal_id'] : null;
+
+        // Admin/recursivo total y sin filtro puntual → no se restringe nada.
+        if ($sucursalesPermitidas === null && !$sucursalPuntual) {
+            return;
+        }
+
+        $aplicar = function ($q) use ($sucursalesPermitidas, $sucursalPuntual) {
+            if ($sucursalesPermitidas !== null) {
+                $q->whereIn('sucursal_id', $sucursalesPermitidas ?: [-1]);
+            }
+            if ($sucursalPuntual) {
+                $q->where('sucursal_id', $sucursalPuntual);
+            }
+        };
+
+        if ($relacion) {
+            // La tabla base no tiene sucursal_id: filtrar por la OC relacionada.
+            $query->whereHas($relacion, fn ($q) => $aplicar($q));
+        } else {
+            $aplicar($query);
+        }
     }
 
     /**
@@ -95,6 +139,10 @@ class InvRecepcionService
                   ->orWhere('oc_indigo', 'LIKE', "%{$search}%");
             });
         }
+
+        // Restringir por unidad operativa (sucursal). inv_recepciones no tiene
+        // sucursal_id, así que se filtra por la OC asociada (compra.sucursal_id).
+        $this->aplicarFiltroSucursal($query, $filters, 'compra');
 
         $query->orderBy('id', 'desc');
 
@@ -152,6 +200,10 @@ class InvRecepcionService
                   ->orWhere('proveedor_nombre', 'LIKE', "%{$search}%");
             });
         }
+
+        // Restringir por unidad operativa: aquí la consulta es sobre la OC, que sí
+        // tiene sucursal_id, por lo que se filtra directo sobre esa columna.
+        $this->aplicarFiltroSucursal($query, $filters, null);
 
         $query->orderBy('id', 'desc');
 
@@ -285,12 +337,20 @@ class InvRecepcionService
         // para que al reabrir la vista Excel se vean los datos previos.
         $items = $this->hidratarConRecepcionPrevia($compraId, $items);
 
+        // Estado de la recepción de esta OC: solo se BLOQUEA (solo lectura total)
+        // cuando el Jefe de Almacén la CONFIRMA. Mientras es 'RECEPCIONADO' (parcial),
+        // se puede seguir recepcionando los productos que faltan.
+        $recepcion = InvRecepcion::where('compra_id', $compraId)->orderBy('id', 'desc')->first();
+        $recepcionConfirmada = $recepcion
+            && strtolower((string) $recepcion->estado) === strtolower(self::ESTADO_CONFIRMADO);
+
         return [
             'success' => true,
             'orden_numero' => $compra->numero_orden_compra,
             'proveedor' => $compra->proveedor_nombre,
             'oc_indigo' => $compra->oc_indigo,
             'estado_compra' => $compra->estado,
+            'recepcion_confirmada' => $recepcionConfirmada,
             'data' => $items,
         ];
     }
@@ -318,12 +378,13 @@ class InvRecepcionService
             return $items;
         }
 
-        // Índices para cruce rápido.
-        $porPedidoDetalle = [];
+        // Agrupar TODOS los detalles por pedido_detalle_id (para reconstruir los
+        // fragmentos del desdoblamiento) y, como respaldo, indexar por código.
+        $porPedidoDetalle = [];   // pid => [detalles...] (varios si hubo desdoblamiento)
         $porCodigo = [];
         foreach ($recepcion->detalles as $d) {
             if ($d->pedido_detalle_id) {
-                $porPedidoDetalle[(int) $d->pedido_detalle_id] = $d;
+                $porPedidoDetalle[(int) $d->pedido_detalle_id][] = $d;
             }
             $cod = strtoupper(trim((string) $d->codigo_producto));
             if ($cod !== '' && !isset($porCodigo[$cod])) {
@@ -331,20 +392,8 @@ class InvRecepcionService
             }
         }
 
-        foreach ($items as &$item) {
-            $det = null;
-            $pid = $item['pedido_detalle_id'] ?? null;
-            if ($pid && isset($porPedidoDetalle[(int) $pid])) {
-                $det = $porPedidoDetalle[(int) $pid];
-            } else {
-                $cod = strtoupper(trim((string) ($item['codigo_producto'] ?? '')));
-                $det = $porCodigo[$cod] ?? null;
-            }
-            if (!$det) {
-                continue;
-            }
-
-            // Sobrescribir con lo recepcionado (respetando lo que exista).
+        // Aplica los campos guardados de un detalle sobre un item base.
+        $overlay = function (array $item, $det): array {
             $item['cantidad_recibida']      = $det->cantidad_recibida ?? $item['cantidad_recibida'];
             $item['muestra_poblacion']      = $det->muestra_poblacion ?? $item['muestra_poblacion'];
             $item['muestra_exclusion']      = isset($det->muestra_exclusion) ? ((bool) $det->muestra_exclusion ? 1 : 0) : ($item['muestra_exclusion'] ?? 0);
@@ -363,11 +412,39 @@ class InvRecepcionService
             $item['concepto_recepcion']     = $det->concepto_recepcion ?? ($item['concepto_recepcion'] ?? '');
             $item['observaciones_recepcion']= $det->observaciones_recepcion ?? ($item['observaciones_recepcion'] ?? '');
             $item['es_medicamento_vital']   = isset($det->es_medicamento_vital) ? (bool) $det->es_medicamento_vital : ($item['es_medicamento_vital'] ?? false);
+            $item['es_desdoblamiento']      = isset($det->es_desdoblamiento) ? (bool) $det->es_desdoblamiento : false;
             $item['tiene_recepcion_previa'] = true;
-        }
-        unset($item);
+            return $item;
+        };
 
-        return $items;
+        // Reconstruir la lista: por cada item base, el primer detalle es el padre
+        // y los demás (fragmentos) se agregan como filas hijas justo después.
+        $resultado = [];
+        foreach ($items as $item) {
+            $dets = null;
+            $pid = $item['pedido_detalle_id'] ?? null;
+            if ($pid && isset($porPedidoDetalle[(int) $pid])) {
+                $dets = $porPedidoDetalle[(int) $pid];
+            } elseif (isset($porCodigo[strtoupper(trim((string) ($item['codigo_producto'] ?? '')))])) {
+                $dets = [$porCodigo[strtoupper(trim((string) ($item['codigo_producto'] ?? '')))]];
+            }
+
+            if (!$dets) {
+                $resultado[] = $item;      // sin recepción previa: item tal cual
+                continue;
+            }
+
+            // Padre = primer detalle.
+            $resultado[] = $overlay($item, $dets[0]);
+            // Fragmentos = resto de detalles del mismo renglón.
+            for ($i = 1; $i < count($dets); $i++) {
+                $frag = $overlay($item, $dets[$i]);
+                $frag['es_desdoblamiento'] = true;
+                $resultado[] = $frag;
+            }
+        }
+
+        return $resultado;
     }
 
     /**
@@ -673,6 +750,10 @@ class InvRecepcionService
             ]);
 
             $rejectedCount = 0;
+            // Acumula la cantidad recibida por pedido_detalle_id, para soportar el
+            // desdoblamiento (un renglón que llega en varios CUM/lote). Así el detalle
+            // del pedido guarda la SUMA de los fragmentos, no la del último.
+            $recibidoPorPedidoDetalle = [];
 
             // Procesar los detalles
             foreach ($itemsToReceive as $item) {
@@ -688,6 +769,9 @@ class InvRecepcionService
                 InvRecepcionDetalle::create([
                     'recepcion_id'               => $recepcion->id,
                     'pedido_detalle_id'          => $item['pedido_detalle_id'] ?? null,
+                    // Fragmento (hijo) de un renglón desdoblado + su CUM real.
+                    'es_desdoblamiento'          => !empty($item['es_desdoblamiento']) ? 1 : 0,
+                    'cum_recibido'               => $item['cum_recibido'] ?? null,
                     'codigo_producto'            => $item['codigo_producto'] ?? null,
                     'producto_nombre'            => $item['producto_nombre'] ?? null,
                     'marca'                      => $item['marca'] ?? null,
@@ -729,17 +813,23 @@ class InvRecepcionService
                 ]);
 
                 if (!empty($item['pedido_detalle_id'])) {
+                    $pdId = (int) $item['pedido_detalle_id'];
+                    // Acumular la cantidad recibida de todos los fragmentos de este renglón.
+                    $recibidoPorPedidoDetalle[$pdId] =
+                        ($recibidoPorPedidoDetalle[$pdId] ?? 0) + (float) ($item['cantidad_recibida'] ?? 0);
+
+                    // El lote/cum/vencimiento se toman del último fragmento capturado.
+                    // (El desglose completo por lote queda en inv_recepcion_detalles.)
                     $pedidoUpdates = array_filter([
                         'cum_recibido' => $item['cum_recibido'] ?? null,
                         'codigo_sanitario' => $item['codigo_sanitario'] ?? null,
-                        'cantidad_recibida' => $item['cantidad_recibida'] ?? null,
                         'numero_lote' => $item['numero_lote'] ?? null,
                         'fecha_vencimiento' => $item['fecha_vencimiento'] ?? null,
                     ], fn ($v) => $v !== null && $v !== '');
+                    // La cantidad recibida es la SUMA acumulada (soporta desdoblamiento).
+                    $pedidoUpdates['cantidad_recibida'] = $recibidoPorPedidoDetalle[$pdId];
 
-                    if (!empty($pedidoUpdates)) {
-                        InvPedidoDetalle::where('id', $item['pedido_detalle_id'])->update($pedidoUpdates);
-                    }
+                    InvPedidoDetalle::where('id', $pdId)->update($pedidoUpdates);
                 }
             }
 
@@ -837,6 +927,72 @@ class InvRecepcionService
                 'success' => false,
                 'message' => 'Error al confirmar la recepción',
                 'error'   => $e->getMessage()
+            ];
+        }
+    }
+
+    /**
+     * Finaliza/confirma la recepción técnica de una ORDEN DE COMPRA (por compra_id).
+     * Acción del Jefe de Almacén. A diferencia de guardar (parcial), esto:
+     *   - Valida que exista al menos una recepción con productos.
+     *   - Exige lote y vencimiento en los ítems aprobados/aceptados.
+     *   - Marca la recepción como CONFIRMADO (queda de solo lectura).
+     *   - Marca la OC como 'recibida'.
+     *
+     * @param int $compraId  ID de la orden de compra a finalizar.
+     */
+    public function confirmarRecepcionTecnica(int $compraId, int $userId): array
+    {
+        $compra = InvOrdenCompra::find($compraId);
+        if (!$compra) {
+            return ['success' => false, 'code' => 404, 'message' => 'Orden de compra no encontrada.'];
+        }
+
+        // Tomar la recepción más reciente de la OC (donde se acumularon los ítems).
+        $recepcion = InvRecepcion::with('detalles')
+            ->where('compra_id', $compraId)
+            ->orderBy('id', 'desc')
+            ->first();
+
+        if (!$recepcion || $recepcion->detalles->isEmpty()) {
+            return ['success' => false, 'code' => 409, 'message' => 'La orden no tiene productos recepcionados. Recepcione al menos un producto antes de confirmar.'];
+        }
+
+        if (strtolower((string) $recepcion->estado) === strtolower(self::ESTADO_CONFIRMADO)) {
+            return ['success' => false, 'code' => 409, 'message' => 'Esta recepción técnica ya fue confirmada.'];
+        }
+
+        DB::beginTransaction();
+        try {
+            // Validación farmacéutica: los ítems aprobados deben tener lote y vencimiento.
+            foreach ($recepcion->detalles as $detalle) {
+                $concepto = strtolower((string) $detalle->concepto_recepcion);
+                if (in_array($concepto, ['aprobado', 'aceptado'], true)) {
+                    if (empty($detalle->numero_lote) || empty($detalle->fecha_vencimiento)) {
+                        throw new \Exception("El producto '{$detalle->producto_nombre}' fue aprobado pero carece de Lote o Fecha de Vencimiento.");
+                    }
+                }
+            }
+
+            // Confirmar TODAS las recepciones de esta OC (por si hubo varias parciales).
+            InvRecepcion::where('compra_id', $compraId)->update(['estado' => self::ESTADO_CONFIRMADO]);
+
+            // La OC pasa a 'recibida' (proceso finalizado).
+            $compra->update(['estado' => 'recibida']);
+
+            DB::commit();
+
+            return [
+                'success' => true,
+                'message' => 'Recepción técnica confirmada. La orden de compra fue marcada como recibida.',
+                'data'    => ['compra_id' => $compraId, 'estado' => 'recibida'],
+            ];
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Error al confirmar recepción técnica: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => $e->getMessage() ?: 'Error al confirmar la recepción técnica.',
             ];
         }
     }
