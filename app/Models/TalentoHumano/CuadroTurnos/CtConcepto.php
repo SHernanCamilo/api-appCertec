@@ -12,6 +12,7 @@ class CtConcepto extends Model
     const TIPO_DEDUCIDO  = 'deducido';
 
     protected $fillable = [
+        'id_empresa',
         'codigo',
         'nombre',
         'tipo_concepto',
@@ -24,12 +25,26 @@ class CtConcepto extends Model
     ];
 
     // =========================================================================
+    // RELACIONES
+    // =========================================================================
+
+    public function empresa()
+    {
+        return $this->belongsTo(\App\Models\Empresa::class, 'id_empresa');
+    }
+
+    // =========================================================================
     // SCOPES
     // =========================================================================
 
     public function scopeActivos($query)
     {
         return $query->where('activo', true);
+    }
+
+    public function scopePorEmpresa($query, ?int $idEmpresa)
+    {
+        return $query->where('id_empresa', $idEmpresa);
     }
 
     public function scopeDevengados($query)

@@ -539,8 +539,9 @@ class CuadroTurnoService
             // Usar override si existe, sino usar plantilla
             $horaInicio = $a->hora_inicio_override ?? ($plantilla->hora_inicio ?? '00:00:00');
             $horaFin = $a->hora_fin_override ?? ($plantilla->hora_fin ?? '00:00:00');
-            $horaInicio2 = $a->hora_inicio_override_2;
-            $horaFin2 = $a->hora_fin_override_2;
+            // Segundo rango (jornada partida): override_2 si existe, sino el de la plantilla.
+            $horaInicio2 = $a->hora_inicio_override_2 ?? ($plantilla->hora_inicio_2 ?? null);
+            $horaFin2 = $a->hora_fin_override_2 ?? ($plantilla->hora_fin_2 ?? null);
             
             return [
                 'id'             => $a->id,
@@ -551,8 +552,11 @@ class CuadroTurnoService
                 'hora_fin'       => $horaFin,
                 'hora_inicio_2'  => $horaInicio2,
                 'hora_fin_2'     => $horaFin2,
-                'es_jornada_partida' => false,
-                'rangos'         => $plantilla ? [['inicio' => $plantilla->hora_inicio, 'fin' => $plantilla->hora_fin]] : [],
+                'es_jornada_partida' => (bool) ($horaInicio2 && $horaFin2),
+                'rangos'         => array_values(array_filter([
+                    ['inicio' => $horaInicio, 'fin' => $horaFin],
+                    ($horaInicio2 && $horaFin2) ? ['inicio' => $horaInicio2, 'fin' => $horaFin2] : null,
+                ])),
                 'plantilla'      => $plantilla ? [
                     'id'        => $plantilla->id,
                     'codigo'    => $plantilla->codigo,
@@ -604,8 +608,10 @@ class CuadroTurnoService
             // Obtener horas extras registradas para el empleado en el mes
             $horasExtras = $this->obtenerHorasExtrasMes($idEmpleado, $anio, $mes);
 
-            // Obtener parametro de jornada vigente (el más reciente activo)
+            // Parametro de jornada vigente de la empresa del empleado.
+            $idEmpresaEmpleado = $empleado->id_empresa ?? null;
             $jornadaMax = \App\Models\TalentoHumano\CuadroTurnos\ParametroJornada::where('activo', true)
+                ->when($idEmpresaEmpleado, fn($q) => $q->where('id_empresa', $idEmpresaEmpleado))
                 ->orderByDesc('vigente_desde')
                 ->first();
 
@@ -806,6 +812,19 @@ public function eliminarCuadroEmpleado(int $idEmpleado, int $anio, int $mes): ar
     /**
      * Calcular totales de horas por categoría
      */
+    /**
+     * Indica si una fecha (Y-m-d) cae en domingo.
+     * El trabajo dominical se paga con recargo festivo.
+     */
+    private function esDomingo(string $fecha): bool
+    {
+        try {
+            return Carbon::parse($fecha)->dayOfWeek === Carbon::SUNDAY;
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
     private function calcularTotalesMes(array $turnos, array $festivos, string $fechaInicio, string $fechaFin): array
     {
         $total = 0;
@@ -821,7 +840,10 @@ public function eliminarCuadroEmpleado(int $idEmpleado, int $anio, int $mes): ar
         foreach ($turnos as $turno) {
             if ($turno['es_descanso'] || !$turno['hora_inicio']) continue;
 
-            $horas = $this->calcularHoras($turno, $festivosMapa->has($turno['fecha']));
+            // Es festivo si esta en el calendario de festivos O si es domingo
+            // (el trabajo dominical se paga con recargo festivo).
+            $esFestivo = $festivosMapa->has($turno['fecha']) || $this->esDomingo($turno['fecha']);
+            $horas = $this->calcularHoras($turno, $esFestivo);
             
             $total += $horas['total'];
             $normales += $horas['normales'];
@@ -862,7 +884,9 @@ public function eliminarCuadroEmpleado(int $idEmpleado, int $anio, int $mes): ar
 
             if ($turno['es_descanso'] || !$turno['hora_inicio']) continue;
 
-            $horas = $this->calcularHoras($turno, $festivosMapa->has($turno['fecha']));
+            // Festivo si esta en el calendario O si es domingo (recargo dominical).
+            $esFestivo = $festivosMapa->has($turno['fecha']) || $this->esDomingo($turno['fecha']);
+            $horas = $this->calcularHoras($turno, $esFestivo);
             $desglose[$turno['fecha']]['normales'] += $horas['normales'];
             $desglose[$turno['fecha']]['nocturnas'] += $horas['nocturnas'];
             $desglose[$turno['fecha']]['festivas'] += $horas['festivas'];

@@ -21,17 +21,19 @@ class ParametroCierreCuadro extends Model
 
     public function scopeActivos($query) { return $query->where('activo', true); }
 
+    public function empresa()
+    {
+        return $this->belongsTo(\App\Models\Empresa::class, 'id_empresa');
+    }
+
     /**
-     * Obtiene el par+ímetro de cierre vigente para una empresa (o global).
+     * Obtiene el parametro de cierre vigente de una empresa (Opcion B: por empresa, sin global).
      */
     public static function vigente(?int $idEmpresa = null): ?self
     {
         return self::where('activo', true)
-            ->where(function ($q) use ($idEmpresa) {
-                $q->where('id_empresa', $idEmpresa)
-                  ->orWhereNull('id_empresa');
-            })
-            ->orderByRaw('id_empresa IS NULL ASC') // Prioridad: empresa espec+¡fica > global
+            ->when($idEmpresa !== null, fn($q) => $q->where('id_empresa', $idEmpresa))
+            ->orderByDesc('created_at')
             ->first();
     }
 }

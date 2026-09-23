@@ -10,6 +10,7 @@ class ParametroJornada extends Model
     protected $table = 'humtal_parametros_jornada';
 
     protected $fillable = [
+        'id_empresa',
         'horas_max_dia',
         'horas_max_semana',
         'horas_max_mes',
@@ -38,15 +39,30 @@ class ParametroJornada extends Model
 
     public function scopeActivos($query) { return $query->where('activo', true); }
 
+    public function scopePorEmpresa($query, ?int $idEmpresa)
+    {
+        return $query->where('id_empresa', $idEmpresa);
+    }
+
     // =========================================================================
-    // M+ëTODOS EST+üTICOS
+    // RELACIONES
+    // =========================================================================
+
+    public function empresa()
+    {
+        return $this->belongsTo(\App\Models\Empresa::class, 'id_empresa');
+    }
+
+    // =========================================================================
+    // M+ï¿½TODOS EST+ï¿½TICOS
     // =========================================================================
 
     /**
-     * Obtiene el par+ímetro de jornada vigente para una fecha dada.
+     * Obtiene el par+ï¿½metro de jornada vigente para una fecha dada,
+     * opcionalmente filtrado por empresa.
      * Si no encuentra ninguno, retorna valores por defecto Colombia.
      */
-    public static function vigenteEn($fecha = null): self
+    public static function vigenteEn($fecha = null, ?int $idEmpresa = null): self
     {
         $fecha = $fecha ? Carbon::parse($fecha)->toDateString() : now()->toDateString();
 
@@ -56,10 +72,11 @@ class ParametroJornada extends Model
                   ->orWhere('vigente_hasta', '>=', $fecha);
             })
             ->where('activo', true)
+            ->when($idEmpresa !== null, fn($q) => $q->where('id_empresa', $idEmpresa))
             ->orderByDesc('vigente_desde')
             ->first();
 
-        // Si no hay par+ímetro en BD, retornar uno con valores por defecto
+        // Si no hay par+ï¿½metro en BD, retornar uno con valores por defecto
         if (!$parametro) {
             $parametro = new self([
                 'horas_max_dia'          => 8,
@@ -77,11 +94,11 @@ class ParametroJornada extends Model
     }
 
     /**
-     * Obtiene el par+ímetro vigente actual.
+     * Obtiene el par+ï¿½metro vigente actual.
      */
-    public static function vigente(): self
+    public static function vigente(?int $idEmpresa = null): self
     {
-        return self::vigenteEn(now());
+        return self::vigenteEn(now(), $idEmpresa);
     }
 
     // =========================================================================
@@ -89,7 +106,7 @@ class ParametroJornada extends Model
     // =========================================================================
 
     /**
-     * Retorna el inicio de la jornada nocturna en minutos del d+¡a.
+     * Retorna el inicio de la jornada nocturna en minutos del d+ï¿½a.
      */
     public function getNocturnoInicioMinutos(): int
     {
@@ -97,7 +114,7 @@ class ParametroJornada extends Model
     }
 
     /**
-     * Retorna el fin de la jornada nocturna en minutos del d+¡a.
+     * Retorna el fin de la jornada nocturna en minutos del d+ï¿½a.
      */
     public function getNocturnoFinMinutos(): int
     {
@@ -105,7 +122,7 @@ class ParametroJornada extends Model
     }
 
     /**
-     * Convierte HH:MM a minutos del d+¡a.
+     * Convierte HH:MM a minutos del d+ï¿½a.
      */
     private function horaAMinutos(string $hora): int
     {

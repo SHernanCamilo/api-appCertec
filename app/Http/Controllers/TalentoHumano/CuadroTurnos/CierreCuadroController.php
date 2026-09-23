@@ -21,16 +21,21 @@ class CierreCuadroController extends Controller
     // ========= PARAMETROS DE CIERRE =========
 
     /**
-     * GET /api/turnos/cierre-cuadro/parametros
+     * GET /api/turnos/cierre-cuadro/parametros?id_empresa=Z
+     * Parametros de cierre POR EMPRESA.
      */
-    public function parametros(): JsonResponse
+    public function parametros(Request $request): JsonResponse
     {
-        $parametros = ParametroCierreCuadro::orderByDesc('created_at')->get();
-        return response()->json(['success' => true, 'data' => $parametros]);
+        $query = ParametroCierreCuadro::orderByDesc('created_at');
+        if ($request->filled('id_empresa')) {
+            $query->where('id_empresa', (int) $request->id_empresa);
+        }
+        return response()->json(['success' => true, 'data' => $query->get()]);
     }
 
     /**
      * POST /api/turnos/cierre-cuadro/parametros
+     * id_empresa obligatorio: cada empresa controla su propio parametro de cierre.
      */
     public function guardarParametro(Request $request): JsonResponse
     {
@@ -40,15 +45,24 @@ class CierreCuadroController extends Controller
             'dia_cierre'       => 'required|integer|min:1|max:31',
             'hora_cierre'      => 'required',
             'aplica_mes_actual' => 'nullable|boolean',
-            'id_empresa'       => 'nullable|integer',
+            'id_empresa'       => 'required|integer|exists:ent_empresas,id',
         ]);
 
         $parametro = ParametroCierreCuadro::updateOrCreate(
-            ['id_empresa' => $data['id_empresa'] ?? null, 'activo' => true],
+            ['id_empresa' => $data['id_empresa'], 'activo' => true],
             $data
         );
 
-        return response()->json(['success' => true, 'data' => $parametro, 'message' => 'Parametro guardado.']);
+        // Si se movio la fecha de cierre hacia adelante, reabrir los cuadros
+        // cerrados AUTOMATICAMENTE cuya nueva fecha de cierre aun no ha llegado.
+        $reabiertos = $this->service->reabrirAutomaticosPorNuevaFecha((int) $data['id_empresa']);
+
+        $mensaje = 'Parametro guardado.';
+        if ($reabiertos > 0) {
+            $mensaje .= " Se reabrieron {$reabiertos} cuadro(s) por el cambio de fecha.";
+        }
+
+        return response()->json(['success' => true, 'data' => $parametro, 'message' => $mensaje]);
     }
 
     // ========= ESTADO DE UNIDADES =========

@@ -22,8 +22,19 @@ class CierreCuadroService
             return true;
         }
 
-        // 2. Cierre autom+�tico por fecha
-        $parametro = ParametroCierreCuadro::vigente();
+        // 2. Cierre automatico por fecha — tomar el parametro DE LA EMPRESA de la unidad.
+        //    (Los parametros de cierre son por empresa; sin este filtro se tomaba
+        //     el de otra empresa y cerraba/abria incorrectamente.)
+        $idEmpresa = \DB::table('config_unidades_funcionales')
+            ->where('id', $idUnidad)
+            ->value('id_empresa');
+
+        // Sin empresa no hay parametro por empresa => no aplica cierre automatico.
+        if (!$idEmpresa) {
+            return false;
+        }
+
+        $parametro = ParametroCierreCuadro::vigente((int) $idEmpresa);
         if (!$parametro || $parametro->tipo_bloqueo !== 'automatico') {
             return false;
         }
@@ -49,10 +60,11 @@ class CierreCuadroService
      */
     public function cuadroEstaBloqueado(int $idCuadro): bool
     {
-        $cuadro = CtCuadro::find($idCuadro);
-        if (!$cuadro || !$cuadro->id_unidad_funcional) return false;
+        $cuadro = CtCuadro::with('grupo')->find($idCuadro);
+        $idUnidad = $cuadro?->grupo?->id_unidad_funcional;
+        if (!$cuadro || !$idUnidad) return false;
 
-        return $this->estaBloqueado($cuadro->id_unidad_funcional, $cuadro->anio, $cuadro->mes);
+        return $this->estaBloqueado($idUnidad, $cuadro->anio, $cuadro->mes);
     }
 
     /**
@@ -76,10 +88,10 @@ class CierreCuadroService
                 continue;
             }
 
-            // Buscar cuadro asociado
-            $cuadro = CtCuadro::where('id_unidad_funcional', $idUnidad)
-                ->where('anio', $anio)
+            // Buscar cuadro asociado (la unidad se relaciona via el grupo)
+            $cuadro = CtCuadro::where('anio', $anio)
                 ->where('mes', $mes)
+                ->whereHas('grupo', fn($gq) => $gq->where('id_unidad_funcional', $idUnidad))
                 ->first();
 
             BloqueoCuadro::create([
@@ -113,6 +125,83 @@ class CierreCuadroService
             'ya_estaban'  => $yaEstaban,
             'total'       => count($idsUnidades),
         ];
+    }
+
+    /**
+     * Reabre los cuadros cerrados AUTOMATICAMENTE de una empresa cuya nueva
+     * fecha de cierre aun no ha llegado.
+     *
+     * Se llama al guardar el parametro de cierre: si el admin mueve el dia de
+     * cierre hacia adelante (ej. de 22 a 24), los cuadros que se habian cerrado
+     * por la fecha vieja se reabren. Los bloqueos MANUALES NO se tocan (fueron
+     * decision humana). Solo aplica cuando el parametro es de tipo 'automatico'.
+     *
+     * @return int cantidad de cuadros reabiertos
+     */
+    public function reabrirAutomaticosPorNuevaFecha(int $idEmpresa): int
+    {
+        $parametro = ParametroCierreCuadro::vigente($idEmpresa);
+
+        // Si no es automatico, no se reabre nada por fecha.
+        if (!$parametro || $parametro->tipo_bloqueo !== 'automatico') {
+            return 0;
+        }
+
+        // Bloqueos AUTOMATICOS activos de unidades de esta empresa.
+        $bloqueos = BloqueoCuadro::where('estado', 'bloqueado')
+            ->where('tipo_bloqueo', 'automatico')
+            ->whereIn('id_unidad_funcional', function ($q) use ($idEmpresa) {
+                $q->select('id')->from('config_unidades_funcionales')->where('id_empresa', $idEmpresa);
+            })
+            ->get();
+
+        $reabiertos = 0;
+
+        foreach ($bloqueos as $bloqueo) {
+            // Calcular la fecha de cierre segun la NUEVA regla para el periodo del bloqueo.
+            $fechaCierre = $this->calcularFechaCierre($parametro, $bloqueo->anio, $bloqueo->mes);
+
+            // Si con la nueva fecha AUN no deberia estar cerrado => reabrir.
+            if (now()->lte($fechaCierre)) {
+                $bloqueo->update([
+                    'estado'            => 'desbloqueado',
+                    'desbloqueado_en'   => now(),
+                    'desbloqueado_por'  => auth()->id(),
+                    'motivo_desbloqueo' => 'Reapertura automatica: se movio la fecha de cierre',
+                ]);
+
+                if ($bloqueo->id_cuadro) {
+                    CtCuadro::where('id', $bloqueo->id_cuadro)->update(['estado' => 'creado']);
+                }
+
+                $reabiertos++;
+            }
+        }
+
+        if ($reabiertos > 0) {
+            Log::info('Reapertura automatica por cambio de fecha de cierre', [
+                'empresa'    => $idEmpresa,
+                'reabiertos' => $reabiertos,
+            ]);
+        }
+
+        return $reabiertos;
+    }
+
+    /**
+     * Calcula la fecha/hora de cierre para un periodo segun un parametro.
+     */
+    private function calcularFechaCierre(ParametroCierreCuadro $parametro, int $anio, int $mes): \Carbon\Carbon
+    {
+        if ($parametro->aplica_mes_actual) {
+            $dia = min($parametro->dia_cierre, \Carbon\Carbon::create($anio, $mes, 1)->daysInMonth);
+            $fecha = \Carbon\Carbon::create($anio, $mes, $dia);
+        } else {
+            $mesSiguiente = \Carbon\Carbon::create($anio, $mes, 1)->addMonth();
+            $dia = min($parametro->dia_cierre, $mesSiguiente->daysInMonth);
+            $fecha = \Carbon\Carbon::create($mesSiguiente->year, $mesSiguiente->month, $dia);
+        }
+        return $fecha->setTimeFromTimeString($parametro->hora_cierre ?? '23:59');
     }
 
     /**
@@ -186,29 +275,38 @@ class CierreCuadroService
             }
 
             // Buscar cuadros abiertos del per+�odo
-            $cuadrosAbiertos = CtCuadro::where('anio', $anioCierre)
+            // La unidad funcional del cuadro se obtiene VIA el grupo
+            // (CtCuadro -> grupo -> id_unidad_funcional). CtCuadro NO tiene
+            // columna id_unidad_funcional ni relacion unidadFuncional().
+            $cuadrosAbiertos = CtCuadro::with('grupo')
+                ->where('anio', $anioCierre)
                 ->where('mes', $mesCierre)
-                ->whereNotNull('id_unidad_funcional')
                 ->where('estado', '!=', 'cerrado')
-                ->when($parametro->id_empresa, function ($q, $idEmpresa) {
-                    $q->whereHas('unidadFuncional', fn($uq) => $uq->where('id_empresa', $idEmpresa));
+                ->whereHas('grupo', function ($gq) use ($parametro) {
+                    $gq->whereNotNull('id_unidad_funcional')
+                       ->when($parametro->id_empresa, fn($q, $idEmpresa) => $q->where('id_empresa', $idEmpresa));
                 })
                 ->get();
 
             foreach ($cuadrosAbiertos as $cuadro) {
-                // Verificar que no est+� ya bloqueado
-                if (BloqueoCuadro::estaBloqueada($cuadro->id_unidad_funcional, $anioCierre, $mesCierre)) {
+                $idUnidad = $cuadro->grupo->id_unidad_funcional ?? null;
+                if (!$idUnidad) {
+                    continue;
+                }
+
+                // Verificar que no este ya bloqueado
+                if (BloqueoCuadro::estaBloqueada($idUnidad, $anioCierre, $mesCierre)) {
                     continue;
                 }
 
                 BloqueoCuadro::create([
                     'id_cuadro'           => $cuadro->id,
-                    'id_unidad_funcional' => $cuadro->id_unidad_funcional,
+                    'id_unidad_funcional' => $idUnidad,
                     'anio'                => $anioCierre,
                     'mes'                 => $mesCierre,
                     'estado'              => 'bloqueado',
                     'bloqueado_en'        => now(),
-                    'bloqueado_por'       => null, // Autom+�tico
+                    'bloqueado_por'       => null, // Automatico
                     'tipo_bloqueo'        => 'automatico',
                 ]);
 

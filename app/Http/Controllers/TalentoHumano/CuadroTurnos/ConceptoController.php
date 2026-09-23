@@ -25,6 +25,11 @@ class ConceptoController extends Controller
         try {
             $query = CtConcepto::query();
 
+            // Conceptos POR EMPRESA
+            if ($request->filled('id_empresa')) {
+                $query->where('id_empresa', (int) $request->id_empresa);
+            }
+
             if ($request->filled('activo')) {
                 $query->where('activo', filter_var($request->activo, FILTER_VALIDATE_BOOLEAN));
             }
@@ -74,7 +79,13 @@ class ConceptoController extends Controller
     public function store(Request $request): JsonResponse
     {
         $request->validate([
-            'codigo' => 'required|string|max:10|unique:humtal_ct_conceptos,codigo',
+            'id_empresa' => 'required|integer|exists:ent_empresas,id',
+            // El codigo es unico POR EMPRESA (misma empresa no repite codigo)
+            'codigo' => [
+                'required', 'string', 'max:10',
+                \Illuminate\Validation\Rule::unique('humtal_ct_conceptos', 'codigo')
+                    ->where(fn($q) => $q->where('id_empresa', $request->id_empresa)),
+            ],
             'nombre' => 'required|string|max:100',
             'tipo_concepto' => 'required|in:devengado,deducido',
             'formula' => 'required|string',
@@ -92,7 +103,7 @@ class ConceptoController extends Controller
             }
 
             $concepto = CtConcepto::create($request->only([
-                'codigo', 'nombre', 'tipo_concepto', 'formula', 'activo',
+                'id_empresa', 'codigo', 'nombre', 'tipo_concepto', 'formula', 'activo',
             ]));
 
             return response()->json([
@@ -113,8 +124,18 @@ class ConceptoController extends Controller
      */
     public function update(Request $request, int $id): JsonResponse
     {
+        $concepto = CtConcepto::findOrFail($id);
+        $idEmpresa = $request->input('id_empresa', $concepto->id_empresa);
+
         $request->validate([
-            'codigo' => "required|string|max:10|unique:humtal_ct_conceptos,codigo,{$id}",
+            'id_empresa' => 'sometimes|integer|exists:ent_empresas,id',
+            // Codigo unico por empresa, ignorando el propio registro
+            'codigo' => [
+                'required', 'string', 'max:10',
+                \Illuminate\Validation\Rule::unique('humtal_ct_conceptos', 'codigo')
+                    ->where(fn($q) => $q->where('id_empresa', $idEmpresa))
+                    ->ignore($id),
+            ],
             'nombre' => 'required|string|max:100',
             'tipo_concepto' => 'required|in:devengado,deducido',
             'formula' => 'required|string',
@@ -122,8 +143,6 @@ class ConceptoController extends Controller
         ]);
 
         try {
-            $concepto = CtConcepto::findOrFail($id);
-
             // Validar que la fórmula sea parseable
             $validacion = $this->validarFormula($request->formula);
             if (!$validacion['valida']) {

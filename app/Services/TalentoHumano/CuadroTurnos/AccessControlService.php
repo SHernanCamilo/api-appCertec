@@ -148,8 +148,15 @@ class AccessControlService
             return false;
         }
 
-        return $this->user->rolesCustom->whereIn('nombre', ['super_admin'])->isNotEmpty() ||
-               $this->user->rolesCustom->whereIn('id', [1])->isNotEmpty();
+        // Detección GENÉRICA por la naturaleza del rol (no por nombre/id):
+        // cualquier rol de tipo Administrador (es_admin = true) que sea Global
+        // (id_empresa = null) tiene acceso total, igual que Super Administrador.
+        // Así, roles admin globales nuevos se reconocen solos, sin tocar código.
+        $tieneAdminGlobal = $this->user->rolesCustom->contains(function ($rol) {
+            return (bool) ($rol->es_admin ?? false) && is_null($rol->id_empresa);
+        });
+
+        return $tieneAdminGlobal;
     }
 
     /**
