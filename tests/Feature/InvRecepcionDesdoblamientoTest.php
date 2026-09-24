@@ -148,4 +148,57 @@ class InvRecepcionDesdoblamientoTest extends TestCase
         $pd = InvPedidoDetalle::find($this->pedidoDetalleId);
         $this->assertEquals(50, (int) $pd->cantidad_recibida, 'El pedido_detalle debe acumular la suma de los fragmentos.');
     }
+
+    /**
+     * La temperatura de cadena de frío debe persistir con DECIMALES y valores
+     * NEGATIVOS (ej. -20°C congelados, 4.5°C refrigerados), tanto en el padre
+     * como en el fragmento. Cubre el caso reportado (45, -1, -45).
+     */
+    public function test_temperatura_negativa_y_decimal_se_guarda_en_padre_e_hijo(): void
+    {
+        /** @var InvRecepcionService $service */
+        $service = app(InvRecepcionService::class);
+
+        $baseItem = [
+            'pedido_detalle_id'   => $this->pedidoDetalleId,
+            'codigo_producto'     => 'PROD-TEST-1',
+            'producto_nombre'     => 'ETONOGESTREL 68MG IMPLANTE',
+            'cantidad_solicitada' => 50,
+            'numero_lote'         => 'LOTE-A',
+            'fecha_vencimiento'   => '2027-01-01',
+            'estado_invima'       => 'Vigente',
+            'concepto_recepcion'  => 'aceptado',
+            'recibido'            => 1,
+        ];
+
+        $payload = [
+            'compra_id' => $this->compraId,
+            'items'     => [
+                // Padre con temperatura negativa con decimal.
+                array_merge($baseItem, [
+                    'cum_recibido' => 'CUM-T1', 'numero_lote' => 'LOTE-A',
+                    'cantidad_recibida' => 30, 'es_desdoblamiento' => 0,
+                    'cadena_frio_temperatura' => -20.5,
+                ]),
+                // Fragmento con temperatura negativa entera.
+                array_merge($baseItem, [
+                    'cum_recibido' => 'CUM-T2', 'numero_lote' => 'LOTE-B',
+                    'cantidad_recibida' => 20, 'es_desdoblamiento' => 1,
+                    'cadena_frio_temperatura' => -45,
+                ]),
+            ],
+        ];
+
+        $result = $service->store($payload, $this->userId);
+        $this->assertTrue($result['success'], 'store() debe retornar success. Err: ' . ($result['error'] ?? ''));
+
+        $recepcionId = (int) $result['data']->id;
+        $detalles = InvRecepcionDetalle::where('recepcion_id', $recepcionId)
+            ->where('pedido_detalle_id', $this->pedidoDetalleId)
+            ->get();
+
+        $temps = $detalles->pluck('cadena_frio_temperatura')->map(fn ($t) => (float) $t)->sort()->values()->all();
+        // -45 y -20.5 deben quedar guardados tal cual (columna decimal(5,2)).
+        $this->assertSame([-45.0, -20.5], $temps, 'La temperatura negativa/decimal debe persistir en padre e hijo.');
+    }
 }
