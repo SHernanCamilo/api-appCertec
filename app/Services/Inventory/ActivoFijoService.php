@@ -1814,30 +1814,97 @@ class ActivoFijoService
      *
      * @return array{success: bool, data: list<array{valor: string}>}
      */
-    public function localizaciones(User $user, string $busqueda = '', int $limit = 300): array
+    public function localizaciones(User $user, string $busqueda = '', int $limit = 50): array
     {
         $busqueda = trim($busqueda);
-        $cacheKey = 'activo_fijo:localizaciones:' . md5($busqueda . ':' . $limit);
+        $limit    = max(1, min($limit, 200));
 
-        $cached = Cache::get($cacheKey);
+        // Búsqueda tipo servidor: cachea por (busqueda + limit) 10 min. Al abrir
+        // el select (sin búsqueda) trae los primeros N; al escribir, filtra en
+        // el parquet con ILIKE parcial. Rápido (~90 ms) y sin bajar toda la vista.
+        $cacheKey = 'activo_fijo:localizaciones:' . md5(mb_strtolower($busqueda) . ':' . $limit);
+        $cached   = Cache::get($cacheKey);
         if ($cached !== null) {
             return ['success' => true, 'data' => $cached];
         }
 
-        try {
-            $todas = $this->obtenerLocalizacionesFabric($user);
-        } catch (\Throwable $e) {
-            Log::warning('ActivoFijoService: fallo obteniendo localizaciones', [
-                'error' => $e->getMessage(),
-            ]);
-            $todas = [];
+        if (!$this->usuarioTieneAcceso($user)) {
+            return ['success' => true, 'data' => []]; // no bloqueante
         }
 
-        $data = collect($todas)
+        // Traer del parquet solo la columna Localizacion (filtrada si hay búsqueda).
+        $filtros = $busqueda !== '' ? ['Localizacion' => '%' . $busqueda . '%'] : [];
+
+        // Sobre-traer para poder deduplicar y aun así devolver hasta $limit únicos.
+        $traerHasta = min(self::PARQUET_PAGE, $limit * 20);
+
+        try {
+            $page = $this->parquet->filter(self::SCHEMA, self::VIEW, $filtros, $traerHasta, 0, [
+                'columns'  => ['Localizacion'],
+                'sort_col' => 'Localizacion',
+                'sort_dir' => 'asc',
+                'count'    => false,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('ActivoFijoService: fallo obteniendo localizaciones (parquet)', [
+                'error' => $e->getMessage(),
+            ]);
+            $page = ['success' => false];
+        }
+
+        // Fallback a la vista SQL si el parquet no está disponible.
+        if (!($page['success'] ?? false)) {
+            return $this->localizacionesFallbackSql($user, $busqueda, $limit, $cacheKey);
+        }
+
+        $data = collect($page['value'] ?? [])
+            ->map(fn ($fila) => trim((string) ($fila['Localizacion'] ?? $fila['Localización'] ?? '')))
+            ->filter(fn ($v) => $v !== '')
+            ->unique(fn ($v) => mb_strtolower($v))
+            ->values()
+            ->take($limit)
+            ->map(fn ($v) => ['valor' => $v])
+            ->all();
+
+        Cache::put($cacheKey, $data, 600);
+
+        return ['success' => true, 'data' => $data];
+    }
+
+    /**
+     * Respaldo de localizaciones desde la vista SQL cuando el parquet no está.
+     *
+     * @return array{success: bool, data: list<array{valor: string}>}
+     */
+    private function localizacionesFallbackSql(User $user, string $busqueda, int $limit, string $cacheKey): array
+    {
+        // Consulta acotada a la vista SQL: solo la columna Localizacion, filtrada
+        // por la búsqueda y con límite (sobre-traer para deduplicar). Evita bajar
+        // las 5000 filas completas del maestro.
+        $columna = $this->columnaLocalizacionVista($user);
+
+        try {
+            $resultado = $this->gateway->queryViewData($user, self::SCHEMA, self::VIEW, [
+                'columns'    => [$columna],
+                'filters'    => $busqueda !== '' ? [$columna => "%{$busqueda}%"] : [],
+                'limit'      => min(1000, $limit * 20),
+                'offset'     => 0,
+                'sort_col'   => $columna,
+                'sort_dir'   => 'asc',
+                'skip_count' => true,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('ActivoFijoService: fallo localizaciones fallback SQL', ['error' => $e->getMessage()]);
+            return ['success' => true, 'data' => []]; // no bloqueante
+        }
+
+        if (!($resultado['success'] ?? false)) {
+            return ['success' => true, 'data' => []]; // no bloqueante
+        }
+
+        $data = collect($resultado['data'] ?? [])
+            ->map(fn (array $fila) => $this->normalizar($fila)['localizacion'] ?? null)
             ->filter(fn ($valor) => is_string($valor) && trim($valor) !== '')
-            ->when($busqueda !== '', fn ($col) => $col->filter(
-                fn ($valor) => mb_stripos($valor, $busqueda) !== false
-            ))
             ->unique(fn ($valor) => mb_strtolower(trim($valor)))
             ->sort()
             ->values()
@@ -1848,6 +1915,19 @@ class ActivoFijoService
         Cache::put($cacheKey, $data, 600);
 
         return ['success' => true, 'data' => $data];
+    }
+
+    /** Resuelve el nombre real de la columna de localización en la vista. */
+    private function columnaLocalizacionVista(User $user): ?string
+    {
+        $reales = Cache::get('activo_fijo:columnas_vista');
+        foreach (['Localizacion', 'Localización', 'Ubicacion', 'Location'] as $cand) {
+            $clave = strtolower(str_replace(['_', ' ', '-'], '', $cand));
+            if (is_array($reales) && isset($reales[$clave])) {
+                return $reales[$clave];
+            }
+        }
+        return 'Localizacion';
     }
 
     /**
