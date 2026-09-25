@@ -1814,15 +1814,68 @@ class ActivoFijoService
      *
      * @return array{success: bool, data: list<array{valor: string}>}
      */
+    /**
+     * Ciudad de la vista (columna `Sucursal`) que corresponde a la sucursal del
+     * usuario, o null cuando el usuario debe ver TODAS las localizaciones
+     * (acceso nacional, sin sucursal asignada, o filtro desactivado por config).
+     *
+     * La derivación es parametrizable en config/inventory.php:
+     *   - overrides explícitos en `activos_fijos.sucursal_ciudad`
+     *   - nombres de acceso nacional en `activos_fijos.nacional`
+     * Por defecto se quita el prefijo "Sucursal " del nombre de la sucursal.
+     */
+    private function ciudadSucursalUsuario(User $user): ?string
+    {
+        if (!config('inventory.activos_fijos.filtrar_localizaciones_por_sucursal', true)) {
+            return null;
+        }
+
+        $nombre = trim((string) (optional($user->sucursal)->nombre ?? ''));
+        if ($nombre === '') {
+            // Sin sucursal asignada: no filtramos (ve todo). Evita "no traer nada".
+            return null;
+        }
+
+        $normalizar = static fn (string $v): string => mb_strtolower(trim(\Illuminate\Support\Str::ascii($v)));
+        $nombreNorm = $normalizar($nombre);
+
+        // Acceso nacional (parametrizable) → sin filtro.
+        $nacionales = array_map($normalizar, (array) config('inventory.activos_fijos.nacional', []));
+        if (in_array($nombreNorm, $nacionales, true)) {
+            return null;
+        }
+
+        // Override explícito nombre-sucursal => ciudad (parametrizable).
+        $overrides = (array) config('inventory.activos_fijos.sucursal_ciudad', []);
+        foreach ($overrides as $clave => $ciudad) {
+            if ($normalizar((string) $clave) === $nombreNorm) {
+                $ciudad = is_string($ciudad) ? trim($ciudad) : '';
+                return $ciudad !== '' ? $ciudad : null;
+            }
+        }
+
+        // Derivación por defecto: quitar prefijo "Sucursal ".
+        $ciudad = preg_replace('/^\s*sucursal\s+/i', '', $nombre) ?? $nombre;
+        $ciudad = trim($ciudad);
+
+        return $ciudad !== '' ? $ciudad : null;
+    }
+
     public function localizaciones(User $user, string $busqueda = '', int $limit = 50): array
     {
         $busqueda = trim($busqueda);
         $limit    = max(1, min($limit, 200));
 
-        // Búsqueda tipo servidor: cachea por (busqueda + limit) 10 min. Al abrir
-        // el select (sin búsqueda) trae los primeros N; al escribir, filtra en
-        // el parquet con ILIKE parcial. Rápido (~90 ms) y sin bajar toda la vista.
-        $cacheKey = 'activo_fijo:localizaciones:' . md5(mb_strtolower($busqueda) . ':' . $limit);
+        // Solo localizaciones de la sucursal del usuario (null = todas).
+        $ciudad = $this->ciudadSucursalUsuario($user);
+
+        // Búsqueda tipo servidor: cachea por (busqueda + limit + sucursal) 10 min.
+        // Al abrir el select (sin búsqueda) trae los primeros N; al escribir,
+        // filtra en el parquet con ILIKE parcial. Rápido (~90 ms) y sin bajar
+        // toda la vista.
+        $cacheKey = 'activo_fijo:localizaciones:' . md5(
+            mb_strtolower($busqueda) . ':' . $limit . ':' . ($ciudad ?? '*')
+        );
         $cached   = Cache::get($cacheKey);
         if ($cached !== null) {
             return ['success' => true, 'data' => $cached];
@@ -1832,8 +1885,15 @@ class ActivoFijoService
             return ['success' => true, 'data' => []]; // no bloqueante
         }
 
-        // Traer del parquet solo la columna Localizacion (filtrada si hay búsqueda).
-        $filtros = $busqueda !== '' ? ['Localizacion' => '%' . $busqueda . '%'] : [];
+        // Traer del parquet solo la columna Localizacion (filtrada si hay búsqueda),
+        // acotada a la sucursal del usuario cuando aplica.
+        $filtros = [];
+        if ($busqueda !== '') {
+            $filtros['Localizacion'] = '%' . $busqueda . '%';
+        }
+        if ($ciudad !== null) {
+            $filtros['Sucursal'] = $ciudad;
+        }
 
         // Sobre-traer para poder deduplicar y aun así devolver hasta $limit únicos.
         $traerHasta = min(self::PARQUET_PAGE, $limit * 20);
@@ -1854,7 +1914,7 @@ class ActivoFijoService
 
         // Fallback a la vista SQL si el parquet no está disponible.
         if (!($page['success'] ?? false)) {
-            return $this->localizacionesFallbackSql($user, $busqueda, $limit, $cacheKey);
+            return $this->localizacionesFallbackSql($user, $busqueda, $limit, $cacheKey, $ciudad);
         }
 
         $data = collect($page['value'] ?? [])
@@ -1876,17 +1936,25 @@ class ActivoFijoService
      *
      * @return array{success: bool, data: list<array{valor: string}>}
      */
-    private function localizacionesFallbackSql(User $user, string $busqueda, int $limit, string $cacheKey): array
+    private function localizacionesFallbackSql(User $user, string $busqueda, int $limit, string $cacheKey, ?string $ciudad = null): array
     {
         // Consulta acotada a la vista SQL: solo la columna Localizacion, filtrada
         // por la búsqueda y con límite (sobre-traer para deduplicar). Evita bajar
         // las 5000 filas completas del maestro.
         $columna = $this->columnaLocalizacionVista($user);
 
+        $filtros = [];
+        if ($busqueda !== '') {
+            $filtros[$columna] = "%{$busqueda}%";
+        }
+        if ($ciudad !== null) {
+            $filtros['Sucursal'] = $ciudad;
+        }
+
         try {
             $resultado = $this->gateway->queryViewData($user, self::SCHEMA, self::VIEW, [
                 'columns'    => [$columna],
-                'filters'    => $busqueda !== '' ? [$columna => "%{$busqueda}%"] : [],
+                'filters'    => $filtros,
                 'limit'      => min(1000, $limit * 20),
                 'offset'     => 0,
                 'sort_col'   => $columna,
