@@ -1848,8 +1848,6 @@ class ActivoFijoService
      */
     private function ciudadesSucursalUsuario(User $user): ?array
     {
-        $normalizar = static fn (string $v): string => mb_strtolower(trim(\Illuminate\Support\Str::ascii($v)));
-
         try {
             $user->loadMissing('empresas');
         } catch (\Throwable $e) {
@@ -1859,6 +1857,13 @@ class ActivoFijoService
             ]);
             return null; // ante la duda, no filtramos (no bloqueante)
         }
+
+        // Valores REALES de la columna `Sucursal` de la vista, indexados por su
+        // forma normalizada. Casar contra estos (y devolver el valor EXACTO de
+        // la vista) evita que diferencias de escritura entre config y la vista
+        // (tildes, mayúsculas, espacios) dejen al usuario sin localidades.
+        // Ej: usuario "Sucursal Bogotá" (con tilde) debe casar con "Bogota".
+        $sucursalesVista = $this->sucursalesVista($user); // [norm => valorExactoVista]
 
         $ciudades = [];
 
@@ -1886,12 +1891,20 @@ class ActivoFijoService
                 continue;
             }
 
+            $ciudadNorm = $this->normalizarSucursal($ciudad);
+
             // Sucursal nacional → ve todo.
-            if (in_array($normalizar($ciudad), self::SUCURSALES_VEN_TODO, true)) {
+            if (in_array($ciudadNorm, self::SUCURSALES_VEN_TODO, true)) {
                 return null;
             }
 
-            $ciudades[$normalizar($ciudad)] = $ciudad; // dedup por clave normalizada
+            // Casar contra el valor real de la vista (comparación normalizada).
+            // Si existe, se filtra con el texto EXACTO de la vista; si no existe
+            // ninguna coincidencia, se conserva la ciudad tal cual (por si el
+            // parquet aún no cargó la lista de sucursales).
+            $valorFiltro = $sucursalesVista[$ciudadNorm] ?? $ciudad;
+
+            $ciudades[$this->normalizarSucursal($valorFiltro)] = $valorFiltro;
         }
 
         // Sin sucursales concretas asignadas → no filtramos (ve todo).
@@ -1900,6 +1913,100 @@ class ActivoFijoService
         }
 
         return array_values($ciudades);
+    }
+
+    /**
+     * Normaliza un nombre de sucursal/ciudad para comparaciones robustas:
+     * sin tildes, en minúsculas y con espacios colapsados. Así "Bogotá",
+     * "Bogota" y "  BOGOTA " se consideran la misma sucursal.
+     */
+    private function normalizarSucursal(string $valor): string
+    {
+        $ascii = \Illuminate\Support\Str::ascii($valor);
+        $ascii = preg_replace('/\s+/', ' ', trim($ascii)) ?? $ascii;
+
+        return mb_strtolower($ascii);
+    }
+
+    /**
+     * Valores DISTINTOS reales de la columna `Sucursal` en la vista, indexados
+     * por su forma normalizada → valor exacto tal como aparece en la vista.
+     *
+     * Ej: ['neiva' => 'Neiva', 'bogota' => 'Bogota', 'facatativa' => 'Facatativa', ...]
+     *
+     * Cacheado 30 min: la lista de sucursales de la vista cambia muy poco.
+     *
+     * @return array<string, string>
+     */
+    private function sucursalesVista(User $user): array
+    {
+        $cache = Cache::get('activo_fijo:sucursales_vista');
+        if (is_array($cache)) {
+            return $cache;
+        }
+
+        // Traer solo la columna Sucursal y quedarnos con los valores distintos.
+        // Preferimos el parquet (rápido); si no está, caemos a la vista SQL.
+        $valores = [];
+
+        $filas = $this->traerTodoParquetFilter([], ['Sucursal']);
+        if ($filas === null) {
+            // Fallback SQL paginado: la vista está ordenada, así que las filas de
+            // una misma sucursal van agrupadas. Una sola página sesga hacia la
+            // primera sucursal; paginamos varias páginas para cubrir todas las
+            // sucursales distintas (son ~10). Ordenamos por Sucursal para
+            // recorrerlas de forma predecible.
+            $filas   = [];
+            $offset  = 0;
+            $pagina  = self::PARQUET_PAGE; // 10k por página
+            for ($i = 0; $i < 10; $i++) { // hasta 100k filas (cubre la vista completa)
+                try {
+                    $r = $this->gateway->queryViewData($user, self::SCHEMA, self::VIEW, [
+                        'columns'    => ['Sucursal'],
+                        'filters'    => [],
+                        'limit'      => $pagina,
+                        'offset'     => $offset,
+                        'sort_col'   => 'Sucursal',
+                        'sort_dir'   => 'asc',
+                        'skip_count' => true,
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::warning('ActivoFijoService: fallo obteniendo sucursales de la vista', [
+                        'error' => $e->getMessage(),
+                    ]);
+                    break;
+                }
+
+                if (!($r['success'] ?? false)) {
+                    break;
+                }
+
+                $lote = $r['data'] ?? [];
+                foreach ($lote as $fila) {
+                    $filas[] = $fila;
+                }
+
+                if (count($lote) < $pagina) {
+                    break; // última página
+                }
+                $offset += $pagina;
+            }
+        }
+
+        foreach ($filas as $fila) {
+            $s = trim((string) ($fila['Sucursal'] ?? $fila['sucursal'] ?? ''));
+            if ($s === '') {
+                continue;
+            }
+            $valores[$this->normalizarSucursal($s)] = $s; // norm => valor exacto
+        }
+
+        // Solo cachear si obtuvimos algo (evita cachear vacío por un 409 transitorio).
+        if ($valores !== []) {
+            Cache::put('activo_fijo:sucursales_vista', $valores, 1800);
+        }
+
+        return $valores;
     }
 
     /**
