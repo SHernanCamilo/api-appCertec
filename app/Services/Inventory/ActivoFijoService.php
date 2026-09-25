@@ -1815,21 +1815,36 @@ class ActivoFijoService
      * @return array{success: bool, data: list<array{valor: string}>}
      */
     /**
-     * Ciudad de la vista (columna `Sucursal`) que corresponde a la sucursal del
-     * usuario, o null cuando el usuario debe ver TODAS las localizaciones
-     * (acceso nacional, sin sucursal asignada, o filtro desactivado por config).
+     * Sucursales que ven TODAS las localizaciones (sin filtrar por ciudad).
      *
-     * La derivación es parametrizable en config/inventory.php:
-     *   - overrides explícitos en `activos_fijos.sucursal_ciudad`
-     *   - nombres de acceso nacional en `activos_fijos.nacional`
-     * Por defecto se quita el prefijo "Sucursal " del nombre de la sucursal.
+     * Parametrizable aquí mismo (sin tocar config compartido de Inventory).
+     * La comparación se hace normalizada: sin tildes, en minúsculas y sin el
+     * prefijo "Sucursal " (así "Sucursal Neiva" coincide con "neiva").
+     *
+     * @var list<string>
+     */
+    private const SUCURSALES_VEN_TODO = [
+        'nacional',   // Sucursal Nacional (acceso nacional)
+        'neiva',      // Sucursal Neiva
+        'florencia',  // Sucursal Florencia
+        'facatativa', // Sucursal Facatativa
+        'tunja',      // Sucursal Tunja
+    ];
+
+    /**
+     * Ciudad de la vista (columna `Sucursal`) que corresponde a la sucursal del
+     * usuario, o null cuando el usuario debe ver TODAS las localizaciones.
+     *
+     * Devuelve null (ve todo) cuando:
+     *   - el usuario no tiene sucursal asignada
+     *   - su sucursal está en SUCURSALES_VEN_TODO (nacional, Neiva, Florencia,
+     *     Facatativa, Tunja)
+     *
+     * En cualquier otro caso deriva la ciudad quitando el prefijo "Sucursal "
+     * del nombre de la sucursal para filtrar la columna `Sucursal` de la vista.
      */
     private function ciudadSucursalUsuario(User $user): ?string
     {
-        if (!config('inventory.activos_fijos.filtrar_localizaciones_por_sucursal', true)) {
-            return null;
-        }
-
         $nombre = trim((string) (optional($user->sucursal)->nombre ?? ''));
         if ($nombre === '') {
             // Sin sucursal asignada: no filtramos (ve todo). Evita "no traer nada".
@@ -1837,28 +1852,19 @@ class ActivoFijoService
         }
 
         $normalizar = static fn (string $v): string => mb_strtolower(trim(\Illuminate\Support\Str::ascii($v)));
-        $nombreNorm = $normalizar($nombre);
 
-        // Acceso nacional (parametrizable) → sin filtro.
-        $nacionales = array_map($normalizar, (array) config('inventory.activos_fijos.nacional', []));
-        if (in_array($nombreNorm, $nacionales, true)) {
+        // Ciudad derivada: quitar prefijo "Sucursal " del nombre.
+        $ciudad = trim((string) (preg_replace('/^\s*sucursal\s+/i', '', $nombre) ?? $nombre));
+        if ($ciudad === '') {
             return null;
         }
 
-        // Override explícito nombre-sucursal => ciudad (parametrizable).
-        $overrides = (array) config('inventory.activos_fijos.sucursal_ciudad', []);
-        foreach ($overrides as $clave => $ciudad) {
-            if ($normalizar((string) $clave) === $nombreNorm) {
-                $ciudad = is_string($ciudad) ? trim($ciudad) : '';
-                return $ciudad !== '' ? $ciudad : null;
-            }
+        // Sucursales que ven todo (nacional + principales) → sin filtro.
+        if (in_array($normalizar($ciudad), self::SUCURSALES_VEN_TODO, true)) {
+            return null;
         }
 
-        // Derivación por defecto: quitar prefijo "Sucursal ".
-        $ciudad = preg_replace('/^\s*sucursal\s+/i', '', $nombre) ?? $nombre;
-        $ciudad = trim($ciudad);
-
-        return $ciudad !== '' ? $ciudad : null;
+        return $ciudad;
     }
 
     public function localizaciones(User $user, string $busqueda = '', int $limit = 50): array
