@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Inventory;
 
 use App\Models\Inventory\InvTrazActivo;
+use App\Models\Sucursal;
 use App\Models\TipoInventario;
 use App\Models\TrazabilidadActivo;
 use App\Models\User;
@@ -1815,56 +1816,137 @@ class ActivoFijoService
      * @return array{success: bool, data: list<array{valor: string}>}
      */
     /**
-     * Sucursales que ven TODAS las localizaciones (sin filtrar por ciudad).
+     * Sucursales con acceso "nacional" que ven TODAS las localizaciones.
      *
-     * Parametrizable aquí mismo (sin tocar config compartido de Inventory).
-     * La comparación se hace normalizada: sin tildes, en minúsculas y sin el
-     * prefijo "Sucursal " (así "Sucursal Neiva" coincide con "neiva").
+     * Comparación normalizada (sin tildes, minúsculas, sin el prefijo
+     * "Sucursal "). Solo estas sucursales explícitas ven todo; el resto se
+     * filtra a su(s) propia(s) ciudad(es).
      *
      * @var list<string>
      */
     private const SUCURSALES_VEN_TODO = [
-        'nacional',   // Sucursal Nacional (acceso nacional)
-        'neiva',      // Sucursal Neiva
-        'florencia',  // Sucursal Florencia
-        'facatativa', // Sucursal Facatativa
-        'tunja',      // Sucursal Tunja
+        'nacional', // Sucursal Nacional
     ];
 
     /**
-     * Ciudad de la vista (columna `Sucursal`) que corresponde a la sucursal del
-     * usuario, o null cuando el usuario debe ver TODAS las localizaciones.
+     * Ciudades (columna `Sucursal` de la vista) que corresponden a la(s)
+     * sucursal(es) asignada(s) al usuario. Devuelve:
+     *   - null  → el usuario ve TODAS las localizaciones (acceso nacional o
+     *             empresa recursiva sin sucursal concreta).
+     *   - lista → filtra la vista a esas ciudades (una o varias).
      *
-     * Devuelve null (ve todo) cuando:
-     *   - el usuario no tiene sucursal asignada
-     *   - su sucursal está en SUCURSALES_VEN_TODO (nacional, Neiva, Florencia,
-     *     Facatativa, Tunja)
+     * La fuente de verdad NO es `users.id_sucursal` (columna legacy que suele
+     * venir vacía) sino la tabla pivote `seg_empresa_user` a través de
+     * `$user->empresas` (pivot->id_sucursal / recursivo). Un usuario puede
+     * tener varias sucursales (ej. Tunja + Duitama).
      *
-     * En cualquier otro caso deriva la ciudad quitando el prefijo "Sucursal "
-     * del nombre de la sucursal para filtrar la columna `Sucursal` de la vista.
+     * De cada sucursal se deriva la ciudad quitando el prefijo "Sucursal "
+     * del nombre (config_ubi_sucursales.nombre), que coincide con los valores
+     * de la columna `Sucursal` de la vista ("Tunja", "Duitama", "Neiva"...).
+     *
+     * @return list<string>|null
      */
-    private function ciudadSucursalUsuario(User $user): ?string
+    private function ciudadesSucursalUsuario(User $user): ?array
     {
-        $nombre = trim((string) (optional($user->sucursal)->nombre ?? ''));
-        if ($nombre === '') {
-            // Sin sucursal asignada: no filtramos (ve todo). Evita "no traer nada".
-            return null;
-        }
-
         $normalizar = static fn (string $v): string => mb_strtolower(trim(\Illuminate\Support\Str::ascii($v)));
 
-        // Ciudad derivada: quitar prefijo "Sucursal " del nombre.
-        $ciudad = trim((string) (preg_replace('/^\s*sucursal\s+/i', '', $nombre) ?? $nombre));
-        if ($ciudad === '') {
+        try {
+            $user->loadMissing('empresas');
+        } catch (\Throwable $e) {
+            Log::warning('ActivoFijoService: no se pudieron cargar empresas del usuario', [
+                'user_id' => $user->id ?? null,
+                'error'   => $e->getMessage(),
+            ]);
+            return null; // ante la duda, no filtramos (no bloqueante)
+        }
+
+        $ciudades = [];
+
+        foreach ($user->empresas as $empresa) {
+            $pivot      = $empresa->pivot ?? null;
+            $sucursalId = $pivot->id_sucursal ?? null;
+            $recursivo  = (bool) ($pivot->recursivo ?? false);
+
+            // Empresa recursiva sin sucursal concreta → acceso a todo.
+            if ($sucursalId === null) {
+                if ($recursivo) {
+                    return null; // ve todo
+                }
+                continue;
+            }
+
+            $nombre = trim((string) (optional(Sucursal::find($sucursalId))->nombre ?? ''));
+            if ($nombre === '') {
+                continue;
+            }
+
+            // Ciudad = nombre sin el prefijo "Sucursal ".
+            $ciudad = trim((string) (preg_replace('/^\s*sucursal\s+/i', '', $nombre) ?? $nombre));
+            if ($ciudad === '') {
+                continue;
+            }
+
+            // Sucursal nacional → ve todo.
+            if (in_array($normalizar($ciudad), self::SUCURSALES_VEN_TODO, true)) {
+                return null;
+            }
+
+            $ciudades[$normalizar($ciudad)] = $ciudad; // dedup por clave normalizada
+        }
+
+        // Sin sucursales concretas asignadas → no filtramos (ve todo).
+        if ($ciudades === []) {
             return null;
         }
 
-        // Sucursales que ven todo (nacional + principales) → sin filtro.
-        if (in_array($normalizar($ciudad), self::SUCURSALES_VEN_TODO, true)) {
-            return null;
+        return array_values($ciudades);
+    }
+
+    /**
+     * Ejecuta la búsqueda de localizaciones en el parquet para UN conjunto de
+     * filtros base (búsqueda) repartida por ciudad, combinando resultados.
+     * Cuando $ciudades es null, hace una sola consulta sin filtro de sucursal.
+     *
+     * @param  array<string, mixed> $filtrosBase
+     * @param  list<string>|null    $ciudades
+     * @return array{ok: bool, valores: list<string>}
+     */
+    private function localizacionesParquetPorCiudades(array $filtrosBase, ?array $ciudades, int $limit): array
+    {
+        $traerHasta = min(self::PARQUET_PAGE, max(1, $limit) * 20);
+        $consultas  = $ciudades === null
+            ? [$filtrosBase]
+            : array_map(fn (string $c) => $filtrosBase + ['Sucursal' => $c], $ciudades);
+
+        $valores = [];
+        foreach ($consultas as $filtros) {
+            try {
+                $page = $this->parquet->filter(self::SCHEMA, self::VIEW, $filtros, $traerHasta, 0, [
+                    'columns'  => ['Localizacion'],
+                    'sort_col' => 'Localizacion',
+                    'sort_dir' => 'asc',
+                    'count'    => false,
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning('ActivoFijoService: fallo obteniendo localizaciones (parquet)', [
+                    'error' => $e->getMessage(),
+                ]);
+                return ['ok' => false, 'valores' => []];
+            }
+
+            if (!($page['success'] ?? false)) {
+                return ['ok' => false, 'valores' => []]; // → fallback SQL
+            }
+
+            foreach ($page['value'] ?? [] as $fila) {
+                $v = trim((string) ($fila['Localizacion'] ?? $fila['Localización'] ?? ''));
+                if ($v !== '') {
+                    $valores[] = $v;
+                }
+            }
         }
 
-        return $ciudad;
+        return ['ok' => true, 'valores' => $valores];
     }
 
     public function localizaciones(User $user, string $busqueda = '', int $limit = 50): array
@@ -1872,15 +1954,15 @@ class ActivoFijoService
         $busqueda = trim($busqueda);
         $limit    = max(1, min($limit, 200));
 
-        // Solo localizaciones de la sucursal del usuario (null = todas).
-        $ciudad = $this->ciudadSucursalUsuario($user);
+        // Ciudades de la(s) sucursal(es) del usuario (null = ve todas).
+        $ciudades = $this->ciudadesSucursalUsuario($user);
 
-        // Búsqueda tipo servidor: cachea por (busqueda + limit + sucursal) 10 min.
+        // Búsqueda tipo servidor: cachea por (busqueda + limit + sucursales) 10 min.
         // Al abrir el select (sin búsqueda) trae los primeros N; al escribir,
-        // filtra en el parquet con ILIKE parcial. Rápido (~90 ms) y sin bajar
-        // toda la vista.
+        // filtra en el parquet con ILIKE parcial. Rápido y sin bajar toda la vista.
+        $claveCiudades = $ciudades === null ? '*' : implode('|', $ciudades);
         $cacheKey = 'activo_fijo:localizaciones:' . md5(
-            mb_strtolower($busqueda) . ':' . $limit . ':' . ($ciudad ?? '*')
+            mb_strtolower($busqueda) . ':' . $limit . ':' . $claveCiudades
         );
         $cached   = Cache::get($cacheKey);
         if ($cached !== null) {
@@ -1891,42 +1973,24 @@ class ActivoFijoService
             return ['success' => true, 'data' => []]; // no bloqueante
         }
 
-        // Traer del parquet solo la columna Localizacion (filtrada si hay búsqueda),
-        // acotada a la sucursal del usuario cuando aplica.
-        $filtros = [];
+        // Filtro base de búsqueda (la sucursal se aplica por ciudad más abajo).
+        $filtrosBase = [];
         if ($busqueda !== '') {
-            $filtros['Localizacion'] = '%' . $busqueda . '%';
-        }
-        if ($ciudad !== null) {
-            $filtros['Sucursal'] = $ciudad;
+            $filtrosBase['Localizacion'] = '%' . $busqueda . '%';
         }
 
-        // Sobre-traer para poder deduplicar y aun así devolver hasta $limit únicos.
-        $traerHasta = min(self::PARQUET_PAGE, $limit * 20);
-
-        try {
-            $page = $this->parquet->filter(self::SCHEMA, self::VIEW, $filtros, $traerHasta, 0, [
-                'columns'  => ['Localizacion'],
-                'sort_col' => 'Localizacion',
-                'sort_dir' => 'asc',
-                'count'    => false,
-            ]);
-        } catch (\Throwable $e) {
-            Log::warning('ActivoFijoService: fallo obteniendo localizaciones (parquet)', [
-                'error' => $e->getMessage(),
-            ]);
-            $page = ['success' => false];
-        }
+        // Camino parquet: una consulta por ciudad (o una sola si ve todo).
+        $res = $this->localizacionesParquetPorCiudades($filtrosBase, $ciudades, $limit);
 
         // Fallback a la vista SQL si el parquet no está disponible.
-        if (!($page['success'] ?? false)) {
-            return $this->localizacionesFallbackSql($user, $busqueda, $limit, $cacheKey, $ciudad);
+        if (!$res['ok']) {
+            return $this->localizacionesFallbackSql($user, $busqueda, $limit, $cacheKey, $ciudades);
         }
 
-        $data = collect($page['value'] ?? [])
-            ->map(fn ($fila) => trim((string) ($fila['Localizacion'] ?? $fila['Localización'] ?? '')))
+        $data = collect($res['valores'])
             ->filter(fn ($v) => $v !== '')
             ->unique(fn ($v) => mb_strtolower($v))
+            ->sort()
             ->values()
             ->take($limit)
             ->map(fn ($v) => ['valor' => $v])
@@ -1942,43 +2006,49 @@ class ActivoFijoService
      *
      * @return array{success: bool, data: list<array{valor: string}>}
      */
-    private function localizacionesFallbackSql(User $user, string $busqueda, int $limit, string $cacheKey, ?string $ciudad = null): array
+    private function localizacionesFallbackSql(User $user, string $busqueda, int $limit, string $cacheKey, ?array $ciudades = null): array
     {
         // Consulta acotada a la vista SQL: solo la columna Localizacion, filtrada
         // por la búsqueda y con límite (sobre-traer para deduplicar). Evita bajar
-        // las 5000 filas completas del maestro.
+        // las 5000 filas completas del maestro. Una consulta por ciudad del
+        // usuario (o una sola sin filtro cuando ve todo).
         $columna = $this->columnaLocalizacionVista($user);
 
-        $filtros = [];
-        if ($busqueda !== '') {
-            $filtros[$columna] = "%{$busqueda}%";
-        }
-        if ($ciudad !== null) {
-            $filtros['Sucursal'] = $ciudad;
+        $filtroBusqueda = $busqueda !== '' ? [$columna => "%{$busqueda}%"] : [];
+        $consultas      = $ciudades === null
+            ? [$filtroBusqueda]
+            : array_map(fn (string $c) => $filtroBusqueda + ['Sucursal' => $c], $ciudades);
+
+        $valores = [];
+        foreach ($consultas as $filtros) {
+            try {
+                $resultado = $this->gateway->queryViewData($user, self::SCHEMA, self::VIEW, [
+                    'columns'    => [$columna],
+                    'filters'    => $filtros,
+                    'limit'      => min(1000, $limit * 20),
+                    'offset'     => 0,
+                    'sort_col'   => $columna,
+                    'sort_dir'   => 'asc',
+                    'skip_count' => true,
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning('ActivoFijoService: fallo localizaciones fallback SQL', ['error' => $e->getMessage()]);
+                return ['success' => true, 'data' => []]; // no bloqueante
+            }
+
+            if (!($resultado['success'] ?? false)) {
+                return ['success' => true, 'data' => []]; // no bloqueante
+            }
+
+            foreach ($resultado['data'] ?? [] as $fila) {
+                $loc = $this->normalizar($fila)['localizacion'] ?? null;
+                if (is_string($loc) && trim($loc) !== '') {
+                    $valores[] = $loc;
+                }
+            }
         }
 
-        try {
-            $resultado = $this->gateway->queryViewData($user, self::SCHEMA, self::VIEW, [
-                'columns'    => [$columna],
-                'filters'    => $filtros,
-                'limit'      => min(1000, $limit * 20),
-                'offset'     => 0,
-                'sort_col'   => $columna,
-                'sort_dir'   => 'asc',
-                'skip_count' => true,
-            ]);
-        } catch (\Throwable $e) {
-            Log::warning('ActivoFijoService: fallo localizaciones fallback SQL', ['error' => $e->getMessage()]);
-            return ['success' => true, 'data' => []]; // no bloqueante
-        }
-
-        if (!($resultado['success'] ?? false)) {
-            return ['success' => true, 'data' => []]; // no bloqueante
-        }
-
-        $data = collect($resultado['data'] ?? [])
-            ->map(fn (array $fila) => $this->normalizar($fila)['localizacion'] ?? null)
-            ->filter(fn ($valor) => is_string($valor) && trim($valor) !== '')
+        $data = collect($valores)
             ->unique(fn ($valor) => mb_strtolower(trim($valor)))
             ->sort()
             ->values()
