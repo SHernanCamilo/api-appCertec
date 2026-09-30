@@ -696,6 +696,11 @@ class MatrizObsActivoController extends Controller
      */
     public function aplicarCompraComparador(Request $request, MatrizObsComparadorService $comparador): JsonResponse
     {
+        Log::info('Comparador: inicio copiar fecha/modalidad/MaxRam', [
+            'items' => count($request->input('items', [])),
+            'user_id' => Auth::id(),
+        ]);
+
         $request->validate([
             'items' => 'required|array|min:1|max:5000',
             'items.*.id_activo' => 'required|integer',

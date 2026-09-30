@@ -34,6 +34,8 @@ Route::middleware(['auth:api'])->group(function () {
     // =========================================================================
     Route::prefix('traslado-asistencial')->group(function () {
         Route::get('/', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'index']);
+        Route::get('/paciente', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'buscarPaciente']);
+        Route::get('/profesional', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'buscarProfesional']);
         Route::post('/', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'store']);
         Route::get('/{id}', [\App\Http\Controllers\Fabric\BiTrasladoAsistencialController::class, 'show'])
             ->whereNumber('id');

@@ -37,6 +37,9 @@ class BiFormParametrosController extends Controller
             'campos.*.visible' => ['required', 'boolean'],
             'campos.*.requerido' => ['required', 'boolean'],
             'campos.*.label' => ['required', 'string', 'max:255'],
+            'campos.*.opciones' => ['nullable', 'array'],
+            'campos.*.opciones.*.codigo' => ['nullable', 'string', 'max:80'],
+            'campos.*.opciones.*.descripcion' => ['nullable', 'string', 'max:255'],
         ]);
 
         $row = BiFormParametro::updateOrCreate(

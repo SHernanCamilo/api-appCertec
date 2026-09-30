@@ -4,6 +4,7 @@ namespace App\Exceptions;
 
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
 use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Throwable;
 
 class Handler extends ExceptionHandler
@@ -39,6 +40,18 @@ class Handler extends ExceptionHandler
             } catch (\Throwable $logError) {
                 // No se pudo escribir el log (permisos u otro). Se descarta para
                 // no enmascarar el error original con un fallo de logging.
+            }
+        });
+
+        $this->renderable(function (NotFoundHttpException $e, $request) {
+            $ruta = $request->path();
+            if (str_contains($ruta, 'matriz-obs-activos') || str_contains($ruta, 'comparador')) {
+                Log::warning('Ruta del comparador no encontrada', [
+                    'method' => $request->method(),
+                    'path' => $ruta,
+                    'url' => $request->fullUrl(),
+                    'message' => $e->getMessage(),
+                ]);
             }
         });
     }
