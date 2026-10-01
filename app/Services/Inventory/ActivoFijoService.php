@@ -1111,9 +1111,15 @@ class ActivoFijoService
     }
 
     /**
-     * Valor "Novedad" de un campo para el reporte. Contempla que los activos
-     * externos (no existen en Indigo) guardan placa/artículo/serie en las
-     * columnas base (placa, articulo_nombre, serie), no en los campos novedad_*.
+     * Valor "Novedad" de un campo para el reporte.
+     *
+     * Regla: la columna Novedad SOLO muestra valor cuando el inventariador
+     * reportó una novedad en ese campo (novedad_*). Si no reportó nada, queda
+     * vacía (no se repite el dato de Indigo), igual que el resto de campos.
+     *
+     * Excepción: los activos EXTERNOS no existen en Indigo y guardan
+     * placa/artículo/serie en las columnas base (placa, articulo_nombre,
+     * serie), no en novedad_*; para ellos sí usamos ese respaldo.
      */
     private function valorNovedadCampo(TrazabilidadActivo $t, string $campoNovedad): ?string
     {
@@ -1122,7 +1128,11 @@ class ActivoFijoService
             return (string) $novedad;
         }
 
-        // Respaldo desde columnas base (clave para activos externos).
+        // Solo los activos externos usan las columnas base como respaldo.
+        if (!(bool) $t->es_externo) {
+            return null;
+        }
+
         return match ($campoNovedad) {
             'novedad_placa'    => $t->placa,
             'novedad_articulo' => $t->articulo_nombre,
