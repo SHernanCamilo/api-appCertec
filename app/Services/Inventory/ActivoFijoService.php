@@ -1324,14 +1324,38 @@ class ActivoFijoService
             ->selectRaw('COUNT(*) as tomas')
             ->groupBy('placa');
 
-        if (!empty($filtros['tipo_inventario_id'])) {
-            $query->where('tipo_inventario_id', (int) $filtros['tipo_inventario_id']);
+        $tipoInventarioId = !empty($filtros['tipo_inventario_id']) ? (int) $filtros['tipo_inventario_id'] : null;
+        if ($tipoInventarioId !== null) {
+            $query->where('tipo_inventario_id', $tipoInventarioId);
         }
-        if (!empty($filtros['desde'])) {
-            $query->whereDate('created_at', '>=', $filtros['desde']);
+
+        // Rango de fechas a considerar como "inventariado":
+        //  - Si el usuario da desde/hasta, se usan esas fechas.
+        //  - Si NO da fechas pero sí un tipo de inventario con periodicidad
+        //    (ej. "Inventario Aleatorio" = mensual), se acota al PERÍODO VIGENTE
+        //    de ese tipo (p. ej. el mes actual). Así una toma de otro mes no
+        //    cuenta como inventariada en el período que corresponde al tipo.
+        $desde = $filtros['desde'] ?? null;
+        $hasta = $filtros['hasta'] ?? null;
+
+        if (empty($desde) && empty($hasta) && $tipoInventarioId !== null) {
+            $tipo = TipoInventario::find($tipoInventarioId);
+            if ($tipo && ($tipo->periodicidad ?? 'ninguna') !== 'ninguna') {
+                [$rangoDesde, $rangoHasta] = $tipo->calcularRangoPeriodicidad(now());
+                $desde = $rangoDesde;
+                $hasta = $rangoHasta;
+            }
         }
-        if (!empty($filtros['hasta'])) {
-            $query->whereDate('created_at', '<=', $filtros['hasta']);
+
+        if (!empty($desde)) {
+            $query->where('created_at', '>=', $desde instanceof \Carbon\CarbonInterface
+                ? $desde
+                : \Carbon\Carbon::parse($desde)->startOfDay());
+        }
+        if (!empty($hasta)) {
+            $query->where('created_at', '<=', $hasta instanceof \Carbon\CarbonInterface
+                ? $hasta
+                : \Carbon\Carbon::parse($hasta)->endOfDay());
         }
 
         $inventariadas = $query->get()->keyBy(fn ($r) => (string) $r->placa);
