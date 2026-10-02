@@ -178,8 +178,12 @@ class MicrosoftAuthController extends Controller
             $origin = $request->header('Origin') ?? $request->header('Referer') ?? '';
             $redirectUri = config('services.microsoft.redirect'); // Default: producción
 
-            // Si el request viene del tunnel de Cloudflare, usar su callback
-            if (str_contains($origin, 'trycloudflare.com')) {
+            // App móvil (Flutter): usa un deep link propio como redirect URI.
+            // Se identifica con el header X-Client-Platform: mobile.
+            if (strtolower((string) $request->header('X-Client-Platform')) === 'mobile') {
+                $redirectUri = config('services.microsoft.mobile_redirect', 'jadeonemovil://auth');
+            } elseif (str_contains($origin, 'trycloudflare.com')) {
+                // Si el request viene del tunnel de Cloudflare, usar su callback
                 $tunnelHost = parse_url($origin, PHP_URL_HOST);
                 $redirectUri = "https://{$tunnelHost}/auth/microsoft/callback";
             } elseif (str_contains($origin, 'localhost:4200')) {
@@ -445,7 +449,10 @@ class MicrosoftAuthController extends Controller
             $origin = $request->header('Origin') ?? $request->header('Referer') ?? '';
             $driver = $this->microsoftDriver();
 
-            if (str_contains($origin, 'trycloudflare.com')) {
+            // App móvil (Flutter): mismo deep link usado al generar la auth_url.
+            if (strtolower((string) $request->header('X-Client-Platform')) === 'mobile') {
+                $driver = $driver->redirectUrl(config('services.microsoft.mobile_redirect', 'jadeonemovil://auth'));
+            } elseif (str_contains($origin, 'trycloudflare.com')) {
                 $tunnelHost = parse_url($origin, PHP_URL_HOST);
                 $driver = $driver->redirectUrl("https://{$tunnelHost}/auth/microsoft/callback");
             } elseif (str_contains($origin, 'localhost:4200')) {

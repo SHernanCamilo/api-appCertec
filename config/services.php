@@ -35,6 +35,7 @@ return [
         'client_id' => env('MICROSOFT_CLIENT_ID'),
         'client_secret' => env('MICROSOFT_CLIENT_SECRET'),
         'redirect' => env('MICROSOFT_REDIRECT_URI'),
+        'mobile_redirect' => env('MICROSOFT_MOBILE_REDIRECT_URI', 'jadeonemovil://auth'), // App móvil (Flutter) — deep link
         'tenant' => env('MICROSOFT_TENANT_ID', 'common'), // 'common' para multi-tenant
         'medilaser_tenant_id' => env('MICROSOFT_MEDILASER_TENANT_ID'),
         'jersalud_client_id' => env('MICROSOFT_JERSALUD_CLIENT_ID'),
