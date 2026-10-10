@@ -182,11 +182,21 @@ class BiParquetConfigController extends Controller
             }
 
             $data = $response->json();
+            $views = $data['views'] ?? [];
+
+            // La hora real de generación vive en el schedule (disco local), no en R2.
+            // /api/r2/status solo ve archivos de R2; si R2 no responde, la fila queda
+            // "missing" y sin edad aunque el parquet ya exista en parquet_cache.
+            $schedule = Http::timeout(15)->get("{$baseUrl}/api/r2/schedule", [
+                'token' => $token,
+            ]);
+            if ($schedule->successful()) {
+                $views = $this->mergeScheduleGeneration($views, $schedule->json('views') ?? []);
+            }
 
             // Enriquecer con la config de Laravel (para saber si un parquet esta stale segun SU intervalo)
             $configs = BiParquetConfig::enabled()->get()->keyBy(fn($c) => "{$c->schema_name}.{$c->view_name}");
 
-            $views = $data['views'] ?? [];
             foreach ($views as &$view) {
                 $key = ($view['schema'] ?? '') . '.' . ($view['view'] ?? '');
                 $cfg = $configs->get($key);
@@ -312,6 +322,84 @@ class BiParquetConfigController extends Controller
     // =========================================================================
     // PRIVATE
     // =========================================================================
+
+    /**
+     * Completa cada vista con la hora en que el scheduler escribió el parquet.
+     * Las que solo existen en el schedule (no en R2) se agregan para que la
+     * tabla pueda mostrar "hace cuánto" y la cuenta regresiva.
+     *
+     * @param  array<int, array<string, mixed>>  $views
+     * @param  array<int, array<string, mixed>>  $scheduleViews
+     * @return array<int, array<string, mixed>>
+     */
+    private function mergeScheduleGeneration(array $views, array $scheduleViews): array
+    {
+        $index = [];
+        foreach ($views as $i => $view) {
+            $key = strtolower(($view['schema'] ?? '') . '.' . ($view['view'] ?? ''));
+            if ($key !== '.') {
+                $index[$key] = $i;
+            }
+        }
+
+        foreach ($scheduleViews as $sv) {
+            $schema = (string) ($sv['schema'] ?? '');
+            $name   = (string) ($sv['view'] ?? '');
+            if ($schema === '' || $name === '') {
+                continue;
+            }
+
+            $patch = [
+                // Hora del archivo en parquet_cache. No es la de R2 ni la del scheduler.
+                // Se lee el .meta.json directo: el proceso de Graph que ya está
+                // corriendo no conoce este campo hasta que se reinicie.
+                'local_generated' => $sv['local_generated'] ?? $this->localParquetGeneratedAt($schema, $name),
+            ];
+            if (isset($sv['avg_gen_s'])) {
+                $patch['avg_generation_s'] = $sv['avg_gen_s'];
+            }
+
+            $key = strtolower($schema . '.' . $name);
+            if (isset($index[$key])) {
+                $views[$index[$key]] = array_merge($views[$index[$key]], $patch);
+                continue;
+            }
+
+            $views[] = array_merge([
+                'schema'    => $schema,
+                'view'      => $name,
+                'status'    => $sv['status'] ?? 'pending',
+                'row_count' => $sv['row_count'] ?? 0,
+                'size_mb'   => $sv['size_mb'] ?? 0,
+            ], $patch);
+        }
+
+        return $views;
+    }
+
+    /** generated_at del parquet en Graph-Fabric/parquet_cache, o null si no existe. */
+    private function localParquetGeneratedAt(string $schema, string $view): ?string
+    {
+        $dir  = dirname(base_path()) . DIRECTORY_SEPARATOR . 'Graph-Fabric' . DIRECTORY_SEPARATOR . 'parquet_cache'
+            . DIRECTORY_SEPARATOR . $schema;
+        $meta = $dir . DIRECTORY_SEPARATOR . $view . '.meta.json';
+        if (is_file($meta)) {
+            $json = json_decode((string) file_get_contents($meta), true);
+            if (is_array($json)) {
+                $at = $json['generated_at'] ?? $json['last_modified'] ?? null;
+                if (is_string($at) && $at !== '') {
+                    return $at;
+                }
+            }
+        }
+
+        $parquet = $dir . DIRECTORY_SEPARATOR . $view . '.parquet';
+        if (!is_file($parquet)) {
+            return null;
+        }
+
+        return date('c', (int) filemtime($parquet));
+    }
 
     /**
      * Determina intervalos por defecto segun el schema y nombre de vista.

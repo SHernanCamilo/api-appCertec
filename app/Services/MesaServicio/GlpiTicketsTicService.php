@@ -30,6 +30,9 @@ class GlpiTicketsTicService
         5 => 'Muy alta',
     ];
 
+    /** Grupos sin "Nivel" en el nombre (Toner Depot, Panaplus, etc.). */
+    private const NIVEL_PROVEEDOR = 4;
+
     public function __construct(private GLPIService $glpi)
     {
     }
@@ -52,7 +55,7 @@ class GlpiTicketsTicService
         $grupoId = max(1, (int) config('glpi.tic_tablero.grupo_id', 29));
         $alertaHoras = max(1, (int) config('glpi.tic_tablero.alerta_horas', 2));
         $ttl = max(15, (int) config('glpi.tic_tablero.cache_segundos', 60));
-        $cacheKey = "mesa_glpi_tablero_tic_v4_{$grupoId}_{$alertaHoras}";
+        $cacheKey = "mesa_glpi_tablero_tic_v5_{$grupoId}_{$alertaHoras}";
 
         if ($forzar) {
             Cache::forget($cacheKey);
@@ -105,6 +108,7 @@ class GlpiTicketsTicService
             1 => $this->resumenNivelVacio(1, 'Nivel 1'),
             2 => $this->resumenNivelVacio(2, 'Nivel 2'),
             3 => $this->resumenNivelVacio(3, 'Nivel 3'),
+            self::NIVEL_PROVEEDOR => $this->resumenNivelVacio(self::NIVEL_PROVEEDOR, 'Proveedores'),
         ];
         $resumen = [
             'abiertos' => 0,
@@ -150,7 +154,8 @@ class GlpiTicketsTicService
 
             $nivel = (int) $ticket['nivel'];
             if (! isset($porNivel[$nivel])) {
-                $porNivel[$nivel] = $this->resumenNivelVacio($nivel, 'Nivel '.$nivel);
+                $nombreNivel = $nivel === self::NIVEL_PROVEEDOR ? 'Proveedores' : 'Nivel '.$nivel;
+                $porNivel[$nivel] = $this->resumenNivelVacio($nivel, $nombreNivel);
             }
             $this->acumularConteo($porNivel[$nivel], $ticket['alerta']);
 
@@ -597,22 +602,35 @@ class GlpiTicketsTicService
      */
     private function resolverGrupoActual(array $grupos): array
     {
-        $actual = [
-            'nombre' => $grupos[0] ?? 'Sin grupo',
-            'nivel' => 1,
-        ];
+        $tecnico = null;
+        $proveedor = null;
 
         foreach ($grupos as $nombre) {
             $nivel = $this->nivelDesdeNombre($nombre);
-            if ($nivel > $actual['nivel']) {
-                $actual = [
-                    'nombre' => $nombre,
-                    'nivel' => $nivel,
-                ];
+            $item = [
+                'nombre' => $nombre,
+                'nivel' => $nivel,
+            ];
+            if ($nivel === self::NIVEL_PROVEEDOR) {
+                $proveedor ??= $item;
+                continue;
+            }
+            if ($tecnico === null || $nivel > $tecnico['nivel']) {
+                $tecnico = $item;
             }
         }
 
-        return $actual;
+        if ($tecnico !== null) {
+            return $tecnico;
+        }
+        if ($proveedor !== null) {
+            return $proveedor;
+        }
+
+        return [
+            'nombre' => 'Sin grupo',
+            'nivel' => 1,
+        ];
     }
 
     private function nivelDesdeNombre(string $nombre): int
@@ -621,7 +639,7 @@ class GlpiTicketsTicService
             return max(1, (int) $match[1]);
         }
 
-        return 1;
+        return self::NIVEL_PROVEEDOR;
     }
 
     /**
