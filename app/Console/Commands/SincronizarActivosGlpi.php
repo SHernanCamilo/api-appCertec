@@ -305,9 +305,9 @@ class SincronizarActivosGlpi extends Command
         }
 
         if ($checkDeleted || $fullSync) {
-            $this->info("\n🔍 Verificando activos eliminados en GLPI...");
+            $this->info("\n🔍 Verificando activos en papelera o inexistentes en GLPI...");
             $deletedCount = $this->checkDeletedAssets();
-            $this->info("🗑️  Activos marcados como eliminados: {$deletedCount}");
+            $this->info("🗑️  Activos eliminados del inventario: {$deletedCount}");
             $totalStats['deleted'] = $deletedCount;
         }
 
@@ -2399,96 +2399,172 @@ class SincronizarActivosGlpi extends Command
 
     private function checkDeletedAssets()
     {
-        $deletedCount = 0;
-        
         try {
-            // Obtener todos los activos locales que no están marcados como eliminados
-            $localAssets = MatzobsActivosC::whereNotNull('id_activo_glpi')
-                ->where('usuario_modificacion', '!=', 'ELIMINADO_GLPI')
-                ->pluck('id_activo_glpi')
-                ->toArray();
-            
-            Log::channel('glpi_sync')->info("Verificando activos eliminados", [
-                'total_local_assets' => count($localAssets)
-            ]);
+            $this->info('   Consultando equipos vigentes en GLPI (solo ids)...');
+            $idsVigentes = $this->listarIdsComputadoresGlpi(false);
+            $this->info('   Vigentes: ' . count($idsVigentes));
 
-            // Procesar en chunks más pequeños para evitar problemas con la API
-            foreach (array_chunk($localAssets, 10) as $chunkIndex => $chunk) {
-                try {
-                    $existingIds = [];
-                    
-                    // Verificar cada ID individualmente para mayor confiabilidad
-                    foreach ($chunk as $glpiId) {
-                        try {
-                            $computer = $this->apiCallWithRetry(function() use ($glpiId) {
-                                return $this->glpiComputerService->getComputer($glpiId);
-                            });
-                            
-                            // Si el activo existe y no está en papelera, agregarlo a existingIds
-                            if (!empty($computer) && isset($computer['id'])) {
-                                // Verificar si está en papelera (is_deleted = 1)
-                                $isDeleted = isset($computer['is_deleted']) && $computer['is_deleted'] == 1;
-                                
-                                if (!$isDeleted) {
-                                    $existingIds[] = $glpiId;
-                                }
-                            }
-                        } catch (\Exception $e) {
-                            // Si hay error 404, el activo no existe
-                            if (strpos($e->getMessage(), '404') !== false || strpos($e->getMessage(), 'not found') !== false) {
-                                Log::channel('glpi_sync')->debug("Activo no encontrado en GLPI", [
-                                    'glpi_id' => $glpiId
-                                ]);
-                            } else {
-                                // Otros errores, asumir que existe para no marcarlo incorrectamente
-                                Log::channel('glpi_sync')->warning("Error verificando activo, asumiendo que existe", [
-                                    'glpi_id' => $glpiId,
-                                    'error' => $e->getMessage()
-                                ]);
-                                $existingIds[] = $glpiId;
-                            }
+            if ($idsVigentes === []) {
+                $this->warn('   GLPI no devolvió equipos vigentes. No se elimina nada para no vaciar el inventario.');
+                Log::channel('glpi_sync')->warning('Verificación de eliminados abortada: listado vigente vacío');
+                return 0;
+            }
+
+            $this->info('   Consultando papelera de GLPI (solo ids)...');
+            $idsPapelera = $this->listarIdsComputadoresGlpi(true);
+            $this->info('   En papelera: ' . count($idsPapelera));
+
+            $comunes = array_intersect($idsPapelera, $idsVigentes);
+            if ($idsPapelera !== [] && count($comunes) > count($idsVigentes) * 0.5) {
+                $this->warn('   GLPI no separó la papelera del listado vigente. No se elimina nada.');
+                Log::channel('glpi_sync')->warning('Verificación de eliminados abortada: papelera mezclada con vigentes', [
+                    'vigentes' => count($idsVigentes),
+                    'papelera' => count($idsPapelera),
+                    'comunes' => count($comunes),
+                ]);
+                return 0;
+            }
+
+            $vigentes = array_fill_keys($idsVigentes, true);
+            $papelera = array_fill_keys($idsPapelera, true);
+            $aEliminar = [];
+
+            MatzobsActivosC::whereNotNull('id_activo_glpi')
+                ->select('id_activo_glpi')
+                ->orderBy('id')
+                ->chunk(1000, function ($activos) use ($vigentes, $papelera, &$aEliminar) {
+                    foreach ($activos as $activo) {
+                        $glpiId = (int) $activo->id_activo_glpi;
+                        if (isset($papelera[$glpiId]) || !isset($vigentes[$glpiId])) {
+                            $aEliminar[] = $glpiId;
                         }
                     }
-                    
-                    // Identificar IDs que fueron eliminados
-                    $deletedIds = array_diff($chunk, $existingIds);
-                    
-                    if (!empty($deletedIds)) {
-                        $updated = MatzobsActivosC::whereIn('id_activo_glpi', $deletedIds)
-                            ->update([
-                                'usuario_modificacion' => 'ELIMINADO_GLPI',
-                                'date_u_sincronizacion' => now()
-                            ]);
-                        
-                        $deletedCount += $updated;
-                        
-                        Log::channel('glpi_sync')->info("Activos marcados como eliminados", [
-                            'deleted_ids' => $deletedIds,
-                            'count' => $updated
-                        ]);
-                    }
-                    
-                    // Pausa entre chunks
-                    if (($chunkIndex + 1) % 5 === 0) {
-                        $this->info("⏸️  Verificados " . (($chunkIndex + 1) * 10) . " activos...");
-                        sleep(2);
-                    }
-                    
-                } catch (\Exception $e) {
-                    Log::channel('glpi_sync')->error("Error verificando chunk de activos eliminados", [
-                        'chunk' => $chunk,
-                        'error' => $e->getMessage()
-                    ]);
-                }
-            }
-            
-        } catch (\Exception $e) {
-            Log::channel('glpi_sync')->error("Error general verificando activos eliminados", [
-                'error' => $e->getMessage()
+                });
+
+            $eliminados = $this->eliminarActivosLocalesPorGlpi($aEliminar);
+
+            Log::channel('glpi_sync')->info('Activos eliminados del inventario por papelera o ausencia en GLPI', [
+                'vigentes' => count($idsVigentes),
+                'papelera' => count($idsPapelera),
+                'eliminados' => $eliminados,
             ]);
+
+            return $eliminados;
+        } catch (\Exception $e) {
+            $this->warn('   No se eliminó ningún activo: ' . $e->getMessage());
+            Log::channel('glpi_sync')->error('Error verificando activos eliminados', [
+                'error' => $e->getMessage(),
+            ]);
+            return 0;
         }
-        
-        return $deletedCount;
+    }
+
+    /**
+     * Ids de Computer en GLPI, en páginas, sin discos ni software.
+     * $papelera true pide solo is_deleted = 1.
+     *
+     * @return list<int>
+     */
+    private function listarIdsComputadoresGlpi(bool $papelera): array
+    {
+        $ids = [];
+        $pageSize = 200;
+        $start = 0;
+
+        while ($start < 20000) {
+            $end = $start + $pageSize - 1;
+
+            try {
+                $batch = $this->glpiService->get('/Computer', [
+                    'only_id' => 1,
+                    'is_deleted' => $papelera ? 1 : 0,
+                    'expand_dropdowns' => false,
+                    'get_hateoas' => false,
+                    'range' => "{$start}-{$end}",
+                ]);
+            } catch (\Exception $e) {
+                $mensaje = $e->getMessage();
+                if (
+                    str_contains($mensaje, 'ERROR_RANGE_EXCEED_TOTAL')
+                    || str_contains($mensaje, 'ERROR_GLPI_RANGE')
+                ) {
+                    break;
+                }
+                throw $e;
+            }
+
+            $pagina = $this->extraerIdsGlpi($batch);
+            if ($pagina === []) {
+                break;
+            }
+
+            foreach ($pagina as $id) {
+                $ids[$id] = true;
+            }
+
+            if (count($pagina) < $pageSize) {
+                break;
+            }
+
+            $start += $pageSize;
+        }
+
+        return array_map('intval', array_keys($ids));
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function extraerIdsGlpi(array $batch): array
+    {
+        $ids = [];
+        $filas = $this->glpiService->normalizeCollection($batch);
+
+        foreach ($filas as $fila) {
+            if (isset($fila['id']) && is_numeric($fila['id'])) {
+                $ids[] = (int) $fila['id'];
+            }
+        }
+
+        if ($ids !== [] || !array_is_list($batch)) {
+            return $ids;
+        }
+
+        foreach ($batch as $item) {
+            if (is_numeric($item)) {
+                $ids[] = (int) $item;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Borra de JADEONE los activos cuyo id de GLPI está en papelera o ya no existe.
+     * El detalle cae en cascada; se borra antes por si la FK no está aplicada.
+     */
+    private function eliminarActivosLocalesPorGlpi(array $glpiIds): int
+    {
+        $glpiIds = array_values(array_unique(array_map('intval', $glpiIds)));
+        if ($glpiIds === []) {
+            return 0;
+        }
+
+        $eliminados = 0;
+
+        foreach (array_chunk($glpiIds, 500) as $chunk) {
+            $idsLocales = MatzobsActivosC::whereIn('id_activo_glpi', $chunk)->pluck('id')->all();
+            if ($idsLocales === []) {
+                continue;
+            }
+
+            DB::transaction(function () use ($idsLocales, &$eliminados) {
+                MatzobsActivosD::whereIn('activo_c_id', $idsLocales)->delete();
+                $eliminados += MatzobsActivosC::whereIn('id', $idsLocales)->delete();
+            });
+        }
+
+        return $eliminados;
     }
 
     /**

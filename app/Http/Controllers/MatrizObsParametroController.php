@@ -2,10 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\MatrizObsActivoC;
 use App\Models\MatrizObsGrupoParametro;
 use App\Models\MatrizObsParametro;
+use App\Models\User;
 use App\Services\MatrizObsolescenciaCalculatorService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
 class MatrizObsParametroController extends Controller
@@ -213,8 +217,8 @@ class MatrizObsParametroController extends Controller
     private function aplicarFiltrosPermisos($query)
     {
         $user = auth()->user();
-        
-        if (!$user) {
+
+        if (!$user instanceof User) {
             return $query;
         }
 
@@ -279,16 +283,16 @@ class MatrizObsParametroController extends Controller
             }
 
             // Obtener estadísticas agrupadas por tipo de equipo
-            $query = \DB::table('matzobs_activos_c as ac')
+            $query = DB::table('matzobs_activos_c as ac')
                 ->join('matzobs_activos_d as ad', 'ac.id', '=', 'ad.activo_c_id')
                 ->select(
                     'ad.tipo',
-                    \DB::raw('COUNT(*) as total'),
-                    \DB::raw('AVG(ac.puntaje) as promedio_puntaje'),
-                    \DB::raw($casesSQL['obsoleto'] ?? 'SUM(CASE WHEN ac.puntaje = 0 THEN 1 ELSE 0 END) as obsoleto'),
-                    \DB::raw($casesSQL['potencialmente'] ?? 'SUM(CASE WHEN ac.puntaje > 0 AND ac.puntaje < 60 THEN 1 ELSE 0 END) as potencialmente'),
-                    \DB::raw($casesSQL['funcional'] ?? 'SUM(CASE WHEN ac.puntaje >= 60 AND ac.puntaje < 100 THEN 1 ELSE 0 END) as funcional'),
-                    \DB::raw($casesSQL['óptimo'] ?? 'SUM(CASE WHEN ac.puntaje = 100 THEN 1 ELSE 0 END) as optimo')
+                    DB::raw('COUNT(*) as total'),
+                    DB::raw('AVG(ac.puntaje) as promedio_puntaje'),
+                    DB::raw($casesSQL['obsoleto'] ?? 'SUM(CASE WHEN ac.puntaje = 0 THEN 1 ELSE 0 END) as obsoleto'),
+                    DB::raw($casesSQL['potencialmente'] ?? 'SUM(CASE WHEN ac.puntaje > 0 AND ac.puntaje < 60 THEN 1 ELSE 0 END) as potencialmente'),
+                    DB::raw($casesSQL['funcional'] ?? 'SUM(CASE WHEN ac.puntaje >= 60 AND ac.puntaje < 100 THEN 1 ELSE 0 END) as funcional'),
+                    DB::raw($casesSQL['óptimo'] ?? 'SUM(CASE WHEN ac.puntaje = 100 THEN 1 ELSE 0 END) as optimo')
                 )
                 ->whereNotNull('ad.tipo');
 
@@ -359,7 +363,7 @@ class MatrizObsParametroController extends Controller
             }
 
             // Obtener estadísticas agrupadas por empresa, sucursal y sede
-            $query = \DB::table('matzobs_activos_c as ac')
+            $query = DB::table('matzobs_activos_c as ac')
                 ->leftJoin('ent_empresas as e', 'ac.id_empresa', '=', 'e.id')
                 ->leftJoin('config_ubi_sucursales as s', 'ac.id_sucursal', '=', 's.id')
                 ->leftJoin('config_ubi_sede as se', 'ac.id_sede', '=', 'se.id')
@@ -370,12 +374,12 @@ class MatrizObsParametroController extends Controller
                     'ac.id_empresa',
                     'ac.id_sucursal',
                     'ac.id_sede',
-                    \DB::raw('COUNT(*) as total'),
-                    \DB::raw($casesSQL['obsoleto'] ?? 'SUM(CASE WHEN ac.puntaje = 0 THEN 1 ELSE 0 END) as obsoleto'),
-                    \DB::raw($casesSQL['potencialmente'] ?? 'SUM(CASE WHEN ac.puntaje > 0 AND ac.puntaje < 60 THEN 1 ELSE 0 END) as potencialmente'),
-                    \DB::raw($casesSQL['funcional'] ?? 'SUM(CASE WHEN ac.puntaje >= 60 AND ac.puntaje < 100 THEN 1 ELSE 0 END) as funcional'),
-                    \DB::raw($casesSQL['óptimo'] ?? 'SUM(CASE WHEN ac.puntaje = 100 THEN 1 ELSE 0 END) as optimo'),
-                    \DB::raw('AVG(ac.puntaje) as promedio_puntaje')
+                    DB::raw('COUNT(*) as total'),
+                    DB::raw($casesSQL['obsoleto'] ?? 'SUM(CASE WHEN ac.puntaje = 0 THEN 1 ELSE 0 END) as obsoleto'),
+                    DB::raw($casesSQL['potencialmente'] ?? 'SUM(CASE WHEN ac.puntaje > 0 AND ac.puntaje < 60 THEN 1 ELSE 0 END) as potencialmente'),
+                    DB::raw($casesSQL['funcional'] ?? 'SUM(CASE WHEN ac.puntaje >= 60 AND ac.puntaje < 100 THEN 1 ELSE 0 END) as funcional'),
+                    DB::raw($casesSQL['óptimo'] ?? 'SUM(CASE WHEN ac.puntaje = 100 THEN 1 ELSE 0 END) as optimo'),
+                    DB::raw('AVG(ac.puntaje) as promedio_puntaje')
                 )
                 ->whereNotNull('ac.puntaje'); // Asegurar que tenga puntaje calculado
 
@@ -387,7 +391,7 @@ class MatrizObsParametroController extends Controller
                 ->limit(15) // Aumentar límite para ver más ubicaciones
                 ->get();
 
-            \Log::info('Estadísticas por ubicación - Query result:', [
+            Log::info('Estadísticas por ubicación - Query result:', [
                 'count' => $estadisticas->count(),
                 'data' => $estadisticas->toArray()
             ]);
@@ -430,7 +434,7 @@ class MatrizObsParametroController extends Controller
             // Calcular totales generales
             $totalGeneral = $estadisticas->sum('total');
 
-            \Log::info('Estadísticas por ubicación - Datos procesados:', [
+            Log::info('Estadísticas por ubicación - Datos procesados:', [
                 'ubicaciones_count' => $datosGrafico->count(),
                 'total_general' => $totalGeneral,
                 'ubicaciones' => $datosGrafico->toArray()
@@ -449,7 +453,7 @@ class MatrizObsParametroController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
-            \Log::error('Error en getEstadisticasPorUbicacion:', [
+            Log::error('Error en getEstadisticasPorUbicacion:', [
                 'message' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -476,7 +480,7 @@ class MatrizObsParametroController extends Controller
             $page = $request->input('page', 1);
             $perPage = $request->input('per_page', 10);
 
-            $query = \DB::table('matzobs_activos_c as ac')
+            $query = DB::table('matzobs_activos_c as ac')
                 ->leftJoin('matzobs_activos_d as ad', 'ac.id', '=', 'ad.activo_c_id')
                 ->leftJoin('ent_empresas as e', 'ac.id_empresa', '=', 'e.id')
                 ->leftJoin('config_ubi_sucursales as s', 'ac.id_sucursal', '=', 's.id')
@@ -545,6 +549,17 @@ class MatrizObsParametroController extends Controller
             if ($sedeId) {
                 $query->where('ac.id_sede', $sedeId);
             }
+            if ($request->filled('unidad_funcional_id')) {
+                MatrizObsActivoC::aplicarCoincidenciaUnidad($query, (int) $request->unidad_funcional_id, 'ac');
+            }
+            if ($request->boolean('sin_unidad') && $sucursalId) {
+                MatrizObsActivoC::aplicarSinUnidadFuncional(
+                    $query,
+                    (int) $sucursalId,
+                    $sedeId ? (int) $sedeId : null,
+                    'ac'
+                );
+            }
             // Equipos sin empresa asignada (barra "Sin empresa" de la gráfica)
             if ($request->boolean('sin_empresa')) {
                 $query->whereNull('ac.id_empresa');
@@ -568,7 +583,7 @@ class MatrizObsParametroController extends Controller
             ], 200);
 
         } catch (\Exception $e) {
-            \Log::error('Error en getEquiposPorFiltro:', [
+            Log::error('Error en getEquiposPorFiltro:', [
                 'message' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);

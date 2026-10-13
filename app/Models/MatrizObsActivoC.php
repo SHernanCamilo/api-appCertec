@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOneThrough;
+use Illuminate\Support\Facades\DB;
 
 class MatrizObsActivoC extends Model
 {
@@ -117,6 +118,76 @@ class MatrizObsActivoC extends Model
     public function scopeByEmpresa($query, $empresaId)
     {
         return $query->where('id_empresa', $empresaId);
+    }
+
+    /**
+     * Subconsulta que resuelve la unidad funcional de un activo.
+     * Coincide el texto de ubicación con el nombre de la unidad, o con el
+     * nombre sin el sufijo de empresa (FACTURACION → FACTURACION-EAL).
+     */
+    public static function sqlIdUnidadFuncional(string $alias): string
+    {
+        return "(
+            SELECT uf.id
+            FROM config_unidades_funcionales uf
+            WHERE uf.estado = 1
+              AND uf.id_sucursal = {$alias}.id_sucursal
+              AND (
+                    (uf.id_sede IS NULL AND {$alias}.id_sede IS NULL)
+                 OR uf.id_sede = {$alias}.id_sede
+              )
+              AND {$alias}.ubicacion IS NOT NULL
+              AND {$alias}.ubicacion <> ''
+              AND (
+                    UPPER(TRIM(uf.nombre)) = UPPER(TRIM({$alias}.ubicacion))
+                 OR UPPER(TRIM(uf.nombre)) LIKE CONCAT(UPPER(TRIM({$alias}.ubicacion)), '-%')
+              )
+            ORDER BY
+                CASE WHEN UPPER(TRIM(uf.nombre)) = UPPER(TRIM({$alias}.ubicacion)) THEN 0 ELSE 1 END,
+                CHAR_LENGTH(uf.nombre)
+            LIMIT 1
+        )";
+    }
+
+    /**
+     * Limita la consulta a los activos cuya ubicación corresponde a la unidad funcional.
+     */
+    public static function aplicarCoincidenciaUnidad($query, int $unidadId, string $alias = 'matzobs_activos_c'): void
+    {
+        $unidad = DB::table('config_unidades_funcionales')->where('id', $unidadId)->first();
+        if (!$unidad) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        $query->where($alias . '.id_sucursal', $unidad->id_sucursal);
+        if ($unidad->id_sede) {
+            $query->where($alias . '.id_sede', $unidad->id_sede);
+        } else {
+            $query->whereNull($alias . '.id_sede');
+        }
+
+        $col = $alias . '.ubicacion';
+        $nombre = $unidad->nombre;
+        $query->where(function ($q) use ($col, $nombre) {
+            $q->whereRaw("UPPER(TRIM({$col})) = UPPER(TRIM(?))", [$nombre])
+              ->orWhereRaw("UPPER(TRIM(?)) LIKE CONCAT(UPPER(TRIM({$col})), '-%')", [$nombre]);
+        });
+    }
+
+    /**
+     * Activos de la sucursal (y sede, si existe) que no coinciden con ninguna unidad funcional.
+     */
+    public static function aplicarSinUnidadFuncional($query, int $sucursalId, ?int $sedeId, string $alias = 'matzobs_activos_c'): void
+    {
+        $query->where($alias . '.id_sucursal', $sucursalId);
+        if ($sedeId) {
+            $query->where($alias . '.id_sede', $sedeId);
+        } else {
+            $query->whereNull($alias . '.id_sede');
+        }
+
+        $query->whereRaw(self::sqlIdUnidadFuncional($alias) . ' IS NULL');
     }
 
     /**

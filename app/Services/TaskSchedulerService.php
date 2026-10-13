@@ -4,7 +4,9 @@ namespace App\Services;
 
 use App\Models\ScheduledTask;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 
 class TaskSchedulerService
 {
@@ -158,7 +160,67 @@ class TaskSchedulerService
                 ->orderBy('completed_at', 'desc')
                 ->limit(5)
                 ->get(['id', 'name', 'type', 'error_message', 'completed_at']),
+            'worker' => $this->workerStatus(),
         ];
+    }
+
+    /**
+     * El worker avisa en cada vuelta. Una tarea en curso también cuenta como worker vivo,
+     * porque mientras sincroniza no vuelve a escribir el aviso.
+     */
+    public function workerStatus(): array
+    {
+        $lightQueue = config('scheduled-tasks.queue.default', 'scheduled-tasks');
+        $heavyQueue = config('scheduled-tasks.queue.heavy', 'scheduled-tasks-heavy');
+        $lightFresh = $this->heartbeatIsFresh($lightQueue);
+        $heavyFresh = $this->heartbeatIsFresh($heavyQueue);
+
+        $running = ScheduledTask::running()
+            ->where('started_at', '>=', now()->subMinutes(90))
+            ->get(['type']);
+        $heavyBusy = $running->contains(fn ($task) => $task->type === 'sync_activos');
+        $lightBusy = $running->contains(fn ($task) => $task->type !== 'sync_activos');
+
+        $heavyOnline = $heavyFresh || $heavyBusy;
+        $lightOnline = $lightFresh || $lightBusy;
+        $online = $lightOnline && $heavyOnline;
+        $busy = $heavyBusy || $lightBusy;
+
+        if (!$lightOnline && !$heavyOnline) {
+            $message = 'Nadie está ejecutando las colas. Las tareas no van a arrancar.';
+        } elseif (!$heavyOnline) {
+            $message = 'Falta el worker de la sincronización (scheduled-tasks-heavy).';
+        } elseif (!$lightOnline) {
+            $message = 'Falta el worker de las tareas cortas (scheduled-tasks).';
+        } elseif ($busy) {
+            $message = 'Un worker está ocupado en una tarea.';
+        } else {
+            $message = 'Los dos workers están en espera.';
+        }
+
+        return [
+            'online' => $online,
+            'busy' => $busy,
+            'light_online' => $lightOnline,
+            'heavy_online' => $heavyOnline,
+            'last_seen' => null,
+            'message' => $message,
+        ];
+    }
+
+    private function heartbeatIsFresh(string $queue): bool
+    {
+        $path = storage_path('framework/scheduled-tasks-worker-' . preg_replace('/[^a-z0-9_-]/i', '_', $queue) . '.json');
+        if (!is_file($path)) {
+            return false;
+        }
+
+        $data = json_decode((string) file_get_contents($path), true);
+        if (empty($data['beat'])) {
+            return false;
+        }
+
+        return Carbon::parse($data['beat'])->greaterThan(now()->subSeconds(20));
     }
 
     /**
@@ -273,8 +335,11 @@ class TaskSchedulerService
             'recurrence_value' => $recurrenceValue,
         ]);
 
-        // Calcular primera ejecución
+        // Calcular primera ejecución y dejarla en la cola hasta esa hora.
+        // El worker la toma solo; no depende de que alguien lance el comando cada minuto.
         $task->calculateNextRun();
+        $task->refresh();
+        $this->enqueueNextRecurringRun($task);
 
         Log::info("Tarea recurrente creada", [
             'task_id' => $task->id,
@@ -284,6 +349,149 @@ class TaskSchedulerService
         ]);
 
         return $task;
+    }
+
+    /**
+     * Deja la siguiente corrida de una recurrente en la cola scheduled-tasks.
+     * Si next_run_at es futuro, el job espera hasta esa hora.
+     */
+    public function enqueueNextRecurringRun(ScheduledTask $task): void
+    {
+        if (!$task->is_recurring || !$task->is_active || !$task->next_run_at) {
+            return;
+        }
+
+        if ($this->hasQueuedJob($task)) {
+            return;
+        }
+
+        $taskConfig = config("scheduled-tasks.types.{$task->type}");
+        $jobClass = $taskConfig['job_class'] ?? null;
+
+        if (!$jobClass || !class_exists($jobClass)) {
+            throw new \Exception("Clase de job no encontrada: {$jobClass}");
+        }
+
+        $job = new $jobClass($task->id, $task->parameters ?? []);
+        $delay = $task->next_run_at->isFuture() ? $task->next_run_at : now();
+        $jobId = Queue::later($delay, $job, '', $this->queueNameFor($task));
+
+        if ($jobId) {
+            $task->update(['job_id' => $jobId]);
+        }
+
+        Log::info("Siguiente ejecución recurrente encolada", [
+            'task_id' => $task->id,
+            'job_id' => $jobId,
+            'next_run_at' => $task->next_run_at,
+        ]);
+    }
+
+    public function queueNameFor(ScheduledTask $task): string
+    {
+        $taskConfig = config("scheduled-tasks.types.{$task->type}", []);
+
+        return $taskConfig['queue'] ?? config('scheduled-tasks.queue.default', 'scheduled-tasks');
+    }
+
+    public function dropQueuedJob(ScheduledTask $task): void
+    {
+        if (!$task->job_id) {
+            return;
+        }
+
+        DB::table('jobs')->where('id', $task->job_id)->whereNull('reserved_at')->delete();
+        $task->update(['job_id' => null]);
+        $task->refresh();
+    }
+
+    /**
+     * Cambia nombre, frecuencia y parámetros. No toca una tarea que está corriendo.
+     * Si sigue activa, saca el job anterior y deja la siguiente cita en su cola.
+     */
+    public function updateTask(ScheduledTask $task, array $data): ScheduledTask
+    {
+        if ($task->status === ScheduledTask::STATUS_RUNNING) {
+            throw new \Exception('No se puede editar una tarea en ejecución');
+        }
+
+        $parameters = array_key_exists('parameters', $data)
+            ? ($data['parameters'] ?? [])
+            : ($task->parameters ?? []);
+        $this->validateParameters($task->type, is_array($parameters) ? $parameters : []);
+
+        $payload = [];
+        if (array_key_exists('name', $data)) {
+            $payload['name'] = $data['name'];
+        }
+        if (array_key_exists('description', $data)) {
+            $payload['description'] = $data['description'];
+        }
+        if (array_key_exists('parameters', $data)) {
+            $payload['parameters'] = $parameters;
+        }
+
+        if ($task->is_recurring) {
+            if (!empty($data['recurrence_type'])) {
+                $payload['recurrence_type'] = $data['recurrence_type'];
+            }
+            if (array_key_exists('recurrence_value', $data)) {
+                $payload['recurrence_value'] = $data['recurrence_value'] ?? [];
+            }
+        } elseif (array_key_exists('scheduled_at', $data)) {
+            $payload['scheduled_at'] = !empty($data['scheduled_at'])
+                ? Carbon::parse($data['scheduled_at'])
+                : null;
+        }
+
+        $keepStatus = in_array($task->status, [
+            ScheduledTask::STATUS_FAILED,
+            ScheduledTask::STATUS_COMPLETED,
+        ], true) ? $task->status : ScheduledTask::STATUS_COMPLETED;
+
+        $task->update($payload);
+        $task->refresh();
+
+        if ($task->is_recurring && $task->is_active) {
+            $this->dropQueuedJob($task);
+            $task->calculateNextRun();
+            $task->update(['status' => $keepStatus]);
+            $task->refresh();
+            $this->enqueueNextRecurringRun($task);
+        }
+
+        return $task->fresh();
+    }
+
+    public function hasQueuedJob(ScheduledTask $task): bool
+    {
+        if (!$task->job_id) {
+            return false;
+        }
+
+        // El job reservado es la corrida que ya está en curso. No cuenta como la siguiente.
+        return DB::table('jobs')
+            ->where('id', $task->job_id)
+            ->whereNull('reserved_at')
+            ->exists();
+    }
+
+    /**
+     * Mete en la cola las recurrentes cuya hora ya pasó y no tienen job esperando.
+     */
+    public function enqueueDueRecurringTasks(): void
+    {
+        $tasks = ScheduledTask::query()
+            ->where('is_recurring', true)
+            ->where('is_active', true)
+            ->where('status', '!=', ScheduledTask::STATUS_RUNNING)
+            ->whereNotNull('next_run_at')
+            ->where('next_run_at', '<=', now())
+            ->get();
+
+        foreach ($tasks as $task) {
+            $this->enqueueNextRecurringRun($task);
+        }
     }
 
     /**
@@ -338,6 +546,20 @@ class TaskSchedulerService
         }
 
         $task->update(['is_active' => $isActive]);
+        $task->refresh();
+
+        if ($isActive) {
+            if (!$task->next_run_at || $task->next_run_at->lte(now())) {
+                $task->calculateNextRun();
+                $task->update(['status' => ScheduledTask::STATUS_COMPLETED]);
+                $task->refresh();
+            }
+
+            $this->enqueueNextRecurringRun($task);
+        } elseif ($task->job_id) {
+            DB::table('jobs')->where('id', $task->job_id)->whereNull('reserved_at')->delete();
+            $task->update(['job_id' => null]);
+        }
 
         Log::info("Tarea recurrente " . ($isActive ? 'activada' : 'desactivada'), [
             'task_id' => $taskId

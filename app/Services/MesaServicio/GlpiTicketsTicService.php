@@ -33,6 +33,9 @@ class GlpiTicketsTicService
     /** Grupos sin "Nivel" en el nombre (Toner Depot, Panaplus, etc.). */
     private const NIVEL_PROVEEDOR = 4;
 
+    /** glpi_tickets_users.type: técnico asignado. */
+    private const TIPO_TECNICO_ASIGNADO = 2;
+
     public function __construct(private GLPIService $glpi)
     {
     }
@@ -55,7 +58,7 @@ class GlpiTicketsTicService
         $grupoId = max(1, (int) config('glpi.tic_tablero.grupo_id', 29));
         $alertaHoras = max(1, (int) config('glpi.tic_tablero.alerta_horas', 2));
         $ttl = max(15, (int) config('glpi.tic_tablero.cache_segundos', 60));
-        $cacheKey = "mesa_glpi_tablero_tic_v5_{$grupoId}_{$alertaHoras}";
+        $cacheKey = "mesa_glpi_tablero_tic_v6_{$grupoId}_{$alertaHoras}";
 
         if ($forzar) {
             Cache::forget($cacheKey);
@@ -133,6 +136,10 @@ class GlpiTicketsTicService
             }
         }
         $ultimoGrupoPorTicket = $this->consultarUltimoGrupoHistorico($ids, $gruposPorTicket);
+        $ultimoTecnicoPorTicket = $this->consultarUltimoTecnico($ids);
+        foreach ($ultimoTecnicoPorTicket as $userId) {
+            $idsTecnicos[] = $userId;
+        }
         $nombresTecnicos = $this->resolverNombresUsuarios($idsTecnicos);
 
         foreach ($filas as $fila) {
@@ -143,7 +150,8 @@ class GlpiTicketsTicService
                 $limite,
                 $alertaHoras,
                 $ultimoGrupoPorTicket[$id] ?? null,
-                $nombresTecnicos
+                $nombresTecnicos,
+                $ultimoTecnicoPorTicket[$id] ?? null
             );
             $tickets[] = $ticket;
             $resumen['abiertos']++;
@@ -249,7 +257,8 @@ class GlpiTicketsTicService
         Carbon $limite,
         int $alertaHoras,
         ?array $grupoHistorico = null,
-        array $nombresTecnicos = []
+        array $nombresTecnicos = [],
+        ?int $ultimoTecnicoId = null
     ): array
     {
         $prioridadId = $this->entero($fila['prioridad'] ?? null);
@@ -288,7 +297,7 @@ class GlpiTicketsTicService
             'estado_id' => $estadoId,
             'estado' => self::ESTADOS[$estadoId] ?? ($this->texto($fila['estado'] ?? null) ?: '—'),
             'solicitante' => $this->texto($fila['solicitante'] ?? null) ?: '—',
-            'tecnico' => $this->nombresTecnicos($fila['tecnico'] ?? null, $nombresTecnicos) ?: 'Sin asignar',
+            'tecnico' => $this->tecnicoVisible($fila['tecnico'] ?? null, $nombresTecnicos, $ultimoTecnicoId),
             'categoria' => $this->texto($fila['categoria'] ?? null) ?: '—',
             'grupo' => implode(', ', $grupos),
             'grupos' => $grupos,
@@ -562,21 +571,287 @@ class GlpiTicketsTicService
     }
 
     /**
+     * Último técnico que sigue asignado: la fila más reciente de glpi_tickets_users (mayor id, type = 2).
+     *
+     * @param  list<int>  $ticketIds
+     * @return array<int, int> ticketId => userId
+     */
+    private function consultarUltimoTecnico(array $ticketIds): array
+    {
+        $ticketIds = array_values(array_unique(array_filter(array_map('intval', $ticketIds))));
+        if ($ticketIds === []) {
+            return [];
+        }
+
+        try {
+            $permitidos = array_fill_keys($ticketIds, true);
+            $mejor = [];
+
+            foreach (array_chunk($ticketIds, 40) as $chunk) {
+                foreach ($this->buscarActoresAsignados($chunk) as $fila) {
+                    if (! $this->esTipoAsignado($fila['type'] ?? null)) {
+                        continue;
+                    }
+                    $ticketId = $this->idConocido($fila['ticket_id'] ?? null, $permitidos);
+                    $relId = (int) ($fila['id'] ?? 0);
+                    if ($ticketId < 1 || $relId < 1) {
+                        continue;
+                    }
+                    $userId = $this->idPlano($fila['user'] ?? null);
+                    if (! isset($mejor[$ticketId]) || $relId > $mejor[$ticketId]['rel']) {
+                        $mejor[$ticketId] = ['rel' => $relId, 'user' => $userId];
+                    }
+                }
+            }
+
+            $faltan = [];
+            foreach ($mejor as $ticketId => $item) {
+                if ($item['user'] < 1) {
+                    $faltan[$item['rel']] = $ticketId;
+                }
+            }
+            if ($faltan !== []) {
+                try {
+                    foreach ($this->resolverUsuariosDeActores(array_keys($faltan)) as $relId => $userId) {
+                        $ticketId = $faltan[$relId] ?? 0;
+                        if ($ticketId > 0 && isset($mejor[$ticketId])) {
+                            $mejor[$ticketId]['user'] = $userId;
+                        }
+                    }
+                } catch (Throwable $e) {
+                    Log::warning('Tablero TIC: no se pudo resolver el usuario de la última asignación: '.$e->getMessage());
+                }
+            }
+
+            $resultado = [];
+            foreach ($mejor as $ticketId => $item) {
+                if ($item['user'] > 0) {
+                    $resultado[$ticketId] = $item['user'];
+                }
+            }
+
+            return $resultado;
+        } catch (Throwable $e) {
+            Log::warning('Tablero TIC: no se pudo leer el último técnico asignado: '.$e->getMessage());
+
+            return [];
+        }
+    }
+
+    /**
+     * @param  list<int>  $ticketIds
+     * @return list<array<string, mixed>>
+     */
+    private function buscarActoresAsignados(array $ticketIds): array
+    {
+        $params = [
+            'forcedisplay[0]' => 2,
+            'forcedisplay[1]' => 3,
+            'forcedisplay[2]' => 4,
+            'forcedisplay[3]' => 5,
+            'criteria[0][field]' => 5,
+            'criteria[0][searchtype]' => 'equals',
+            'criteria[0][value]' => self::TIPO_TECNICO_ASIGNADO,
+            'criteria[1][link]' => 'AND',
+        ];
+
+        foreach (array_values($ticketIds) as $i => $ticketId) {
+            $base = 'criteria[1][criteria]['.$i.']';
+            if ($i > 0) {
+                $params[$base.'[link]'] = 'OR';
+            }
+            $params[$base.'[field]'] = 3;
+            $params[$base.'[searchtype]'] = 'equals';
+            $params[$base.'[value]'] = $ticketId;
+        }
+
+        $columnMap = [
+            2 => 'id',
+            3 => 'ticket_id',
+            4 => 'user',
+            5 => 'type',
+        ];
+        $all = [];
+        $start = 0;
+        $pageSize = 400;
+
+        while ($start < 20000) {
+            $end = $start + $pageSize - 1;
+            try {
+                $batch = $this->glpi->get('/search/Ticket_User', array_merge($params, [
+                    'range' => "{$start}-{$end}",
+                ]));
+            } catch (Throwable $e) {
+                $mensaje = $e->getMessage();
+                if (
+                    str_contains($mensaje, 'ERROR_RANGE_EXCEED_TOTAL')
+                    || str_contains($mensaje, 'ERROR_GLPI_RANGE')
+                ) {
+                    break;
+                }
+                throw $e;
+            }
+
+            $rows = is_array($batch['data'] ?? null) ? $batch['data'] : [];
+            $total = (int) ($batch['totalcount'] ?? 0);
+
+            foreach ($rows as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+                $mapped = [];
+                foreach ($columnMap as $fieldId => $nombre) {
+                    $mapped[$nombre] = $row[$fieldId] ?? $row[(string) $fieldId] ?? null;
+                }
+                $mapped['id'] = (int) ($mapped['id'] ?? 0);
+                if ($mapped['id'] > 0) {
+                    $all[] = $mapped;
+                }
+            }
+
+            $start += $pageSize;
+            if ($rows === [] || $start >= $total || count($rows) < $pageSize) {
+                break;
+            }
+        }
+
+        return $all;
+    }
+
+    /**
+     * @param  list<int>  $relacionIds
+     * @return array<int, int> relacionId => userId
+     */
+    private function resolverUsuariosDeActores(array $relacionIds): array
+    {
+        $relacionIds = array_values(array_unique(array_filter(array_map('intval', $relacionIds))));
+        if ($relacionIds === []) {
+            return [];
+        }
+
+        $usuarios = [];
+        foreach (array_chunk($relacionIds, 50) as $chunk) {
+            $params = ['get_hateoas' => false, 'expand_dropdowns' => false];
+            foreach (array_values($chunk) as $i => $id) {
+                $params['items['.$i.'][itemtype]'] = 'Ticket_User';
+                $params['items['.$i.'][items_id]'] = $id;
+            }
+            $items = $this->glpi->normalizeCollection($this->glpi->get('/getMultipleItems', $params));
+            foreach ($items as $item) {
+                $id = (int) ($item['id'] ?? 0);
+                $userId = $this->idPlano($item['users_id'] ?? null);
+                $tipo = $item['type'] ?? null;
+                if ($id > 0 && $userId > 0 && ($tipo === null || $tipo === '' || $this->esTipoAsignado($tipo))) {
+                    $usuarios[$id] = $userId;
+                }
+            }
+        }
+
+        return $usuarios;
+    }
+
+    /**
+     * Nombre del último técnico. Si el histórico no llega, usa el último de la lista que devolvió GLPI.
+     *
      * @param  array<int, string>  $nombres
      */
-    private function nombresTecnicos(mixed $valor, array $nombres): string
+    private function tecnicoVisible(mixed $valor, array $nombres, ?int $ultimoTecnicoId): string
     {
+        if ($ultimoTecnicoId !== null && $ultimoTecnicoId > 0) {
+            $nombre = trim((string) ($nombres[$ultimoTecnicoId] ?? ''));
+            if ($nombre !== '') {
+                return $nombre;
+            }
+        }
+
         $ids = $this->extraerIds($valor);
-        if ($ids === []) {
-            return $this->texto($valor);
+        if ($ids !== []) {
+            $id = (int) $ids[array_key_last($ids)];
+            $nombre = trim((string) ($nombres[$id] ?? ''));
+
+            return $nombre !== '' ? $nombre : (string) $id;
         }
 
-        $lista = [];
-        foreach ($ids as $id) {
-            $lista[] = $nombres[$id] ?? (string) $id;
+        $texto = $this->texto($valor);
+        if ($texto === '') {
+            return 'Sin asignar';
         }
 
-        return implode(', ', array_unique($lista));
+        $partes = preg_split('/\s*,\s*/', $texto) ?: [];
+        $partes = array_values(array_filter(
+            array_map(static fn (string $parte): string => trim($parte), $partes),
+            static fn (string $parte): bool => $parte !== ''
+        ));
+        if ($partes === []) {
+            return 'Sin asignar';
+        }
+
+        return $partes[array_key_last($partes)];
+    }
+
+    /**
+     * @param  array<int, true>  $permitidos
+     */
+    private function idConocido(mixed $valor, array $permitidos): int
+    {
+        if (is_array($valor)) {
+            foreach ($valor as $item) {
+                $id = $this->idConocido($item, $permitidos);
+                if ($id > 0) {
+                    return $id;
+                }
+            }
+
+            return 0;
+        }
+
+        $texto = trim(strip_tags((string) $valor));
+        if ($texto === '' || ! preg_match_all('/\d+/', $texto, $matches)) {
+            return 0;
+        }
+
+        foreach ($matches[0] as $numero) {
+            $id = (int) $numero;
+            if ($id > 0 && isset($permitidos[$id])) {
+                return $id;
+            }
+        }
+
+        return 0;
+    }
+
+    private function idPlano(mixed $valor): int
+    {
+        if (is_array($valor)) {
+            if (isset($valor['id'])) {
+                return $this->idPlano($valor['id']);
+            }
+
+            return $this->idPlano($valor['users_id'] ?? $valor[0] ?? null);
+        }
+
+        if (is_int($valor) || (is_string($valor) && preg_match('/^\d+$/', trim($valor)))) {
+            $id = (int) $valor;
+
+            return $id > 0 ? $id : 0;
+        }
+
+        return 0;
+    }
+
+    private function esTipoAsignado(mixed $tipo): bool
+    {
+        if ($tipo === null || $tipo === '' || $tipo === false) {
+            return true;
+        }
+
+        if (is_numeric($tipo)) {
+            return (int) $tipo === self::TIPO_TECNICO_ASIGNADO;
+        }
+
+        $texto = mb_strtolower(trim(strip_tags((string) $tipo)));
+
+        return str_contains($texto, 'asign') || str_contains($texto, 'assign');
     }
 
     /**
@@ -725,7 +1000,8 @@ class GlpiTicketsTicService
     private function asegurarConfiguracion(): void
     {
         if (trim((string) config('glpi.base_url')) === '' || trim((string) config('glpi.user_token')) === '') {
-            throw new RuntimeException('GLPI no está configurado (GLPI_BASE_URL / GLPI_USER_TOKEN).');
+            Log::error('Tablero TIC: faltan GLPI_BASE_URL o GLPI_USER_TOKEN.');
+            throw new RuntimeException('GLPI no está configurado.');
         }
     }
 

@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\ScheduledTask;
+use App\Services\TaskSchedulerService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -57,11 +58,13 @@ abstract class BaseScheduledJob implements ShouldQueue
             return;
         }
 
-        // Verificar si la tarea fue cancelada
-        if ($task->status === ScheduledTask::STATUS_CANCELLED) {
-            Log::info("Task {$task->id} was cancelled, skipping execution");
+        // Verificar si la tarea fue cancelada o apagada
+        if ($task->status === ScheduledTask::STATUS_CANCELLED || ($task->is_recurring && !$task->is_active)) {
+            Log::info("Task {$task->id} was cancelled or inactive, skipping execution");
             return;
         }
+
+        $task->update(['job_id' => null]);
 
         try {
             // Marcar como iniciada
@@ -72,8 +75,14 @@ abstract class BaseScheduledJob implements ShouldQueue
             // Ejecutar la lógica específica del job
             $result = $this->execute($task);
 
-            // Marcar como completada
+            // Marcar como completada y, si es recurrente, encolar la siguiente
             $task->markAsCompleted($result);
+            $task->refresh();
+            $task->recordRun(ScheduledTask::STATUS_COMPLETED, is_string($result) ? $result : null);
+
+            if ($task->is_recurring && $task->is_active) {
+                app(TaskSchedulerService::class)->enqueueNextRecurringRun($task);
+            }
 
             Log::info("Completed scheduled task: {$task->name} (ID: {$task->id})");
 
@@ -85,8 +94,21 @@ abstract class BaseScheduledJob implements ShouldQueue
 
             // Marcar como fallida
             $task->markAsFailed($e->getMessage());
+            $task->refresh();
+            $task->recordRun(ScheduledTask::STATUS_FAILED, null, $e->getMessage());
 
-            // Re-lanzar la excepción para que Laravel maneje los reintentos
+            if ($task->is_recurring && $task->is_active) {
+                $keepStatus = ScheduledTask::STATUS_FAILED;
+                if (!$task->next_run_at || $task->next_run_at->lte(now())) {
+                    $task->calculateNextRun();
+                }
+                $task->update(['status' => $keepStatus]);
+                $task->refresh();
+                app(TaskSchedulerService::class)->enqueueNextRecurringRun($task);
+
+                return;
+            }
+
             throw $e;
         }
     }
@@ -118,6 +140,6 @@ abstract class BaseScheduledJob implements ShouldQueue
      */
     public function viaQueue(): string
     {
-        return config('scheduled-tasks.queue.default', 'scheduled-tasks');
+        return $this->queue ?: config('scheduled-tasks.queue.default', 'scheduled-tasks');
     }
 }

@@ -29,6 +29,36 @@ class EventServiceProvider extends ServiceProvider
         Event::listen(function (\SocialiteProviders\Manager\SocialiteWasCalled $event) {
             $event->extendSocialite('microsoft', \SocialiteProviders\Azure\Provider::class);
         });
+
+        Event::listen(function (\Illuminate\Queue\Events\Looping $event) {
+            $queue = (string) ($event->queue ?? '');
+            if (!str_contains($queue, 'scheduled-tasks')) {
+                return;
+            }
+
+            $directory = storage_path('framework');
+            if (!is_dir($directory)) {
+                return;
+            }
+
+            $safeQueue = preg_replace('/[^a-z0-9_-]/i', '_', $queue) ?: 'scheduled-tasks';
+            @file_put_contents(
+                $directory . DIRECTORY_SEPARATOR . 'scheduled-tasks-worker-' . $safeQueue . '.json',
+                json_encode(['beat' => now()->toIso8601String(), 'queue' => $queue])
+            );
+
+            static $lastCatchUp = 0;
+            if (time() - $lastCatchUp >= 30) {
+                $lastCatchUp = time();
+                try {
+                    app(\App\Services\TaskSchedulerService::class)->enqueueDueRecurringTasks();
+                } catch (\Throwable $exception) {
+                    \Illuminate\Support\Facades\Log::warning('No se pudieron reencolar tareas vencidas', [
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
+            }
+        });
     }
 
     /**

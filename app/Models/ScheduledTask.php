@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class ScheduledTask extends Model
 {
@@ -82,6 +83,108 @@ class ScheduledTask extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public function runs()
+    {
+        return $this->hasMany(ScheduledTaskRun::class)->orderByDesc('id');
+    }
+
+    /**
+     * Guarda la corrida que acaba de terminar y deja solo las últimas cinco.
+     */
+    public function recordRun(string $status, ?string $result = null, ?string $error = null): void
+    {
+        $completedAt = $this->completed_at ?? Carbon::now();
+        $duration = null;
+
+        if ($this->started_at && $completedAt->greaterThanOrEqualTo($this->started_at)) {
+            $duration = $this->started_at->diffInSeconds($completedAt);
+        }
+
+        ScheduledTaskRun::create([
+            'scheduled_task_id' => $this->id,
+            'status' => $status,
+            'started_at' => $this->started_at,
+            'completed_at' => $completedAt,
+            'duration_seconds' => $duration,
+            'result' => $result !== null ? mb_substr($result, 0, 2000) : null,
+            'error_message' => $error !== null ? mb_substr($error, 0, 2000) : null,
+        ]);
+
+        $keep = ScheduledTaskRun::where('scheduled_task_id', $this->id)
+            ->orderByDesc('id')
+            ->limit(5)
+            ->pluck('id');
+
+        ScheduledTaskRun::where('scheduled_task_id', $this->id)
+            ->whereNotIn('id', $keep)
+            ->delete();
+    }
+
+    private ?string $resolvedRunState = null;
+
+    public function runState(): string
+    {
+        if ($this->resolvedRunState !== null) {
+            return $this->resolvedRunState;
+        }
+        if ($this->is_recurring && !$this->is_active) {
+            return $this->resolvedRunState = 'paused';
+        }
+
+        if ($this->status === self::STATUS_CANCELLED) {
+            return $this->resolvedRunState = 'cancelled';
+        }
+
+        if ($this->status === self::STATUS_RUNNING) {
+            return $this->resolvedRunState = 'running';
+        }
+
+        if ($this->is_recurring && $this->is_active) {
+            $job = $this->job_id
+                ? DB::table('jobs')->where('id', $this->job_id)->first()
+                : null;
+
+            if ($job && $job->reserved_at) {
+                return $this->resolvedRunState = 'running';
+            }
+
+            if ($job) {
+                return $this->resolvedRunState = 'queued';
+            }
+
+            if ($this->next_run_at && $this->next_run_at->isPast()) {
+                return $this->resolvedRunState = 'due';
+            }
+
+            return $this->resolvedRunState = 'unscheduled';
+        }
+
+        if ($this->status === self::STATUS_FAILED) {
+            return $this->resolvedRunState = 'failed';
+        }
+
+        if ($this->status === self::STATUS_PENDING) {
+            return $this->resolvedRunState = 'pending';
+        }
+
+        return $this->resolvedRunState = 'done';
+    }
+
+    public function runStateLabel(): string
+    {
+        return match ($this->runState()) {
+            'paused' => 'Pausada',
+            'running' => 'En curso',
+            'failed' => 'Fallida',
+            'cancelled' => 'Cancelada',
+            'queued' => 'En cola',
+            'due' => 'Vencida, no encolada',
+            'unscheduled' => 'Sin encolar',
+            'pending' => 'Pendiente',
+            default => 'Última corrida',
+        };
+    }
+
     /**
      * Scope para tareas pendientes
      */
@@ -154,8 +257,14 @@ class ScheduledTask extends Model
         $this->update([
             'status' => self::STATUS_COMPLETED,
             'completed_at' => Carbon::now(),
+            'last_run_at' => Carbon::now(),
             'result' => $result,
         ]);
+
+        if ($this->is_recurring && $this->is_active) {
+            $this->calculateNextRun();
+            $this->update(['status' => self::STATUS_COMPLETED]);
+        }
     }
 
     /**
@@ -264,23 +373,23 @@ class ScheduledTask extends Model
 
         switch ($this->recurrence_type) {
             case self::RECURRENCE_EVERY_MINUTE:
-                $nextRun = $now->copy()->addMinute();
+                $nextRun = $this->proximaDesdeUltimoInicio($now, 1);
                 break;
 
             case self::RECURRENCE_EVERY_5_MINUTES:
-                $nextRun = $now->copy()->addMinutes(5);
+                $nextRun = $this->proximaDesdeUltimoInicio($now, 5);
                 break;
 
             case self::RECURRENCE_EVERY_15_MINUTES:
-                $nextRun = $now->copy()->addMinutes(15);
+                $nextRun = $this->proximaDesdeUltimoInicio($now, 15);
                 break;
 
             case self::RECURRENCE_EVERY_30_MINUTES:
-                $nextRun = $now->copy()->addMinutes(30);
+                $nextRun = $this->proximaDesdeUltimoInicio($now, 30);
                 break;
 
             case self::RECURRENCE_HOURLY:
-                $nextRun = $now->copy()->addHour();
+                $nextRun = $this->proximaDesdeUltimoInicio($now, 60);
                 break;
 
             case self::RECURRENCE_DAILY:
@@ -333,5 +442,21 @@ class ScheduledTask extends Model
                 'status' => self::STATUS_PENDING,
             ]);
         }
+    }
+
+    /**
+     * La siguiente corrida cuenta desde que empezó la última, no desde la cita vieja.
+     * Si esa hora ya pasó, sigue sumando el intervalo hasta quedar en el futuro.
+     */
+    private function proximaDesdeUltimoInicio(Carbon $now, int $minutes): Carbon
+    {
+        $anchor = $this->started_at ? $this->started_at->copy() : $now->copy();
+        $nextRun = $anchor->addMinutes($minutes);
+
+        while ($nextRun->lessThanOrEqualTo($now)) {
+            $nextRun->addMinutes($minutes);
+        }
+
+        return $nextRun;
     }
 }

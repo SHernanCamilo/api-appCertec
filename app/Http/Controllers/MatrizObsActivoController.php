@@ -93,6 +93,19 @@ class MatrizObsActivoController extends Controller
             $query->where(self::TABLA . '.id_sede', $request->sede_id);
         }
 
+        if ($request->filled('unidad_funcional_id')) {
+            MatrizObsActivoC::aplicarCoincidenciaUnidad($query, (int) $request->unidad_funcional_id, self::TABLA);
+        }
+
+        if ($request->boolean('sin_unidad') && $request->filled('sucursal_id')) {
+            MatrizObsActivoC::aplicarSinUnidadFuncional(
+                $query,
+                (int) $request->sucursal_id,
+                $request->filled('sede_id') ? (int) $request->sede_id : null,
+                self::TABLA
+            );
+        }
+
         if ($request->filled('agente')) {
             $query->where(self::TABLA . '.agente', 'like', '%' . $request->agente . '%');
         }
@@ -121,6 +134,180 @@ class MatrizObsActivoController extends Controller
             SUM(CASE WHEN {$col} > 0 AND {$col} < 60 THEN 1 ELSE 0 END) as potencialmente,
             SUM(CASE WHEN {$col} IS NULL OR {$col} = 0 THEN 1 ELSE 0 END) as obsoleto
         ";
+    }
+
+    /**
+     * Nivel de la gráfica de ubicación:
+     * empresa → sucursal → sede.
+     * Sin sede en la sucursal, o con sede ya elegida, el nivel es unidad funcional.
+     */
+    private function resolverAgrupacionUbicacion(Request $request, $user): string
+    {
+        if (!$request->filled('empresa_id')) {
+            return 'empresa';
+        }
+        if (!$request->filled('sucursal_id')) {
+            return 'sucursal';
+        }
+        if (!$request->filled('sede_id') && $this->sucursalTieneSede($request, $user)) {
+            return 'sede';
+        }
+
+        return 'unidad_funcional';
+    }
+
+    private function sucursalTieneSede(Request $request, $user): bool
+    {
+        $query = MatrizObsActivoC::query()->whereNotNull(self::TABLA . '.id_sede');
+        $this->aplicarFiltrosPermisos($query, $user);
+
+        if ($request->filled('empresa_id')) {
+            $query->where(self::TABLA . '.id_empresa', $request->empresa_id);
+        }
+        if ($request->filled('sucursal_id')) {
+            $query->where(self::TABLA . '.id_sucursal', $request->sucursal_id);
+        }
+
+        return $query->exists();
+    }
+
+    private function estadisticasPorNivelUbicacion(Request $request, $user, string $agrupacion)
+    {
+        if ($agrupacion === 'sede') {
+            $ubicacionExpr = "COALESCE(config_ubi_sede.nombre, 'Sin ubicación')";
+            $groupCols = [self::TABLA . '.id_empresa', self::TABLA . '.id_sucursal', self::TABLA . '.id_sede'];
+            $selectIds = self::TABLA . '.id_empresa as empresa_id, ' . self::TABLA . '.id_sucursal as sucursal_id, ' . self::TABLA . '.id_sede as sede_id';
+        } elseif ($agrupacion === 'sucursal') {
+            $ubicacionExpr = "CASE WHEN config_ubi_sucursales.nombre IS NOT NULL "
+                . "THEN CONCAT(COALESCE(ent_empresas.nombre, 'Sin empresa'), ' - ', config_ubi_sucursales.nombre) "
+                . "ELSE COALESCE(ent_empresas.nombre, 'Sin empresa') END";
+            $groupCols = [self::TABLA . '.id_empresa', self::TABLA . '.id_sucursal'];
+            $selectIds = self::TABLA . '.id_empresa as empresa_id, ' . self::TABLA . '.id_sucursal as sucursal_id';
+        } else {
+            $ubicacionExpr = "COALESCE(ent_empresas.nombre, 'Sin empresa')";
+            $groupCols = [self::TABLA . '.id_empresa'];
+            $selectIds = self::TABLA . '.id_empresa as empresa_id';
+        }
+
+        $query = MatrizObsActivoC::query()
+            ->leftJoin('ent_empresas', 'ent_empresas.id', '=', self::TABLA . '.id_empresa')
+            ->leftJoin('config_ubi_sucursales', 'config_ubi_sucursales.id', '=', self::TABLA . '.id_sucursal')
+            ->leftJoin('config_ubi_sede', 'config_ubi_sede.id', '=', self::TABLA . '.id_sede');
+        $this->aplicarFiltrosPermisos($query, $user);
+        $this->aplicarFiltrosRequest($query, $request);
+
+        return $query
+            ->selectRaw("{$selectIds}, {$ubicacionExpr} as ubicacion, " . $this->expresionesConteoPorEstado(self::TABLA . '.puntaje'))
+            ->groupBy(array_merge($groupCols, [DB::raw($ubicacionExpr)]))
+            ->orderByDesc('total')
+            ->get()
+            ->map(function ($row) use ($agrupacion) {
+                return [
+                    'ubicacion' => $row->ubicacion,
+                    'empresa_id' => $row->empresa_id !== null ? (int) $row->empresa_id : null,
+                    'sucursal_id' => ($agrupacion !== 'empresa' && isset($row->sucursal_id) && $row->sucursal_id !== null) ? (int) $row->sucursal_id : null,
+                    'sede_id' => ($agrupacion === 'sede' && isset($row->sede_id) && $row->sede_id !== null) ? (int) $row->sede_id : null,
+                    'unidad_funcional_id' => null,
+                    'sin_unidad' => false,
+                    'total' => (int) $row->total,
+                    'distribucion' => [
+                        'optimo' => (int) $row->optimo,
+                        'funcional' => (int) $row->funcional,
+                        'potencialmente' => (int) $row->potencialmente,
+                        'obsoleto' => (int) $row->obsoleto,
+                    ],
+                ];
+            })
+            ->values();
+    }
+
+    /**
+     * Desglose por unidad funcional cuando la sucursal no tiene sede
+     * o cuando la sede ya fue seleccionada.
+     */
+    private function estadisticasPorUnidadFuncional(Request $request, $user)
+    {
+        $sucursalId = (int) $request->sucursal_id;
+        $sedeId = $request->filled('sede_id') ? (int) $request->sede_id : null;
+
+        $unidadesQuery = DB::table('config_unidades_funcionales')
+            ->where('estado', 1)
+            ->where('id_sucursal', $sucursalId);
+
+        if ($sedeId) {
+            $unidadesQuery->where('id_sede', $sedeId);
+        } else {
+            $unidadesQuery->whereNull('id_sede');
+        }
+        if ($request->filled('unidad_funcional_id')) {
+            $unidadesQuery->where('id', (int) $request->unidad_funcional_id);
+        }
+
+        $unidades = $unidadesQuery->orderBy('nombre')->get(['id', 'nombre', 'id_empresa', 'id_sucursal', 'id_sede']);
+
+        $inner = MatrizObsActivoC::query();
+        $this->aplicarFiltrosPermisos($inner, $user);
+        $this->aplicarFiltrosRequest($inner, $request);
+        $inner->where(self::TABLA . '.id_sucursal', $sucursalId);
+        if ($sedeId) {
+            $inner->where(self::TABLA . '.id_sede', $sedeId);
+        } else {
+            $inner->whereNull(self::TABLA . '.id_sede');
+        }
+        $inner->select(DB::raw(
+            self::TABLA . '.puntaje as puntaje, ' . MatrizObsActivoC::sqlIdUnidadFuncional(self::TABLA) . ' as unidad_funcional_id'
+        ));
+
+        $conteos = DB::query()
+            ->fromSub($inner, 'matched')
+            ->selectRaw('unidad_funcional_id, ' . $this->expresionesConteoPorEstado('puntaje'))
+            ->groupBy('unidad_funcional_id')
+            ->get()
+            ->keyBy(fn ($row) => $row->unidad_funcional_id === null ? 'sin' : (string) $row->unidad_funcional_id);
+
+        $filas = $unidades->map(function ($uf) use ($conteos) {
+            $c = $conteos->get((string) $uf->id);
+
+            return [
+                'ubicacion' => $uf->nombre,
+                'empresa_id' => (int) $uf->id_empresa,
+                'sucursal_id' => (int) $uf->id_sucursal,
+                'sede_id' => $uf->id_sede !== null ? (int) $uf->id_sede : null,
+                'unidad_funcional_id' => (int) $uf->id,
+                'sin_unidad' => false,
+                'total' => (int) ($c->total ?? 0),
+                'distribucion' => [
+                    'optimo' => (int) ($c->optimo ?? 0),
+                    'funcional' => (int) ($c->funcional ?? 0),
+                    'potencialmente' => (int) ($c->potencialmente ?? 0),
+                    'obsoleto' => (int) ($c->obsoleto ?? 0),
+                ],
+            ];
+        });
+
+        $sin = $conteos->get('sin');
+        if ($sin && (int) $sin->total > 0 && !$request->filled('unidad_funcional_id')) {
+            $filas->push([
+                'ubicacion' => 'Sin unidad funcional',
+                'empresa_id' => $request->filled('empresa_id') ? (int) $request->empresa_id : null,
+                'sucursal_id' => $sucursalId,
+                'sede_id' => $sedeId,
+                'unidad_funcional_id' => null,
+                'sin_unidad' => true,
+                'total' => (int) $sin->total,
+                'distribucion' => [
+                    'optimo' => (int) $sin->optimo,
+                    'funcional' => (int) $sin->funcional,
+                    'potencialmente' => (int) $sin->potencialmente,
+                    'obsoleto' => (int) $sin->obsoleto,
+                ],
+            ]);
+        }
+
+        return $filas
+            ->filter(fn ($fila) => $fila['total'] > 0)
+            ->sortByDesc('total')
+            ->values();
     }
 
     /**
@@ -357,45 +544,16 @@ class MatrizObsActivoController extends Controller
                 ]);
 
             // ── Conteo por ubicación ────────────────────────────────────────
-            // Sin empresa seleccionada: agrupar por empresa.
-            // Con empresa seleccionada: agrupar por empresa + sucursal.
-            $agruparPorEmpresa = !$request->filled('empresa_id');
+            // empresa → sucursal → sede.
+            // Si la sucursal no tiene sede (ubicación), o ya hay sede elegida,
+            // el desglose pasa a unidades funcionales.
+            $agrupacion = $this->resolverAgrupacionUbicacion($request, $user);
 
-            if ($agruparPorEmpresa) {
-                $ubicacionExpr = "COALESCE(ent_empresas.nombre, 'Sin empresa')";
-                $groupCols     = [self::TABLA . '.id_empresa'];
-                $selectIds     = self::TABLA . '.id_empresa as empresa_id';
+            if ($agrupacion === 'unidad_funcional') {
+                $estadisticasPorUbicacion = $this->estadisticasPorUnidadFuncional($request, $user);
             } else {
-                $ubicacionExpr = "CASE WHEN config_ubi_sucursales.nombre IS NOT NULL "
-                    . "THEN CONCAT(COALESCE(ent_empresas.nombre, 'Sin empresa'), ' - ', config_ubi_sucursales.nombre) "
-                    . "ELSE COALESCE(ent_empresas.nombre, 'Sin empresa') END";
-                $groupCols     = [self::TABLA . '.id_empresa', self::TABLA . '.id_sucursal'];
-                $selectIds     = self::TABLA . '.id_empresa as empresa_id, ' . self::TABLA . '.id_sucursal as sucursal_id';
+                $estadisticasPorUbicacion = $this->estadisticasPorNivelUbicacion($request, $user, $agrupacion);
             }
-
-            $ubicacionQuery = MatrizObsActivoC::query()
-                ->leftJoin('ent_empresas', 'ent_empresas.id', '=', self::TABLA . '.id_empresa')
-                ->leftJoin('config_ubi_sucursales', 'config_ubi_sucursales.id', '=', self::TABLA . '.id_sucursal');
-            $this->aplicarFiltrosPermisos($ubicacionQuery, $user);
-            $this->aplicarFiltrosRequest($ubicacionQuery, $request);
-
-            $estadisticasPorUbicacion = $ubicacionQuery
-                ->selectRaw("{$selectIds}, {$ubicacionExpr} as ubicacion, " . $this->expresionesConteoPorEstado(self::TABLA . '.puntaje'))
-                ->groupBy(array_merge($groupCols, [DB::raw($ubicacionExpr)]))
-                ->orderByDesc('total')
-                ->get()
-                ->map(fn ($row) => [
-                    'ubicacion'    => $row->ubicacion,
-                    'empresa_id'   => $row->empresa_id !== null ? (int) $row->empresa_id : null,
-                    'sucursal_id'  => (!$agruparPorEmpresa && isset($row->sucursal_id) && $row->sucursal_id !== null) ? (int) $row->sucursal_id : null,
-                    'total'        => (int) $row->total,
-                    'distribucion' => [
-                        'optimo'         => (int) $row->optimo,
-                        'funcional'      => (int) $row->funcional,
-                        'potencialmente' => (int) $row->potencialmente,
-                        'obsoleto'       => (int) $row->obsoleto,
-                    ],
-                ]);
 
             return response()->json([
                 'success' => true,
@@ -404,6 +562,7 @@ class MatrizObsActivoController extends Controller
                     'estadisticas_por_estado'    => $estadisticasPorEstado,
                     'estadisticas_por_tipo'      => $estadisticasPorTipo,
                     'estadisticas_por_ubicacion' => $estadisticasPorUbicacion,
+                    'agrupacion'                 => $agrupacion,
                 ]
             ], 200);
 
@@ -421,7 +580,7 @@ class MatrizObsActivoController extends Controller
      * derivadas únicamente de los activos a los que el usuario tiene acceso.
      * Reemplaza la carga de todos los registros (per_page=9999) para llenar selects.
      *
-     * Parámetros: tipo=empresa|sucursal|sede, empresa_id?, sucursal_id?
+     * Parámetros: tipo=empresa|sucursal|sede|unidad_funcional, empresa_id?, sucursal_id?, sede_id?
      */
     public function opcionesFiltros(Request $request): JsonResponse
     {
@@ -451,6 +610,27 @@ class MatrizObsActivoController extends Controller
                     ->selectRaw(self::TABLA . '.id_sucursal as id, config_ubi_sucursales.nombre as nombre')
                     ->orderBy('nombre')
                     ->get();
+            } elseif ($tipo === 'unidad_funcional') {
+                // Sin sede (ubicación): unidades de la sucursal que no tienen sede.
+                // Con sede: unidades de esa sede.
+                $queryUf = DB::table('config_unidades_funcionales')
+                    ->where('estado', 1);
+
+                if ($request->filled('empresa_id')) {
+                    $queryUf->where('id_empresa', $request->empresa_id);
+                }
+                if ($request->filled('sucursal_id')) {
+                    $queryUf->where('id_sucursal', $request->sucursal_id);
+                }
+                if ($request->filled('sede_id')) {
+                    $queryUf->where('id_sede', $request->sede_id);
+                } else {
+                    $queryUf->whereNull('id_sede');
+                }
+
+                $data = $queryUf
+                    ->orderBy('nombre')
+                    ->get(['id', 'nombre']);
             } elseif ($tipo === 'sede') {
                 if ($request->filled('empresa_id')) {
                     $query->where(self::TABLA . '.id_empresa', $request->empresa_id);

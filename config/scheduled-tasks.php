@@ -13,12 +13,12 @@ return [
     'types' => [
         'sync_activos' => [
             'name' => 'Sincronización de Activos GLPI',
-            'description' => 'Sincroniza los activos desde GLPI hacia la base de datos local',
+            'description' => 'Sincroniza los activos de todas las empresas desde GLPI hacia la base de datos local',
             'job_class' => \App\Jobs\SyncActivosJob::class,
+            'queue' => 'scheduled-tasks-heavy',
             'max_attempts' => 3,
             'timeout' => 3600, // 1 hora
             'parameters' => [
-                'empresa_id' => 'integer|nullable',
                 'force_full_sync' => 'boolean',
             ],
         ],
@@ -64,6 +64,7 @@ return [
     */
     'queue' => [
         'default' => 'scheduled-tasks',
+        'heavy' => 'scheduled-tasks-heavy',
         'connection' => env('QUEUE_CONNECTION', 'database'),
     ],
 

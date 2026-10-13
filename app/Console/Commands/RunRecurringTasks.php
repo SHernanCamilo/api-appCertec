@@ -80,6 +80,11 @@ class RunRecurringTasks extends Command
                     ->where('id', '!=', $task->id)
                     ->exists();
 
+                if ($this->taskScheduler->hasQueuedJob($task)) {
+                    $this->line("   ⏭️  Omitida: la siguiente ejecución ya está en la cola");
+                    continue;
+                }
+
                 if ($runningInstance) {
                     $this->warn("   ⏭️  Omitida: Ya hay una instancia en ejecución");
                     Log::channel('glpi_sync')->warning("Tarea recurrente omitida por instancia en ejecución", [

@@ -22,7 +22,8 @@ Route::delete('/plantillas/{id}', [GlpiPlantillaController::class, 'destroy'])->
 Route::patch('/plantillas/{id}/toggle-estado', [GlpiPlantillaController::class, 'toggleEstado'])->whereNumber('id');
 Route::post('/plantillas/{id}/duplicar', [GlpiPlantillaController::class, 'duplicar'])->whereNumber('id');
 
-Route::get('/tablero-tic', [GlpiTicketsTicController::class, 'index']);
+Route::get('/tablero-tic', [GlpiTicketsTicController::class, 'index'])
+    ->middleware('check.permission:mesa-glpi-tablero-ver');
 
 Route::get('/validador/entidades', [GlpiValidadorController::class, 'entidades']);
 Route::post('/validador/comparar', [GlpiValidadorController::class, 'comparar']);

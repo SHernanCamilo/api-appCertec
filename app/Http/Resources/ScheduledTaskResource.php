@@ -42,6 +42,8 @@ class ScheduledTaskResource extends JsonResource
             'job_id' => $this->job_id,
             'is_recurring' => $this->is_recurring,
             'is_active' => $this->is_active,
+            'run_state' => $this->runState(),
+            'run_state_label' => $this->runStateLabel(),
             'recurrence_type' => $this->recurrence_type,
             'recurrence_type_label' => $this->getRecurrenceTypeLabel(),
             'recurrence_value' => $this->recurrence_value,
@@ -56,6 +58,21 @@ class ScheduledTaskResource extends JsonResource
             }),
             'created_at' => $this->created_at->toIso8601String(),
             'updated_at' => $this->updated_at->toIso8601String(),
+            'runs' => $this->whenLoaded('runs', function () {
+                return $this->runs->map(function ($run) {
+                    return [
+                        'id' => $run->id,
+                        'status' => $run->status,
+                        'status_label' => $run->status === 'completed' ? 'Completada' : 'Fallida',
+                        'started_at' => $run->started_at?->toIso8601String(),
+                        'completed_at' => $run->completed_at?->toIso8601String(),
+                        'duration_formatted' => $run->duration_seconds !== null
+                            ? $this->formatDuration((int) $run->duration_seconds)
+                            : null,
+                        'error_message' => $run->error_message,
+                    ];
+                })->values();
+            }),
         ];
     }
 

@@ -13,24 +13,33 @@ class SyncActivosJob extends BaseScheduledJob
      */
     public $timeout = 3600;
 
+    public function __construct($scheduledTaskId, array $parameters = [])
+    {
+        parent::__construct($scheduledTaskId, $parameters);
+        $this->onQueue(config('scheduled-tasks.types.sync_activos.queue', 'scheduled-tasks-heavy'));
+    }
+
     /**
      * Ejecutar la sincronización de activos
      */
     protected function execute(ScheduledTask $task)
     {
-        $empresaId = $this->parameters['empresa_id'] ?? null;
-        $forceFullSync = $this->parameters['force_full_sync'] ?? false;
+        $forceFullSync = filter_var($this->parameters['force_full_sync'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
         Log::info("Iniciando sincronización de activos GLPI", [
-            'empresa_id' => $empresaId,
+            'alcance' => 'todas_las_empresas',
             'force_full_sync' => $forceFullSync,
         ]);
 
-        // Llamar al comando existente de sincronización
-        $exitCode = Artisan::call('glpi:sync-activos', [
-            '--empresa' => $empresaId,
-            '--force' => $forceFullSync,
-        ]);
+        // El comando no filtra por empresa: cada activo toma empresa, sucursal y sede de su agente.
+        // Sincronización completa recorre todo GLPI y actualiza los que ya existen.
+        $options = [];
+        if ($forceFullSync) {
+            $options['--full-sync'] = true;
+            $options['--force'] = true;
+        }
+
+        $exitCode = Artisan::call('glpi:sync-activos', $options);
 
         $output = Artisan::output();
 

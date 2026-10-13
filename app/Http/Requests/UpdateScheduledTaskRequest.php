@@ -27,6 +27,8 @@ class UpdateScheduledTaskRequest extends FormRequest
             'description' => 'nullable|string|max:1000',
             'scheduled_at' => 'nullable|date',
             'parameters' => 'nullable|array',
+            'recurrence_type' => 'sometimes|nullable|string|max:50',
+            'recurrence_value' => 'sometimes|nullable|array',
         ];
     }
 

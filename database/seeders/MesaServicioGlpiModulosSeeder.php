@@ -75,9 +75,24 @@ class MesaServicioGlpiModulosSeeder extends Seeder
             ]
         );
 
+        $tablero = Modulo::updateOrCreate(
+            ['codigo' => 'MESA-GLPI-TABLERO'],
+            [
+                'id_modulo_padre' => $mesa->id,
+                'nombre' => 'Tablero TIC',
+                'descripcion' => 'Tickets abiertos de Nivel 1 Nacional y alerta ANS',
+                'icono' => 'bi bi-kanban',
+                'ruta' => '/mesaServicio/tableros/tic',
+                'orden' => 1,
+                'nivel' => 1,
+                'estado' => 1,
+            ]
+        );
+
         $this->command?->info("Módulo MESA listo (ID: {$mesa->id})");
         $this->command?->info("Módulo MESA-GLPI-PLANTILLA listo (ID: {$plantillas->id})");
         $this->command?->info("Módulo MESA-GLPI-VALIDADOR listo (ID: {$validador->id})");
+        $this->command?->info("Módulo MESA-GLPI-TABLERO listo (ID: {$tablero->id})");
 
         $empresaIds = ModuloEmpresa::where('activo', 1)
             ->pluck('id_empresa')
@@ -95,8 +110,8 @@ class MesaServicioGlpiModulosSeeder extends Seeder
                 continue;
             }
 
-            foreach ([$mesa, $parametrizador, $plantillas, $validador] as $modulo) {
-                $hereda = ! in_array($modulo->codigo, ['MESA-GLPI-PLANTILLA', 'MESA-GLPI-VALIDADOR'], true);
+            foreach ([$mesa, $parametrizador, $plantillas, $validador, $tablero] as $modulo) {
+                $hereda = ! in_array($modulo->codigo, ['MESA-GLPI-PLANTILLA', 'MESA-GLPI-VALIDADOR', 'MESA-GLPI-TABLERO'], true);
 
                 ModuloEmpresa::updateOrCreate(
                     ['id_modulo' => $modulo->id, 'id_empresa' => $empresa->id],
@@ -107,14 +122,18 @@ class MesaServicioGlpiModulosSeeder extends Seeder
             $this->command?->info("  Asignado a empresa: {$empresa->nombre}");
         }
 
-        $permisoIds = $this->crearPermisos($mesa, $parametrizador, $plantillas, $validador);
+        $permisoIds = $this->crearPermisos($mesa, $parametrizador, $plantillas, $validador, $tablero);
 
         $perfilPlantillas = $this->asegurarPerfil(
             $plantillas,
             'MESA-GLPI-PLT',
             'Gestión Plantillas GLPI',
             'Permite crear, consultar, editar y eliminar plantillas ANS de GLPI',
-            array_values(array_filter($permisoIds, fn ($item) => ! str_starts_with($item['codigo'], 'mesa-glpi-validador'))),
+            array_values(array_filter(
+                $permisoIds,
+                fn ($item) => ! str_starts_with($item['codigo'], 'mesa-glpi-validador')
+                    && ! str_starts_with($item['codigo'], 'mesa-glpi-tablero')
+            )),
         );
 
         $perfilValidador = $this->asegurarPerfil(
@@ -125,7 +144,19 @@ class MesaServicioGlpiModulosSeeder extends Seeder
             array_values(array_filter($permisoIds, fn ($item) => str_starts_with($item['codigo'], 'mesa-glpi-validador') || in_array($item['codigo'], ['mesa-visible', 'mesa-glpi-visible'], true))),
         );
 
-        $this->asignarPerfilesARoles([$perfilPlantillas->id, $perfilValidador->id]);
+        $perfilTablero = $this->asegurarPerfil(
+            $tablero,
+            'MESA-GLPI-TIC',
+            'Tablero TIC',
+            'Permite consultar los tickets abiertos de Nivel 1 Nacional',
+            array_values(array_filter(
+                $permisoIds,
+                fn ($item) => str_starts_with($item['codigo'], 'mesa-glpi-tablero')
+                    || $item['codigo'] === 'mesa-visible'
+            )),
+        );
+
+        $this->asignarPerfilesARoles([$perfilPlantillas->id, $perfilValidador->id, $perfilTablero->id]);
 
         app(SidebarService::class)->invalidateAllSidebarCache();
 
@@ -135,7 +166,7 @@ class MesaServicioGlpiModulosSeeder extends Seeder
     /**
      * @return list<array{id: int, codigo: string}>
      */
-    private function crearPermisos(Modulo $mesa, Modulo $parametrizador, Modulo $plantillas, Modulo $validador): array
+    private function crearPermisos(Modulo $mesa, Modulo $parametrizador, Modulo $plantillas, Modulo $validador, Modulo $tablero): array
     {
         $definiciones = [
             [
@@ -217,6 +248,22 @@ class MesaServicioGlpiModulosSeeder extends Seeder
                 'descripcion' => 'Permite comparar una plantilla contra una entidad de GLPI',
                 'tipo' => 'boton',
                 'orden' => 2,
+            ],
+            [
+                'id_modulo' => $tablero->id,
+                'nombre' => 'Visible Tablero TIC',
+                'codigo' => 'mesa-glpi-tablero-visible',
+                'descripcion' => 'Permite ver el Tablero TIC en el menú',
+                'tipo' => 'menu',
+                'orden' => 0,
+            ],
+            [
+                'id_modulo' => $tablero->id,
+                'nombre' => 'Ver Tablero TIC',
+                'codigo' => 'mesa-glpi-tablero-ver',
+                'descripcion' => 'Permite consultar los tickets abiertos de Nivel 1 Nacional',
+                'tipo' => 'accion',
+                'orden' => 1,
             ],
         ];
 

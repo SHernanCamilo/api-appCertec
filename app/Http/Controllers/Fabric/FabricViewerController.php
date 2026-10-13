@@ -475,6 +475,30 @@ class FabricViewerController extends Controller
      * Solo consulta el estado del parquet. NO lanza otra generación.
      * El polling cada 5s debe usar esto; POST /r2/warm solo al inicio.
      */
+    /** generated_at del .meta.json en Graph-Fabric/parquet_cache, o null. */
+    private function localParquetGeneratedAt(string $schema, string $view): ?string
+    {
+        $dir  = dirname(base_path()) . DIRECTORY_SEPARATOR . 'Graph-Fabric' . DIRECTORY_SEPARATOR . 'parquet_cache'
+            . DIRECTORY_SEPARATOR . $schema;
+        $meta = $dir . DIRECTORY_SEPARATOR . $view . '.meta.json';
+        if (is_file($meta)) {
+            $json = json_decode((string) file_get_contents($meta), true);
+            if (is_array($json)) {
+                $at = $json['generated_at'] ?? $json['last_modified'] ?? null;
+                if (is_string($at) && $at !== '') {
+                    return $at;
+                }
+            }
+        }
+
+        $parquet = $dir . DIRECTORY_SEPARATOR . $view . '.parquet';
+        if (!is_file($parquet)) {
+            return null;
+        }
+
+        return date('c', (int) filemtime($parquet));
+    }
+
     private function tryR2Status(string $schema, string $viewName): ?array
     {
         try {
@@ -883,23 +907,29 @@ class FabricViewerController extends Controller
         }
 
         $result = $this->tryR2Status($schema, $view);
+        $generatedAt = is_array($result)
+            ? ($result['generated_at'] ?? $result['last_generated'] ?? $result['last_modified'] ?? null)
+            : null;
+        $generatedAt = $generatedAt ?: $this->localParquetGeneratedAt($schema, $view);
 
         if ($result === null) {
             return response()->json([
-                'success'   => true,
-                'r2_status' => 'unavailable',
-                'message'   => 'R2 no disponible, use export stream.',
+                'success'      => true,
+                'r2_status'    => 'unavailable',
+                'message'      => 'R2 no disponible, use export stream.',
+                'generated_at' => $generatedAt,
             ]);
         }
 
         return response()->json([
-            'success'     => true,
-            'r2_status'   => $result['status'] ?? 'unknown',
-            'message'     => $result['message'] ?? '',
-            'estimated_s' => $result['estimated_s'] ?? null,
-            'row_count'   => $result['row_count'] ?? null,
-            'age_hours'   => $result['age_hours'] ?? null,
-            'size_mb'     => $result['size_mb'] ?? null,
+            'success'      => true,
+            'r2_status'    => $result['status'] ?? 'unknown',
+            'message'      => $result['message'] ?? '',
+            'estimated_s'  => $result['estimated_s'] ?? null,
+            'row_count'    => $result['row_count'] ?? null,
+            'age_hours'    => $result['age_hours'] ?? null,
+            'generated_at' => $generatedAt,
+            'size_mb'      => $result['size_mb'] ?? null,
         ]);
     }
 

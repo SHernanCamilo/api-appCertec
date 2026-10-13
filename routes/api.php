@@ -393,7 +393,7 @@ Route::middleware(['auth:api', 'check.user.active'])->prefix('glpi')->group(func
 });
 
 // ─── Rutas de Tareas Programadas (Task Scheduler) ────────────────────────────
-Route::middleware(['auth:api', 'check.user.active'])->prefix('v1')->group(function () {
+Route::middleware(['auth:api', 'check.user.active', 'check.permission:org-serv-tarea-ver'])->prefix('v1')->group(function () {
     // Rutas específicas (deben ir ANTES del apiResource)
     Route::get('scheduled-tasks/stats/dashboard', [App\Http\Controllers\Api\TaskSchedulerController::class, 'dashboardStats']);
     Route::get('scheduled-tasks/types', [App\Http\Controllers\Api\TaskSchedulerController::class, 'types']);
