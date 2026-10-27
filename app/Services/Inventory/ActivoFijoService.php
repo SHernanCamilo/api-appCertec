@@ -1245,72 +1245,156 @@ class ActivoFijoService
      *
      * @param  array<string, mixed> $filtros [localizacion?, tipo_inventario_id?, desde?, hasta?]
      */
-    public function exportarLocalidades(User $user, array $filtros = []): \Symfony\Component\HttpFoundation\StreamedResponse
+    public function exportarLocalidades(User $user, array $filtros = []): \Symfony\Component\HttpFoundation\BinaryFileResponse
     {
-        // Determinar el conjunto de localidades a exportar.
-        $localizacion = trim((string) ($filtros['localizacion'] ?? ''));
-        if ($localizacion !== '') {
-            $localidades = [$localizacion];
-            $sufijo = preg_replace('/[^A-Za-z0-9_\-]/', '', $localizacion) ?: 'localidad';
-        } else {
-            $lista = $this->localidadesLista($user)['data'] ?? [];
-            $localidades = array_map(fn ($l) => $l['localizacion'], $lista);
-            $sufijo = 'todas';
-        }
+        // "Exportar todas" puede abarcar el maestro completo (decenas de miles
+        // de activos). Usamos OpenSpout (streaming) para no agotar la memoria.
+        @set_time_limit(600);
 
-        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
-        $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle('Cobertura por localidad');
+        $localizacion = trim((string) ($filtros['localizacion'] ?? ''));
+        $sufijo = $localizacion !== ''
+            ? (preg_replace('/[^A-Za-z0-9_\-]/', '', $localizacion) ?: 'localidad')
+            : 'todas';
+        $filename = 'cobertura_localidad_' . $sufijo . '_' . now()->format('Y-m-d_His') . '.xlsx';
+
+        $rutaTmp = tempnam(sys_get_temp_dir(), 'cob_') . '.xlsx';
+        $this->escribirCoberturaSpout($rutaTmp, $user, $filtros, $localizacion);
+
+        return response()->download($rutaTmp, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+    }
+
+    /**
+     * Escribe la cobertura por localidad con OpenSpout (streaming).
+     *
+     * Para "todas" las localidades trae el maestro UNA sola vez (sin filtrar
+     * por localización) y cruza con las tomas en memoria, en lugar de consultar
+     * Fabric por cada localidad. Para una localidad concreta usa el filtro.
+     *
+     * @param  array<string, mixed> $filtros
+     */
+    private function escribirCoberturaSpout(string $ruta, User $user, array $filtros, string $localizacion): void
+    {
+        $headerStyle = (new \OpenSpout\Common\Entity\Style\Style())
+            ->setFontBold()
+            ->setFontColor(\OpenSpout\Common\Entity\Style\Color::WHITE)
+            ->setBackgroundColor('4472C4');
+
+        $writer = new \OpenSpout\Writer\XLSX\Writer();
+        $writer->openToFile($ruta);
+        $writer->getCurrentSheet()->setName('Cobertura por localidad');
 
         $headers = ['Localización', 'Placa', 'Artículo', 'Serie', 'Responsable', 'Sucursal', 'Estado (Indigo)', 'Inventariado', 'Tomas', 'Última toma'];
-        foreach ($headers as $i => $h) {
-            $sheet->setCellValue([$i + 1, 1], $h);
-        }
-        $sheet->getStyle([1, 1, count($headers), 1])->applyFromArray([
-            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
-            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
-        ]);
+        $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($headers, $headerStyle));
 
-        $row = 2;
-        $verde = 'E4F5EA';
-        $rojo  = 'FDE4E4';
-        foreach ($localidades as $loc) {
-            $res = $this->activosPorLocalidad($user, array_merge($filtros, ['localizacion' => $loc]));
-            $items = $res['data']['items'] ?? [];
-            foreach ($items as $it) {
-                $sheet->setCellValue([1, $row], $it['localizacion']);
-                $sheet->setCellValue([2, $row], $it['placa']);
-                $sheet->setCellValue([3, $row], $it['articulo']);
-                $sheet->setCellValue([4, $row], $it['serie']);
-                $sheet->setCellValue([5, $row], $it['responsable']);
-                $sheet->setCellValue([6, $row], $it['sucursal']);
-                $sheet->setCellValue([7, $row], $it['estado']);
-                $sheet->setCellValue([8, $row], $it['inventariado'] ? 'Sí' : 'FALTA');
-                $sheet->setCellValue([9, $row], $it['tomas']);
-                $sheet->setCellValue([10, $row], $it['ultima_toma'] ?? '');
+        // Mapa de tomas por placa (para marcar inventariado / # tomas / última).
+        $inventariadas = $this->tomasPorPlaca($filtros);
 
-                $sheet->getStyle([8, $row])->applyFromArray([
-                    'font' => ['bold' => true],
-                    'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
-                               'startColor' => ['rgb' => $it['inventariado'] ? $verde : $rojo]],
+        // Columnas del maestro de Indigo a traer.
+        $cols = ['Placa', 'Articulo', 'Serie', 'Responsable', 'Localizacion', 'Sucursal', 'EstadoActivo'];
+
+        // Filtro del maestro: por localización concreta, o todo si son "todas".
+        $filtroMaestro = $localizacion !== '' ? ['Localizacion' => $localizacion] : [];
+
+        // Traer el maestro paginado (chunks de 10k) y escribir cada fila.
+        $offset = 0;
+        do {
+            try {
+                $page = $this->parquet->filter(self::SCHEMA, self::VIEW, $filtroMaestro, self::PARQUET_PAGE, $offset, [
+                    'columns' => $cols,
+                    'count'   => false,
                 ]);
-                $row++;
+            } catch (\Throwable $e) {
+                Log::warning('ActivoFijoService: fallo paginando cobertura', ['error' => $e->getMessage()]);
+                break;
+            }
+
+            if (!($page['success'] ?? false)) {
+                break;
+            }
+
+            $lote = $page['value'] ?? [];
+            foreach ($lote as $fila) {
+                $placa = (string) ($fila['Placa'] ?? '');
+                $traz  = $inventariadas[$placa] ?? null;
+                $inv   = $traz !== null;
+
+                $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues([
+                    (string) ($fila['Localizacion'] ?? $fila['Localización'] ?? ''),
+                    $placa,
+                    (string) ($fila['Articulo'] ?? ''),
+                    (string) ($fila['Serie'] ?? ''),
+                    (string) ($fila['Responsable'] ?? ''),
+                    (string) ($fila['Sucursal'] ?? ''),
+                    (string) ($fila['EstadoActivo'] ?? ''),
+                    $inv ? 'Sí' : 'FALTA',
+                    $inv ? (int) $traz['tomas'] : 0,
+                    $inv ? ($traz['ultima_toma'] ?? '') : '',
+                ]));
+            }
+
+            $hayMas = ($page['has_next'] ?? false) && count($lote) === self::PARQUET_PAGE;
+            $offset += self::PARQUET_PAGE;
+        } while ($hayMas && $offset < 500000);
+
+        $writer->close();
+    }
+
+    /**
+     * Mapa placa => [tomas, ultima_toma] de inv_traz_activo, aplicando los
+     * mismos filtros de tipo/periodo que la cobertura.
+     *
+     * @param  array<string, mixed> $filtros
+     * @return array<string, array{tomas: int, ultima_toma: ?string}>
+     */
+    private function tomasPorPlaca(array $filtros): array
+    {
+        $query = TrazabilidadActivo::query()
+            ->where('es_externo', false)
+            ->select('placa')
+            ->selectRaw('MAX(created_at) as ultima_toma')
+            ->selectRaw('COUNT(*) as tomas')
+            ->groupBy('placa');
+
+        $tipoInventarioId = !empty($filtros['tipo_inventario_id']) ? (int) $filtros['tipo_inventario_id'] : null;
+        if ($tipoInventarioId !== null) {
+            $query->where('tipo_inventario_id', $tipoInventarioId);
+        }
+
+        $desde = $filtros['desde'] ?? null;
+        $hasta = $filtros['hasta'] ?? null;
+
+        // Sin fechas pero con tipo periódico → acotar al período vigente del tipo.
+        if (empty($desde) && empty($hasta) && $tipoInventarioId !== null) {
+            $tipo = TipoInventario::find($tipoInventarioId);
+            if ($tipo && ($tipo->periodicidad ?? 'ninguna') !== 'ninguna') {
+                [$rangoDesde, $rangoHasta] = $tipo->calcularRangoPeriodicidad(now());
+                $desde = $rangoDesde;
+                $hasta = $rangoHasta;
             }
         }
 
-        foreach (range(1, count($headers)) as $c) {
-            $sheet->getColumnDimensionByColumn($c)->setAutoSize(true);
+        if (!empty($desde)) {
+            $query->where('created_at', '>=', $desde instanceof \Carbon\CarbonInterface
+                ? $desde : \Carbon\Carbon::parse($desde)->startOfDay());
         }
-        $sheet->freezePane('A2');
+        if (!empty($hasta)) {
+            $query->where('created_at', '<=', $hasta instanceof \Carbon\CarbonInterface
+                ? $hasta : \Carbon\Carbon::parse($hasta)->endOfDay());
+        }
 
-        $filename = 'cobertura_localidad_' . $sufijo . '_' . now()->format('Y-m-d_His') . '.xlsx';
+        $mapa = [];
+        foreach ($query->get() as $r) {
+            $mapa[(string) $r->placa] = [
+                'tomas'       => (int) $r->tomas,
+                'ultima_toma' => $r->ultima_toma
+                    ? \Carbon\Carbon::parse($r->ultima_toma)->format('d/m/Y H:i')
+                    : null,
+            ];
+        }
 
-        return response()->streamDownload(function () use ($spreadsheet) {
-            (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet))->save('php://output');
-        }, $filename, [
-            'Content-Type'  => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'Cache-Control' => 'max-age=0',
-        ]);
+        return $mapa;
     }
 
     // =========================================================================

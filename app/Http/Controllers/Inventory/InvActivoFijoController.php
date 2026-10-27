@@ -420,7 +420,7 @@ class InvActivoFijoController extends Controller
      * GET /api/inventario/activos-fijos/localidades/exportar?localizacion=&tipo_inventario_id=&desde=&hasta=
      * Exporta la cobertura por localidad (una o todas) en Excel.
      */
-    public function exportarLocalidades(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse
+    public function exportarLocalidades(Request $request): \Symfony\Component\HttpFoundation\BinaryFileResponse
     {
         $request->validate([
             'localizacion'       => 'nullable|string|max:255',
