@@ -127,10 +127,15 @@ return [
                 'nice' => 10,         // Prioridad baja (no afectar API)
             ],
 
-            // Workers para sincronización (Indigo, GLPI, snapshots, etc.)
+            // Workers para sincronización (Indigo, GLPI, snapshots, tareas programadas, etc.)
+            //
+            // 'scheduled-tasks': los jobs que heredan de BaseScheduledJob se encolan
+            // ahí (SyncActivosJob, MantenimientoDbJob, CierreAutomaticoJob,
+            // EnvioReportesJob). Antes NINGÚN worker la escuchaba, así que esos jobs
+            // quedaban atascados en Redis sin ejecutarse jamás. Se agrega aquí.
             'sync-workers' => [
                 'connection' => 'redis',
-                'queue' => ['sync', 'snapshots'],
+                'queue' => ['sync', 'snapshots', 'scheduled-tasks'],
                 'balance' => 'simple',
                 'minProcesses' => 1,
                 'maxProcesses' => 1,  // Reducido de 2+2 a 1 — liberar RAM
@@ -146,7 +151,7 @@ return [
         'local' => [
             'default-workers' => [
                 'connection' => 'redis',
-                'queue' => ['default', 'sync', 'notifications', 'snapshots'],
+                'queue' => ['default', 'sync', 'notifications', 'snapshots', 'scheduled-tasks'],
                 'balance' => 'auto',
                 'minProcesses' => 1,
                 'maxProcesses' => 2,
