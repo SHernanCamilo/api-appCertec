@@ -780,74 +780,151 @@ class ActivoFijoService
      */
     private function escribirReporteSpout(string $ruta, array $filtros): void
     {
-        $headerStyle = (new \OpenSpout\Common\Entity\Style\Style())
-            ->setFontBold()
-            ->setFontColor(\OpenSpout\Common\Entity\Style\Color::WHITE)
-            ->setBackgroundColor('4472C4');
+        $Style = \OpenSpout\Common\Entity\Style\Style::class;
+        $Color = \OpenSpout\Common\Entity\Style\Color::class;
+        $Align = \OpenSpout\Common\Entity\Style\CellAlignment::class;
+        $Row   = \OpenSpout\Common\Entity\Row::class;
 
-        $writer = new \OpenSpout\Writer\XLSX\Writer();
+        // ── Estilos reutilizables ────────────────────────────────────────────
+        // Cabecera azul (encabezado principal / cabecera de cada activo).
+        $headerStyle = (new $Style())
+            ->setFontBold()
+            ->setFontColor($Color::WHITE)
+            ->setBackgroundColor('4472C4')
+            ->setCellAlignment($Align::LEFT)
+            ->setShouldWrapText(true);
+
+        // Fila de datos Indigo del activo (gris suave, en negrita).
+        $activoStyle = (new $Style())
+            ->setFontBold()
+            ->setBackgroundColor('E9EDF5');
+
+        // Sub-encabezado de las columnas de tomas (gris claro, itálica).
+        $subHeaderStyle = (new $Style())
+            ->setFontBold()
+            ->setFontItalic()
+            ->setFontSize(10)
+            ->setBackgroundColor('F2F4F8');
+
+        // ── Anchos de columna (Options) ──────────────────────────────────────
+        $options = new \OpenSpout\Writer\XLSX\Options();
+        // 10 columnas de la hoja 1 (bloques de tomas).
+        $anchos1 = [6, 18, 22, 16, 24, 26, 26, 16, 34, 22];
+        foreach ($anchos1 as $i => $w) {
+            $options->setColumnWidth((float) $w, $i + 1);
+        }
+
+        $writer = new \OpenSpout\Writer\XLSX\Writer($options);
         $writer->openToFile($ruta);
 
-        // ── Hoja 1: Historial por activo (una fila por cambio) ───────────────
+        // ── Hoja 1: Historial por activo (formato de bloques agrupado) ───────
+        // Por cada activo: una fila cabecera con sus datos de Indigo, debajo un
+        // sub-encabezado de tomas, y luego una línea por cada cambio de cada
+        // toma. Entre activos va una fila en blanco. Se arma acumulando las
+        // tomas de cada placa (streaming por chunks, orden placa+fecha).
         $hoja1 = $writer->getCurrentSheet();
         $hoja1->setName('Historial por activo');
 
-        $headers1 = [
+        // Encabezados de la cabecera del activo (fila azul superior de cada bloque).
+        $activoHeaders = [
             'Placa', 'Artículo', 'Serie', 'Código Art.',
             'Localización (Indigo)', 'Estado (Indigo)', 'Responsable (Indigo)', 'Sucursal (Indigo)',
-            'Fecha toma', 'Tipo inventario', 'Resultado',
+        ];
+        // Encabezados de las tomas (sub-encabezado de cada bloque).
+        $tomaHeaders = [
+            '#', 'Fecha toma', 'Tipo inventario', 'Resultado',
             'Campo', 'Valor anterior (Indigo)', 'Valor nuevo (novedad)',
             'Estado físico', 'Observación', 'Inventariador',
         ];
-        $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($headers1, $headerStyle));
 
+        // Escribe el bloque completo de un activo (sus tomas acumuladas).
+        $escribirBloque = function (array $tomas) use (
+            $writer, $Row, $headerStyle, $activoStyle, $subHeaderStyle, $activoHeaders, $tomaHeaders
+        ): void {
+            if ($tomas === []) {
+                return;
+            }
+            /** @var TrazabilidadActivo $primera */
+            $primera = $tomas[0];
+            $origen  = is_array($primera->valores_origen) ? $primera->valores_origen : [];
+
+            // Fila 1: encabezado de la cabecera del activo (azul).
+            $writer->addRow($Row::fromValues($activoHeaders, $headerStyle));
+
+            // Fila 2: datos de Indigo del activo (gris, negrita).
+            $writer->addRow($Row::fromValues([
+                (string) $primera->placa,
+                (string) ($primera->articulo_nombre ?? ''),
+                (string) ($primera->serie ?? ''),
+                (string) ($primera->articulo_codigo ?? ''),
+                (string) ($primera->localizacion_original ?? $this->valorSnapshot($origen, ['Localizacion', 'Ubicacion'])),
+                (string) $this->valorSnapshot($origen, ['EstadoActivo', 'Estado']),
+                (string) $this->valorSnapshot($origen, ['Responsable', 'NombreResponsable']),
+                (string) ($primera->sucursal_origen ?? $this->valorSnapshot($origen, ['Sucursal', 'Sede'])),
+            ], $activoStyle));
+
+            // Fila 3: sub-encabezado de tomas.
+            $writer->addRow($Row::fromValues($tomaHeaders, $subHeaderStyle));
+
+            // Filas de tomas: una por cada cambio; los datos comunes de la toma
+            // (#, fecha, tipo, resultado, estado físico, observación, usuario)
+            // solo en la primera fila de cada toma.
+            $indice = 1;
+            foreach ($tomas as $toma) {
+                /** @var TrazabilidadActivo $toma */
+                $comunes = [
+                    (string) $indice,
+                    (string) ($toma->created_at?->format('d/m/Y H:i') ?? ''),
+                    (string) ($toma->tipoInventario?->nombre ?? 'N/A'),
+                    $this->etiquetaResultado($toma->resultadoInventario()),
+                ];
+                $meta = [
+                    (string) ($toma->novedad_estado_fisico ?? ''),
+                    (string) ($toma->observacion ?? ''),
+                    (string) ($toma->registrador?->name ?? 'N/A'),
+                ];
+                $cambios = $toma->cambios();
+
+                if ($cambios === []) {
+                    $writer->addRow($Row::fromValues(array_merge($comunes, ['(sin cambios)', '', ''], $meta)));
+                } else {
+                    foreach ($cambios as $i => $cambio) {
+                        $base = $i === 0 ? $comunes : ['', '', '', ''];
+                        $metaFila = $i === 0 ? $meta : ['', '', ''];
+                        $writer->addRow($Row::fromValues(array_merge($base, [
+                            (string) ($cambio['etiqueta'] ?? ''),
+                            (string) ($cambio['anterior'] ?? ''),
+                            (string) ($cambio['nuevo'] ?? ''),
+                        ], $metaFila)));
+                    }
+                }
+                $indice++;
+            }
+
+            // Fila en blanco separadora entre activos.
+            $writer->addRow($Row::fromValues(['']));
+        };
+
+        // Recorrido en chunks acumulando por placa.
+        $placaActual = null;
+        $buffer = [];
         $this->construirQueryReporte($filtros)
             ->orderBy('placa')
             ->orderBy('created_at')
-            ->chunk(2000, function ($lote) use ($writer) {
+            ->chunk(2000, function ($lote) use (&$placaActual, &$buffer, $escribirBloque) {
                 foreach ($lote as $t) {
-                    /** @var TrazabilidadActivo $t */
-                    $origen = is_array($t->valores_origen) ? $t->valores_origen : [];
-                    $comunes = [
-                        (string) $t->placa,
-                        (string) ($t->articulo_nombre ?? ''),
-                        (string) ($t->serie ?? ''),
-                        (string) ($t->articulo_codigo ?? ''),
-                        (string) ($t->localizacion_original ?? $this->valorSnapshot($origen, ['Localizacion', 'Ubicacion'])),
-                        (string) $this->valorSnapshot($origen, ['EstadoActivo', 'Estado']),
-                        (string) $this->valorSnapshot($origen, ['Responsable', 'NombreResponsable']),
-                        (string) ($t->sucursal_origen ?? $this->valorSnapshot($origen, ['Sucursal', 'Sede'])),
-                        (string) ($t->created_at?->format('d/m/Y H:i') ?? ''),
-                        (string) ($t->tipoInventario?->nombre ?? 'N/A'),
-                        $this->etiquetaResultado($t->resultadoInventario()),
-                    ];
-
-                    $cambios = $t->cambios();
-                    if ($cambios === []) {
-                        // Toma sin cambios: una sola fila con el estado físico/observación.
-                        $fila = array_merge($comunes, [
-                            '(sin cambios)', '', '',
-                            (string) ($t->novedad_estado_fisico ?? ''),
-                            (string) ($t->observacion ?? ''),
-                            (string) ($t->registrador?->name ?? 'N/A'),
-                        ]);
-                        $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($fila));
-                    } else {
-                        // Una fila por cambio reportado.
-                        foreach ($cambios as $cambio) {
-                            $fila = array_merge($comunes, [
-                                (string) ($cambio['etiqueta'] ?? ''),
-                                (string) ($cambio['anterior'] ?? ''),
-                                (string) ($cambio['nuevo'] ?? ''),
-                                (string) ($t->novedad_estado_fisico ?? ''),
-                                (string) ($t->observacion ?? ''),
-                                (string) ($t->registrador?->name ?? 'N/A'),
-                            ]);
-                            $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($fila));
-                        }
+                    $placa = (string) $t->placa;
+                    if ($placaActual !== null && $placa !== $placaActual) {
+                        $escribirBloque($buffer);
+                        $buffer = [];
                     }
+                    $placaActual = $placa;
+                    $buffer[] = $t;
                 }
             });
+        if ($buffer !== []) {
+            $escribirBloque($buffer);
+        }
 
         // ── Hoja 2: Detalle de tomas (una fila por toma, Indigo vs Novedad) ──
         $hoja2 = $writer->addNewSheetAndMakeItCurrent();
@@ -871,12 +948,12 @@ class ActivoFijoService
             $headers2[] = "{$etiqueta} (Novedad)";
         }
         array_push($headers2, 'Tipo Inventario', 'Resultado', 'Observación', 'Inventariador', 'Fecha Toma');
-        $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($headers2, $headerStyle));
+        $writer->addRow($Row::fromValues($headers2, $headerStyle));
 
         $this->construirQueryReporte($filtros)
             ->orderBy('placa')
             ->orderBy('created_at')
-            ->chunk(2000, function ($lote) use ($writer, $camposComparables) {
+            ->chunk(2000, function ($lote) use ($writer, $Row, $camposComparables) {
                 foreach ($lote as $t) {
                     /** @var TrazabilidadActivo $t */
                     $esExterno = (bool) $t->es_externo;
@@ -898,7 +975,7 @@ class ActivoFijoService
                     $fila[] = (string) ($t->registrador?->name ?? 'N/A');
                     $fila[] = (string) ($t->created_at?->format('d/m/Y H:i') ?? '');
 
-                    $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($fila));
+                    $writer->addRow($Row::fromValues($fila));
                 }
             });
 
