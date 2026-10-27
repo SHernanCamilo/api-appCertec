@@ -806,11 +806,15 @@ class ActivoFijoService
             ->setFontSize(10)
             ->setBackgroundColor('F2F4F8');
 
-        // ── Anchos de columna (Options) ──────────────────────────────────────
+        // ── Anchos de columna (Options, globales a ambas hojas) ──────────────
+        // Las columnas 1-10 sirven a la hoja 1 (bloques de tomas). La hoja 2
+        // tiene 23 columnas; para las 11-23 damos un ancho uniforme legible.
         $options = new \OpenSpout\Writer\XLSX\Options();
-        // 10 columnas de la hoja 1 (bloques de tomas).
-        $anchos1 = [6, 18, 22, 16, 24, 26, 26, 16, 34, 22];
-        foreach ($anchos1 as $i => $w) {
+        $anchos = [18, 18, 22, 18, 20, 20, 24, 18, 22, 20]; // col 1-10
+        for ($cDef = 11; $cDef <= 24; $cDef++) {
+            $anchos[] = 18; // col 11-24 (hoja 2)
+        }
+        foreach ($anchos as $i => $w) {
             $options->setColumnWidth((float) $w, $i + 1);
         }
 
@@ -927,6 +931,8 @@ class ActivoFijoService
         }
 
         // ── Hoja 2: Detalle de tomas (una fila por toma, Indigo vs Novedad) ──
+        // Reabrimos el writer con las Options de la hoja 2 no es posible (las
+        // Options son globales); los anchos de la hoja 2 se dejan por defecto.
         $hoja2 = $writer->addNewSheetAndMakeItCurrent();
         $hoja2->setName('Detalle de tomas');
 
@@ -942,22 +948,41 @@ class ActivoFijoService
             'novedad_estado_fisico' => 'Estado Físico',
         ];
 
+        // Estilos de encabezado por columna: azul para Indigo, naranja para
+        // Novedad, azul oscuro para los metadatos. SIN wrap, para que la fila
+        // de encabezado no se agrande.
+        $hIndigo = (new $Style())->setFontBold()->setFontColor($Color::WHITE)->setBackgroundColor('5B7FB5');
+        $hNovedad = (new $Style())->setFontBold()->setFontColor($Color::WHITE)->setBackgroundColor('C55A11');
+        $hMeta = (new $Style())->setFontBold()->setFontColor($Color::WHITE)->setBackgroundColor('4472C4');
+
         $headers2 = [];
+        $estilos2 = [];
+        $c = 0;
         foreach ($camposComparables as $etiqueta) {
             $headers2[] = "{$etiqueta} (Indigo)";
+            $estilos2[$c++] = $hIndigo;
             $headers2[] = "{$etiqueta} (Novedad)";
+            $estilos2[$c++] = $hNovedad;
         }
-        array_push($headers2, 'Tipo Inventario', 'Resultado', 'Observación', 'Inventariador', 'Fecha Toma');
-        $writer->addRow($Row::fromValues($headers2, $headerStyle));
+        foreach (['Tipo Inventario', 'Resultado', 'Observación', 'Inventariador', 'Fecha Toma'] as $h) {
+            $headers2[] = $h;
+            $estilos2[$c++] = $hMeta;
+        }
+        $writer->addRow($Row::fromValuesWithStyles($headers2, null, $estilos2));
+
+        // Estilo para resaltar la celda de Novedad cuando difiere de Indigo.
+        $resaltado = (new $Style())->setFontBold()->setBackgroundColor('FFF3CD');
 
         $this->construirQueryReporte($filtros)
             ->orderBy('placa')
             ->orderBy('created_at')
-            ->chunk(2000, function ($lote) use ($writer, $Row, $camposComparables) {
+            ->chunk(2000, function ($lote) use ($writer, $Row, $camposComparables, $resaltado) {
                 foreach ($lote as $t) {
                     /** @var TrazabilidadActivo $t */
                     $esExterno = (bool) $t->es_externo;
                     $fila = [];
+                    $estilosFila = [];
+                    $col = 0;
                     foreach ($camposComparables as $campoNovedad => $etiqueta) {
                         if ($esExterno) {
                             $indigo = 'N/A';
@@ -966,8 +991,21 @@ class ActivoFijoService
                         } else {
                             $indigo = $t->valorOrigenDe($campoNovedad);
                         }
-                        $fila[] = (string) ($indigo ?? '');
-                        $fila[] = (string) ($this->valorNovedadCampo($t, $campoNovedad) ?? '');
+                        $indigo  = (string) ($indigo ?? '');
+                        $novedad = (string) ($this->valorNovedadCampo($t, $campoNovedad) ?? '');
+
+                        $fila[] = $indigo;
+                        $col++; // columna Indigo (sin estilo especial)
+
+                        $fila[] = $novedad;
+                        // Resaltar la celda de Novedad si difiere de Indigo (o es
+                        // externo con valor reportado).
+                        $difiere = $novedad !== '' &&
+                            ($esExterno || mb_strtolower(trim($novedad)) !== mb_strtolower(trim($indigo)));
+                        if ($difiere) {
+                            $estilosFila[$col] = $resaltado;
+                        }
+                        $col++;
                     }
                     $fila[] = (string) ($t->tipoInventario?->nombre ?? 'N/A');
                     $fila[] = $this->etiquetaResultado($t->resultadoInventario());
@@ -975,7 +1013,7 @@ class ActivoFijoService
                     $fila[] = (string) ($t->registrador?->name ?? 'N/A');
                     $fila[] = (string) ($t->created_at?->format('d/m/Y H:i') ?? '');
 
-                    $writer->addRow($Row::fromValues($fila));
+                    $writer->addRow($Row::fromValuesWithStyles($fila, null, $estilosFila));
                 }
             });
 
