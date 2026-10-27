@@ -203,7 +203,7 @@ class InvActivoFijoController extends Controller
      * Exporta la trazabilidad a XLSX con clasificación inventariado/pendiente.
      * Filtros opcionales: tipo_inventario_id, desde, hasta, estado_fisico, placa, es_externo.
      */
-    public function exportar(Request $request): \Symfony\Component\HttpFoundation\StreamedResponse
+    public function exportar(Request $request): \Symfony\Component\HttpFoundation\BinaryFileResponse
     {
         $filtros = $this->validarFiltrosReporte($request);
 
@@ -240,7 +240,7 @@ class InvActivoFijoController extends Controller
      * Exporta el historial (línea de tiempo) de UN activo concreto en Excel.
      * Acepta filtros opcionales de periodo (desde/hasta) y tipo de inventario.
      */
-    public function exportarHistorialActivo(Request $request, string $placa): \Symfony\Component\HttpFoundation\StreamedResponse
+    public function exportarHistorialActivo(Request $request, string $placa): \Symfony\Component\HttpFoundation\BinaryFileResponse
     {
         $request->validate([
             'tipo_inventario_id' => 'nullable|integer|exists:inv_tipos_inventario,id',

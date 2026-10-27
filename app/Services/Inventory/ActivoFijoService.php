@@ -747,343 +747,175 @@ class ActivoFijoService
      * @param  array<string, mixed> $filtros
      * @return \Symfony\Component\HttpFoundation\StreamedResponse
      */
-    public function exportarExcel(array $filtros = []): \Symfony\Component\HttpFoundation\StreamedResponse
+    public function exportarExcel(array $filtros = []): \Symfony\Component\HttpFoundation\BinaryFileResponse
     {
-        // Trae todas las tomas que cumplen los filtros (tipo de inventario,
-        // rango de fechas, responsable, etc.) y las agrupa por placa para armar
-        // el historial de cada activo.
-        $registros = $this->construirQueryReporte($filtros)
-            ->orderBy('placa')
-            ->orderBy('created_at')
-            ->get()
-            ->groupBy('placa');
-
-        $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
-
-        $this->construirHojaHistorial($spreadsheet->getActiveSheet(), $registros, $filtros);
-        $this->construirHojaDetalleTomas($spreadsheet->createSheet(), $registros);
-
-        $spreadsheet->setActiveSheetIndex(0);
+        // Para decenas de miles de filas usamos OpenSpout (escritura en
+        // streaming, memoria constante y mucho más rápido que PhpSpreadsheet,
+        // que con 22k+ filas agotaba memoria/tiempo).
+        @set_time_limit(600);
 
         $sufijo = !empty($filtros['placa_exacta'])
             ? preg_replace('/[^A-Za-z0-9_\-]/', '', (string) $filtros['placa_exacta'])
             : now()->format('Y-m-d_His');
         $filename = 'historial_activo_' . $sufijo . '.xlsx';
 
-        return response()->streamDownload(function () use ($spreadsheet) {
-            $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
-            $writer->save('php://output');
-        }, $filename, [
+        // Escribimos a un archivo temporal (OpenSpout necesita una ruta) y lo
+        // enviamos como descarga. El temporal se borra tras enviarlo.
+        $rutaTmp = tempnam(sys_get_temp_dir(), 'traz_') . '.xlsx';
+
+        $this->escribirReporteSpout($rutaTmp, $filtros);
+
+        return response()->download($rutaTmp, $filename, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'Cache-Control' => 'max-age=0',
-        ]);
+        ])->deleteFileAfterSend(true);
+    }
+
+    /**
+     * Escribe el reporte XLSX con OpenSpout (streaming). Dos hojas:
+     *   1) "Historial por activo": filas planas por cada cambio reportado
+     *      (o una fila "sin novedades" por toma que coincide con Indigo).
+     *   2) "Detalle de tomas": una fila por toma con columnas Indigo vs Novedad.
+     *
+     * @param  array<string, mixed> $filtros
+     */
+    private function escribirReporteSpout(string $ruta, array $filtros): void
+    {
+        $headerStyle = (new \OpenSpout\Common\Entity\Style\Style())
+            ->setFontBold()
+            ->setFontColor(\OpenSpout\Common\Entity\Style\Color::WHITE)
+            ->setBackgroundColor('4472C4');
+
+        $writer = new \OpenSpout\Writer\XLSX\Writer();
+        $writer->openToFile($ruta);
+
+        // ── Hoja 1: Historial por activo (una fila por cambio) ───────────────
+        $hoja1 = $writer->getCurrentSheet();
+        $hoja1->setName('Historial por activo');
+
+        $headers1 = [
+            'Placa', 'Artículo', 'Serie', 'Código Art.',
+            'Localización (Indigo)', 'Estado (Indigo)', 'Responsable (Indigo)', 'Sucursal (Indigo)',
+            'Fecha toma', 'Tipo inventario', 'Resultado',
+            'Campo', 'Valor anterior (Indigo)', 'Valor nuevo (novedad)',
+            'Estado físico', 'Observación', 'Inventariador',
+        ];
+        $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($headers1, $headerStyle));
+
+        $this->construirQueryReporte($filtros)
+            ->orderBy('placa')
+            ->orderBy('created_at')
+            ->chunk(2000, function ($lote) use ($writer) {
+                foreach ($lote as $t) {
+                    /** @var TrazabilidadActivo $t */
+                    $origen = is_array($t->valores_origen) ? $t->valores_origen : [];
+                    $comunes = [
+                        (string) $t->placa,
+                        (string) ($t->articulo_nombre ?? ''),
+                        (string) ($t->serie ?? ''),
+                        (string) ($t->articulo_codigo ?? ''),
+                        (string) ($t->localizacion_original ?? $this->valorSnapshot($origen, ['Localizacion', 'Ubicacion'])),
+                        (string) $this->valorSnapshot($origen, ['EstadoActivo', 'Estado']),
+                        (string) $this->valorSnapshot($origen, ['Responsable', 'NombreResponsable']),
+                        (string) ($t->sucursal_origen ?? $this->valorSnapshot($origen, ['Sucursal', 'Sede'])),
+                        (string) ($t->created_at?->format('d/m/Y H:i') ?? ''),
+                        (string) ($t->tipoInventario?->nombre ?? 'N/A'),
+                        $this->etiquetaResultado($t->resultadoInventario()),
+                    ];
+
+                    $cambios = $t->cambios();
+                    if ($cambios === []) {
+                        // Toma sin cambios: una sola fila con el estado físico/observación.
+                        $fila = array_merge($comunes, [
+                            '(sin cambios)', '', '',
+                            (string) ($t->novedad_estado_fisico ?? ''),
+                            (string) ($t->observacion ?? ''),
+                            (string) ($t->registrador?->name ?? 'N/A'),
+                        ]);
+                        $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($fila));
+                    } else {
+                        // Una fila por cambio reportado.
+                        foreach ($cambios as $cambio) {
+                            $fila = array_merge($comunes, [
+                                (string) ($cambio['etiqueta'] ?? ''),
+                                (string) ($cambio['anterior'] ?? ''),
+                                (string) ($cambio['nuevo'] ?? ''),
+                                (string) ($t->novedad_estado_fisico ?? ''),
+                                (string) ($t->observacion ?? ''),
+                                (string) ($t->registrador?->name ?? 'N/A'),
+                            ]);
+                            $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($fila));
+                        }
+                    }
+                }
+            });
+
+        // ── Hoja 2: Detalle de tomas (una fila por toma, Indigo vs Novedad) ──
+        $hoja2 = $writer->addNewSheetAndMakeItCurrent();
+        $hoja2->setName('Detalle de tomas');
+
+        $camposComparables = [
+            'novedad_placa'         => 'Placa',
+            'novedad_articulo'      => 'Artículo',
+            'novedad_marca'         => 'Marca',
+            'novedad_modelo'        => 'Modelo',
+            'novedad_serie'         => 'Serie',
+            'novedad_responsable'   => 'Responsable',
+            'novedad_localizacion'  => 'Localización',
+            'novedad_sucursal'      => 'Sucursal',
+            'novedad_estado_fisico' => 'Estado Físico',
+        ];
+
+        $headers2 = [];
+        foreach ($camposComparables as $etiqueta) {
+            $headers2[] = "{$etiqueta} (Indigo)";
+            $headers2[] = "{$etiqueta} (Novedad)";
+        }
+        array_push($headers2, 'Tipo Inventario', 'Resultado', 'Observación', 'Inventariador', 'Fecha Toma');
+        $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($headers2, $headerStyle));
+
+        $this->construirQueryReporte($filtros)
+            ->orderBy('placa')
+            ->orderBy('created_at')
+            ->chunk(2000, function ($lote) use ($writer, $camposComparables) {
+                foreach ($lote as $t) {
+                    /** @var TrazabilidadActivo $t */
+                    $esExterno = (bool) $t->es_externo;
+                    $fila = [];
+                    foreach ($camposComparables as $campoNovedad => $etiqueta) {
+                        if ($esExterno) {
+                            $indigo = 'N/A';
+                        } elseif ($campoNovedad === 'novedad_localizacion') {
+                            $indigo = $t->localizacion_original ?: $t->valorOrigenDe($campoNovedad);
+                        } else {
+                            $indigo = $t->valorOrigenDe($campoNovedad);
+                        }
+                        $fila[] = (string) ($indigo ?? '');
+                        $fila[] = (string) ($this->valorNovedadCampo($t, $campoNovedad) ?? '');
+                    }
+                    $fila[] = (string) ($t->tipoInventario?->nombre ?? 'N/A');
+                    $fila[] = $this->etiquetaResultado($t->resultadoInventario());
+                    $fila[] = (string) ($t->observacion ?? '');
+                    $fila[] = (string) ($t->registrador?->name ?? 'N/A');
+                    $fila[] = (string) ($t->created_at?->format('d/m/Y H:i') ?? '');
+
+                    $writer->addRow(\OpenSpout\Common\Entity\Row::fromValues($fila));
+                }
+            });
+
+        $writer->close();
     }
 
     /**
      * Exporta el historial (línea de tiempo) de UN activo concreto por placa.
      * Reutiliza el mismo Excel de historial filtrado a esa placa.
      */
-    public function exportarHistorialActivo(string $placa, array $filtros = []): \Symfony\Component\HttpFoundation\StreamedResponse
+    public function exportarHistorialActivo(string $placa, array $filtros = []): \Symfony\Component\HttpFoundation\BinaryFileResponse
     {
         // Coincidencia exacta de placa; conservar otros filtros opcionales (fechas, tipo).
         unset($filtros['placa']);
         $filtros['placa_exacta'] = $placa;
 
         return $this->exportarExcel($filtros);
-    }
-
-    /**
-     * Hoja 1 "Historial por activo": por cada activo una fila cabecera con la
-     * información principal + los valores ORIGINALES de la vista de Indigo, y
-     * debajo una fila por cada inventario (toma) con sus cambios anterior→nuevo.
-     *
-     * @param  \Illuminate\Support\Collection<string, \Illuminate\Support\Collection<int, TrazabilidadActivo>> $porPlaca
-     * @param  array<string, mixed> $filtros
-     */
-    private function construirHojaHistorial(
-        \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet,
-        \Illuminate\Support\Collection $porPlaca,
-        array $filtros
-    ): void {
-        $sheet->setTitle('Historial por activo');
-
-        $azul   = '4472C4';
-        $gris   = 'E9EDF5';
-        $blanco = 'FFFFFF';
-
-        // ── Título + contexto del filtro aplicado ────────────────────────
-        $sheet->setCellValue('A1', 'Historial de Inventario por Activo');
-        $sheet->mergeCells('A1:H1');
-        $sheet->getStyle('A1')->applyFromArray([
-            'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => $azul]],
-        ]);
-
-        $sheet->setCellValue('A2', $this->descripcionFiltros($filtros));
-        $sheet->mergeCells('A2:H2');
-        $sheet->getStyle('A2')->getFont()->setItalic(true)->getColor()->setRGB('666666');
-
-        $headers = [
-            'Placa', 'Artículo', 'Serie', 'Código Art.',
-            'Localización original (Indigo)', 'Estado (Indigo)',
-            'Responsable (Indigo)', 'Sucursal (Indigo)',
-        ];
-
-        $tomaHeaders = [
-            '#', 'Fecha toma', 'Tipo inventario', 'Resultado',
-            'Campo', 'Valor anterior (Indigo)', 'Valor nuevo (novedad)',
-            'Estado físico', 'Observación', 'Inventariador',
-        ];
-
-        $fila = 4;
-
-        foreach ($porPlaca as $placa => $tomas) {
-            /** @var TrazabilidadActivo $primera */
-            $primera = $tomas->first();
-            $origen  = is_array($primera->valores_origen) ? $primera->valores_origen : [];
-
-            // ── Cabecera del activo (información principal + Indigo) ──────
-            foreach ($headers as $i => $h) {
-                $sheet->setCellValue([$i + 1, $fila], $h);
-            }
-            $sheet->getStyle([1, $fila, count($headers), $fila])->applyFromArray([
-                'font' => ['bold' => true, 'color' => ['rgb' => $blanco]],
-                'fill' => [
-                    'fillType'   => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
-                    'startColor' => ['rgb' => $azul],
-                ],
-            ]);
-            $fila++;
-
-            $sheet->setCellValue([1, $fila], (string) $placa);
-            $sheet->setCellValue([2, $fila], $primera->articulo_nombre);
-            $sheet->setCellValue([3, $fila], $primera->serie);
-            $sheet->setCellValue([4, $fila], $primera->articulo_codigo);
-            $sheet->setCellValue([5, $fila], $primera->localizacion_original ?? $this->valorSnapshot($origen, ['Localizacion', 'Ubicacion']));
-            $sheet->setCellValue([6, $fila], $this->valorSnapshot($origen, ['EstadoActivo', 'Estado']));
-            $sheet->setCellValue([7, $fila], $this->valorSnapshot($origen, ['Responsable', 'NombreResponsable']));
-            $sheet->setCellValue([8, $fila], $primera->sucursal_origen ?? $this->valorSnapshot($origen, ['Sucursal', 'Sede']));
-            $sheet->getStyle([1, $fila, count($headers), $fila])->applyFromArray([
-                'font' => ['bold' => true],
-                'fill' => [
-                    'fillType'   => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
-                    'startColor' => ['rgb' => $gris],
-                ],
-            ]);
-            $fila++;
-
-            // ── Sub-encabezado de tomas ──────────────────────────────────
-            foreach ($tomaHeaders as $i => $h) {
-                $sheet->setCellValue([$i + 1, $fila], $h);
-            }
-            $sheet->getStyle([1, $fila, count($tomaHeaders), $fila])->applyFromArray([
-                'font' => ['bold' => true, 'italic' => true, 'size' => 9, 'color' => ['rgb' => '333333']],
-                'borders' => [
-                    'bottom' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN],
-                ],
-            ]);
-            $fila++;
-
-            // ── Línea de tiempo: una toma por bloque, en orden cronológico ───
-            // Los datos comunes (#, fecha, tipo, resultado, inventariador) se
-            // escriben solo en la primera fila del bloque; los cambios van
-            // debajo. Un borde superior separa visualmente cada toma.
-            $indice = 1;
-            foreach ($tomas as $toma) {
-                /** @var TrazabilidadActivo $toma */
-                $cambios   = $toma->cambios();
-                $filaInicio = $fila;
-
-                if ($cambios === []) {
-                    $this->escribirFilaToma($sheet, $fila, $indice, $toma, null, true);
-                    $fila++;
-                } else {
-                    foreach ($cambios as $pos => $cambio) {
-                        $this->escribirFilaToma($sheet, $fila, $indice, $toma, $cambio, $pos === 0);
-                        $fila++;
-                    }
-                }
-
-                // Borde superior en toda la fila inicial del bloque = separador de tomas
-                $sheet->getStyle([1, $filaInicio, count($tomaHeaders), $filaInicio])
-                    ->getBorders()->getTop()
-                    ->setBorderStyle(\PhpOffice\PhpSpreadsheet\Style\Border::BORDER_HAIR);
-
-                $indice++;
-            }
-
-            // Fila en blanco separadora entre activos
-            $fila++;
-        }
-
-        if ($porPlaca->isEmpty()) {
-            $sheet->setCellValue('A4', 'No hay registros para los filtros seleccionados.');
-            $sheet->getStyle('A4')->getFont()->setItalic(true)->getColor()->setRGB('999999');
-        }
-
-        foreach (range(1, count($tomaHeaders)) as $col) {
-            $sheet->getColumnDimensionByColumn($col)->setAutoSize(true);
-        }
-        $sheet->freezePane('A4');
-    }
-
-    /**
-     * Escribe una fila de toma. Si $cambio es null, es una toma sin cambios de
-     * campo (se muestran solo los datos comunes de la toma).
-     *
-     * @param  array{campo: string, etiqueta: string, anterior: ?string, nuevo: string}|null $cambio
-     */
-    private function escribirFilaToma(
-        \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet,
-        int $fila,
-        int $indice,
-        TrazabilidadActivo $toma,
-        ?array $cambio,
-        bool $esPrimeraDelGrupo = true
-    ): void {
-        // Datos comunes de la toma: solo en la primera fila del bloque para que
-        // se lea como una línea de tiempo (evita repetir fecha/tipo por cada cambio).
-        if ($esPrimeraDelGrupo) {
-            $sheet->setCellValue([1, $fila], $indice);
-            $sheet->setCellValue([2, $fila], $toma->created_at?->format('d/m/Y H:i'));
-            $sheet->setCellValue([3, $fila], $toma->tipoInventario?->nombre ?? 'N/A');
-            $sheet->setCellValue([4, $fila], $this->etiquetaResultado($toma->resultadoInventario()));
-            $sheet->setCellValue([9, $fila], $toma->observacion);
-            $sheet->setCellValue([10, $fila], $toma->registrador?->name ?? 'N/A');
-        }
-
-        // Los cambios (campo / anterior / nuevo) y el estado físico van en cada fila.
-        $sheet->setCellValue([5, $fila], $cambio['etiqueta'] ?? '(sin cambios)');
-        $sheet->setCellValue([6, $fila], $cambio['anterior'] ?? '');
-        $sheet->setCellValue([7, $fila], $cambio['nuevo'] ?? '');
-        $sheet->setCellValue([8, $fila], $toma->novedad_estado_fisico);
-    }
-
-    /**
-     * Hoja 2 "Detalle de tomas": una fila plana por toma (formato clásico) para
-     * quien prefiera tabla dinámica / filtros de Excel.
-     *
-     * @param  \Illuminate\Support\Collection<string, \Illuminate\Support\Collection<int, TrazabilidadActivo>> $porPlaca
-     */
-    private function construirHojaDetalleTomas(
-        \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet,
-        \Illuminate\Support\Collection $porPlaca
-    ): void {
-        $sheet->setTitle('Detalle de tomas');
-
-        $azul   = '4472C4';
-        $azulInd = '5B7FB5'; // columna Indigo (referencia)
-        $naranja = 'C55A11'; // columna Novedad (lo reportado)
-        $blanco = 'FFFFFF';
-
-        // Campos comparables Indigo vs Novedad. clave = columna de novedad.
-        $camposComparables = [
-            'novedad_placa'          => 'Placa',
-            'novedad_articulo'       => 'Artículo',
-            'novedad_marca'          => 'Marca',
-            'novedad_modelo'         => 'Modelo',
-            'novedad_serie'          => 'Serie',
-            'novedad_responsable'    => 'Responsable',
-            'novedad_localizacion'   => 'Localización',
-            'novedad_sucursal'       => 'Sucursal',
-            'novedad_estado_fisico'  => 'Estado Físico',
-        ];
-
-        // ── Encabezado de UNA SOLA FILA (para que el autofiltro de Excel ────
-        // funcione por cada columna). Cada campo genera dos columnas:
-        // "Campo (Indigo)" y "Campo (Novedad)".
-        $col = 1;
-        $colIndigo  = []; // columnas de tipo Indigo (para estilo)
-        $colNovedad = []; // columnas de tipo Novedad (para estilo)
-        foreach ($camposComparables as $etiqueta) {
-            $sheet->setCellValue([$col, 1], "{$etiqueta} (Indigo)");
-            $colIndigo[] = $col;
-            $sheet->setCellValue([$col + 1, 1], "{$etiqueta} (Novedad)");
-            $colNovedad[] = $col + 1;
-            $col += 2;
-        }
-        // Metadatos al final
-        foreach (['Tipo Inventario', 'Resultado', 'Observación', 'Inventariador', 'Fecha Toma'] as $h) {
-            $sheet->setCellValue([$col, 1], $h);
-            $col++;
-        }
-        $colFin = $col - 1;
-
-        // Estilo base del encabezado
-        $sheet->getStyle([1, 1, $colFin, 1])->applyFromArray([
-            'font'      => ['bold' => true, 'color' => ['rgb' => $blanco]],
-            'fill'      => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => $azul]],
-            'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER, 'wrapText' => true],
-        ]);
-        // Diferenciar por color: Indigo (azul) vs Novedad (naranja)
-        foreach ($colIndigo as $c) {
-            $sheet->getStyle([$c, 1, $c, 1])->getFill()
-                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-                ->getStartColor()->setRGB($azulInd);
-        }
-        foreach ($colNovedad as $c) {
-            $sheet->getStyle([$c, 1, $c, 1])->getFill()
-                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-                ->getStartColor()->setRGB($naranja);
-        }
-
-        // ── Datos: una fila por cada toma (toda la trazabilidad, sin agrupar) ──
-        $amarillo = 'FFF3CD'; // resalta la celda de novedad cuando hubo cambio
-        $row = 2;
-        foreach ($porPlaca as $tomas) {
-            foreach ($tomas as $t) {
-                /** @var TrazabilidadActivo $t */
-                $esExterno = (bool) $t->es_externo;
-                $col = 1;
-                foreach ($camposComparables as $campoNovedad => $etiqueta) {
-                    // Valor de Indigo: los externos NO existen en Indigo → N/A.
-                    if ($esExterno) {
-                        $indigo = 'N/A';
-                    } elseif ($campoNovedad === 'novedad_localizacion') {
-                        $indigo = $t->localizacion_original ?: $t->valorOrigenDe($campoNovedad);
-                    } else {
-                        $indigo = $t->valorOrigenDe($campoNovedad);
-                    }
-
-                    // Valor de Novedad: para externos, placa/artículo/serie viven en
-                    // columnas base (placa, articulo_nombre, serie), no en novedad_*.
-                    $novedad = $this->valorNovedadCampo($t, $campoNovedad);
-
-                    $sheet->setCellValueExplicit([$col, $row], (string) ($indigo ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-                    $sheet->setCellValueExplicit([$col + 1, $row], (string) ($novedad ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-
-                    // Resaltar la celda de novedad cuando difiere de Indigo (o es externo con valor).
-                    $difiere = $novedad !== null && trim((string) $novedad) !== ''
-                        && ($esExterno || mb_strtolower(trim((string) $novedad)) !== mb_strtolower(trim((string) ($indigo ?? ''))));
-                    if ($difiere) {
-                        $sheet->getStyle([$col + 1, $row])->applyFromArray([
-                            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => $amarillo]],
-                            'font' => ['bold' => true],
-                        ]);
-                    }
-                    $col += 2;
-                }
-
-                // Metadatos
-                $sheet->setCellValue([$col++, $row], $t->tipoInventario?->nombre ?? 'N/A');
-                $sheet->setCellValue([$col++, $row], $this->etiquetaResultado($t->resultadoInventario()));
-                $sheet->setCellValueExplicit([$col++, $row], (string) ($t->observacion ?? ''), \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
-                $sheet->setCellValue([$col++, $row], $t->registrador?->name ?? 'N/A');
-                $sheet->setCellValue([$col++, $row], $t->created_at?->format('d/m/Y H:i'));
-
-                $row++;
-            }
-        }
-
-        // Autofiltro sobre TODO el rango (encabezado de una fila = filtrable por columna)
-        $ultimaCol = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($colFin);
-        $ultimaFila = max(1, $row - 1);
-        $sheet->setAutoFilter("A1:{$ultimaCol}{$ultimaFila}");
-
-        foreach (range(1, $colFin) as $c) {
-            $sheet->getColumnDimensionByColumn($c)->setAutoSize(true);
-        }
-        // Congelar la fila de encabezado
-        $sheet->freezePane('A2');
     }
 
     /**
