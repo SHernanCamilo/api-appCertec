@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Fabric;
 
 use App\Http\Controllers\Controller;
+use App\Models\BiGrupo;
 use App\Models\BiParquetConfig;
+use App\Models\BiVista;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -23,6 +25,9 @@ class BiParquetConfigController extends Controller
 {
     /**
      * Lista todas las configuraciones de parquet.
+     * Enriquece cada entrada con el campo `bi_vista_estado` (activo/mantenimiento/inactivo)
+     * tomado de bi_vistas, para que el frontend pueda advertir cuando un parquet
+     * habilitado corresponde a una vista inactiva.
      */
     public function index(): JsonResponse
     {
@@ -31,11 +36,48 @@ class BiParquetConfigController extends Controller
             ->orderBy('view_name')
             ->get();
 
+        // Construir índice de estados: "schema.viewname" => estado
+        $estadoIndex = $this->buildVistaEstadoIndex();
+
+        $data = $configs->map(function (BiParquetConfig $config) use ($estadoIndex) {
+            $key   = $config->schema_name . '.' . strtolower($config->view_name);
+            $arr   = $config->toArray();
+            $arr['bi_vista_estado'] = $estadoIndex[$key] ?? null; // null = no registrada en bi_vistas
+            return $arr;
+        });
+
         return response()->json([
             'success' => true,
-            'data'    => $configs,
+            'data'    => $data,
             'total'   => $configs->count(),
         ]);
+    }
+
+    /**
+     * Construye un índice "schema.viewname" => estado desde bi_vistas + bi_grupos.
+     * Solo carga vistas con estado != 'activo' para mantener la consulta liviana.
+     *
+     * @return array<string, string>
+     */
+    private function buildVistaEstadoIndex(): array
+    {
+        $index = [];
+
+        BiVista::query()
+            ->with('grupo:id,codigo')
+            ->get(['id', 'id_bi_grupos', 'nombre', 'estado'])
+            ->each(function (BiVista $vista) use (&$index): void {
+                $codigo = $vista->grupo?->codigo ?? '';
+                $parts  = explode('-', strtoupper(trim($codigo)));
+                $schema = count($parts) >= 3 ? strtolower($parts[2]) : strtolower($parts[0] ?? '');
+                if ($schema === '') {
+                    return;
+                }
+                $key         = $schema . '.' . strtolower(trim($vista->nombre));
+                $index[$key] = $vista->estado;
+            });
+
+        return $index;
     }
 
     /**
