@@ -44,6 +44,61 @@ class BiVista extends Model
 
         static::saved($clearCaches);
         static::deleted($clearCaches);
+
+        // Cuando una vista pasa a inactivo → deshabilitar su parquet automáticamente.
+        // Cuando vuelve a activo/mantenimiento → re-habilitar si existía la config.
+        static::updated(function (BiVista $vista): void {
+            // Solo actuar si cambió el campo estado
+            if (! $vista->wasChanged('estado')) {
+                return;
+            }
+
+            $schema = self::resolveSchemaFromVista($vista);
+            if ($schema === '') {
+                return;
+            }
+
+            $config = \App\Models\BiParquetConfig::forView($schema, $vista->nombre)->first();
+            if (! $config) {
+                return;
+            }
+
+            if ($vista->estado === self::ESTADO_INACTIVO) {
+                // Desactivar parquet: la próxima sync lo eliminará de Graph-Fabric
+                $config->update(['enabled' => false]);
+
+                \Illuminate\Support\Facades\Log::info('[BiVista] Parquet deshabilitado por inactivación', [
+                    'vista'  => "{$schema}.{$vista->nombre}",
+                    'estado' => $vista->estado,
+                ]);
+            } elseif (! $config->enabled) {
+                // Si vuelve a activo o mantenimiento y estaba desactivado → re-habilitar
+                $config->update(['enabled' => true]);
+
+                \Illuminate\Support\Facades\Log::info('[BiVista] Parquet re-habilitado por reactivación', [
+                    'vista'  => "{$schema}.{$vista->nombre}",
+                    'estado' => $vista->estado,
+                ]);
+            }
+        });
+    }
+
+    /**
+     * Resuelve el schema_name (para bi_parquet_config) a partir del grupo de esta vista.
+     * "GG-BD-IN" → "in",  "IN" → "in",  sin grupo → ""
+     */
+    private static function resolveSchemaFromVista(self $vista): string
+    {
+        // Cargar grupo si no está ya cargado
+        $grupo = $vista->relationLoaded('grupo') ? $vista->grupo : $vista->grupo()->first(['id', 'codigo']);
+        if ($grupo === null) {
+            return '';
+        }
+
+        $parts  = explode('-', strtoupper(trim($grupo->codigo)));
+        $schema = count($parts) >= 3 ? $parts[2] : $parts[0];
+
+        return strtolower($schema);
     }
 
     // =========================================================================

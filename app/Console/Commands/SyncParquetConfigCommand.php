@@ -2,7 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\Models\BiGrupo;
 use App\Models\BiParquetConfig;
+use App\Models\BiVista;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -14,11 +16,16 @@ use Illuminate\Support\Facades\Log;
  * siempre tiene la misma configuracion que Laravel (por si se reinicio,
  * perdio su schedule.db, o alguien cambio algo manualmente).
  *
+ * IMPORTANTE: Solo se sincronizan vistas que estén habilitadas en bi_parquet_config
+ * Y cuyo estado en bi_vistas sea "activo" o "mantenimiento" (no "inactivo").
+ * Si una vista está inactiva en bi_vistas, se deshabilita automáticamente en
+ * bi_parquet_config y se elimina del schedule de Graph-Fabric.
+ *
  * Usage:
  *   php artisan fabric:sync-parquet-config
  *
  * En el Kernel.php:
- *   $schedule->command('fabric:sync-parquet-config')->everyFiveMinutes();
+ *   $schedule->command('fabric:sync-parquet-config')->everyThirtyMinutes();
  */
 class SyncParquetConfigCommand extends Command
 {
@@ -34,6 +41,18 @@ class SyncParquetConfigCommand extends Command
             return $this->showStatus($baseUrl, $token);
         }
 
+        // ── Paso 1: Deshabilitar en bi_parquet_config las vistas inactivas en bi_vistas ──
+        // Construir índice: "schema.viewname" => estado (de bi_vistas)
+        $estadoIndex = $this->buildEstadoIndex();
+        $autoDisabled = $this->disableInactiveConfigs($baseUrl, $token, $estadoIndex);
+        if ($autoDisabled > 0) {
+            $this->warn("  {$autoDisabled} vistas desactivadas en bi_parquet_config (inactivas en bi_vistas).");
+            Log::info('[SyncParquetConfig] Vistas inactivas deshabilitadas del scheduler', [
+                'count' => $autoDisabled,
+            ]);
+        }
+
+        // ── Paso 2: Sincronizar solo las que quedan habilitadas ──
         $configs = BiParquetConfig::enabled()->get();
 
         if ($configs->isEmpty()) {
@@ -87,6 +106,103 @@ class SyncParquetConfigCommand extends Command
         }
 
         return $failed > 0 ? 1 : 0;
+    }
+
+    // =========================================================================
+    // PRIVATE — Sincronización de estado bi_vistas → bi_parquet_config
+    // =========================================================================
+
+    /**
+     * Construye un índice "schema.viewname" => estado desde bi_vistas + bi_grupos.
+     * Solo registra vistas con estado "inactivo" (las que hay que bloquear).
+     *
+     * El schema se deriva del código del grupo:
+     *   "GG-BD-IN" → "in"
+     *   "IN"       → "in"
+     *
+     * @return array<string, string>  e.g. ["in.vw_medicalfees_proporcion_de" => "inactivo"]
+     */
+    private function buildEstadoIndex(): array
+    {
+        $index = [];
+
+        BiVista::query()
+            ->where('estado', BiVista::ESTADO_INACTIVO)
+            ->with('grupo:id,codigo')
+            ->get(['id', 'id_bi_grupos', 'nombre', 'estado'])
+            ->each(function (BiVista $vista) use (&$index): void {
+                $codigo = $vista->grupo?->codigo ?? '';
+                $schema = $this->schemaFromCodigo($codigo);
+                if ($schema === '') {
+                    return;
+                }
+                $key         = $schema . '.' . strtolower(trim($vista->nombre));
+                $index[$key] = $vista->estado;
+            });
+
+        return $index;
+    }
+
+    /**
+     * Extrae el schema corto de un código de grupo.
+     * "GG-BD-IN" → "in",  "IN" → "in",  "" → ""
+     */
+    private function schemaFromCodigo(string $codigo): string
+    {
+        $parts  = explode('-', strtoupper(trim($codigo)));
+        // Si viene como GG-BD-XX → parts = [GG, BD, XX]
+        $schema = count($parts) >= 3 ? $parts[2] : $parts[0];
+
+        return strtolower($schema);
+    }
+
+    /**
+     * Deshabilita en bi_parquet_config todas las entradas cuya vista
+     * aparece como "inactivo" en bi_vistas, y las elimina del schedule
+     * de Graph-Fabric vía DELETE /api/r2/schedule.
+     *
+     * @param  array<string, string>  $estadoIndex
+     */
+    private function disableInactiveConfigs(string $baseUrl, string $token, array $estadoIndex): int
+    {
+        if (empty($estadoIndex)) {
+            return 0;
+        }
+
+        $disabled = 0;
+
+        // Traer solo las configs que están habilitadas y cuya key (schema.view) aparece como inactiva
+        BiParquetConfig::enabled()->get()->each(function (BiParquetConfig $config) use (
+            $baseUrl, $token, $estadoIndex, &$disabled
+        ): void {
+            $key = $config->schema_name . '.' . strtolower($config->view_name);
+
+            if (!isset($estadoIndex[$key])) {
+                return; // La vista no está inactiva → dejar como está
+            }
+
+            // Desactivar en nuestra BD
+            $config->update(['enabled' => false]);
+
+            // Eliminar del scheduler de Graph-Fabric
+            try {
+                Http::timeout(10)->delete("{$baseUrl}/api/r2/schedule", [
+                    'token'       => $token,
+                    'schema_name' => $config->schema_name,
+                    'view'        => $config->view_name,
+                ]);
+            } catch (\Exception $e) {
+                Log::warning('[SyncParquetConfig] No se pudo remover de Graph-Fabric (vista inactiva)', [
+                    'view'  => $config->qualifiedName(),
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            $this->line("  DISABLED (bi_vistas inactivo)  {$config->qualifiedName()}");
+            $disabled++;
+        });
+
+        return $disabled;
     }
 
     private function showStatus(string $baseUrl, string $token): int
