@@ -62,6 +62,7 @@ return [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
+            'permission' => 0664,
             'replace_placeholders' => true,
         ],
 
@@ -70,6 +71,9 @@ return [
             'path' => storage_path('logs/laravel.log'),
             'level' => env('LOG_LEVEL', 'debug'),
             'days' => 14,
+            // 0664: los cron de root crean el archivo del dia con grupo medadminvps;
+            // con 644 php-fpm (medadminvps) no podia escribir y todo log fallaba.
+            'permission' => 0664,
             'replace_placeholders' => true,
         ],
 
