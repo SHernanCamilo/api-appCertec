@@ -925,6 +925,14 @@ class FabricViewerController extends Controller
         // Graph-Fabric esta junto a Laravel). Ese archivo queda como respaldo.
         // Se toma la MAS RECIENTE de las fuentes disponibles: si algun camino de
         // generacion actualizara solo una de ellas, igual se muestra la ultima real.
+        // GET /api/r2/warm no trae la hora, pero si la edad (age_hours, en horas con 2
+        // decimales). De ahi se deriva la hora de generacion con unos segundos de margen.
+        // Es la unica fuente para las vistas que NO estan en el schedule (el scheduler
+        // no las registra) cuando Laravel no puede leer el disco de Graph-Fabric.
+        $desdeEdad = (is_array($result) && isset($result['age_hours']) && is_numeric($result['age_hours']))
+            ? now()->subSeconds((int) round((float) $result['age_hours'] * 3600))->toIso8601String()
+            : null;
+
         $candidatas = array_filter([
             app(\App\Services\Fabric\GraphFabricService::class)
                 ->lastGeneratedAt($schema, $view, $request->boolean('fresh')),
@@ -932,6 +940,7 @@ class FabricViewerController extends Controller
                 ? ($result['generated_at'] ?? $result['last_generated'] ?? $result['last_modified'] ?? null)
                 : null,
             $this->localParquetGeneratedAt($schema, $view),
+            $desdeEdad,
         ], fn ($t): bool => is_string($t) && $t !== '');
 
         usort($candidatas, fn (string $a, string $b): int => (strtotime($b) ?: 0) <=> (strtotime($a) ?: 0));
