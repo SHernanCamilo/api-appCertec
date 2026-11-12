@@ -29,6 +29,7 @@ class SetNightlyIntervalsCommand extends Command
 {
     protected $signature = 'fabric:set-nightly-intervals
         {--keep=realtime : Prioridades que conservan su intervalo durante el dia (separadas por coma)}
+        {--all : TODAS las vistas a intervalo diario (ignora --keep)}
         {--apply : Aplica los cambios (sin esto solo muestra el plan)}
         {--sync : Al terminar, deja el scheduler de Graph-Fabric igual a la tabla}';
 
@@ -38,7 +39,7 @@ class SetNightlyIntervalsCommand extends Command
 
     public function handle(ParquetScheduleSyncService $sync): int
     {
-        $keep = collect(explode(',', (string) $this->option('keep')))
+        $keep = $this->option('all') ? [] : collect(explode(',', (string) $this->option('keep')))
             ->map(fn (string $p): string => strtolower(trim($p)))->filter()->values()->all();
 
         $enabled = BiParquetConfig::enabled()->get();

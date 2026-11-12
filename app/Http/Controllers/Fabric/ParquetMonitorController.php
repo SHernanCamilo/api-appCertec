@@ -10,6 +10,7 @@ use App\Services\Fabric\BiVistasSyncService;
 use App\Services\Fabric\GraphFabricGatewayService;
 use App\Services\Fabric\GraphFabricService;
 use App\Services\Fabric\ParquetIncidentNotifier;
+use App\Services\Fabric\ParquetScheduleSyncService;
 use App\Services\PermissionCacheService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -235,6 +236,109 @@ class ParquetMonitorController extends Controller
         $notifier->notify($incidente);
 
         return response()->json(['success' => true, 'incident_id' => $incidente->id, 'notified' => true]);
+    }
+
+    /**
+     * Trazabilidad del barrido de las 04:00.
+     *
+     * Cruza las vistas que deben ejecutarse (habilitadas y activas) con lo que
+     * reporta el scheduler de Graph-Fabric y clasifica cada una:
+     *
+     *   ok       generada dentro de la ventana del barrido (desde --start hasta --until)
+     *   error    la ultima generacion fallo (con su motivo)
+     *   despues  generada despues de la ventana (normalmente un clic en Actualizar)
+     *   pendiente sin generar desde el inicio de la ventana
+     *
+     * Limitacion: el scheduler guarda solo la ULTIMA generacion. Si una vista se
+     * genero a las 04:30 y alguien la actualizo a las 11:00, aparece en "despues".
+     *
+     * GET /parquet-monitor/nightly?date=2026-11-12&start=04:00&until=10:00
+     */
+    public function nightly(Request $request, ParquetScheduleSyncService $sync): JsonResponse
+    {
+        $datos = $request->validate([
+            'date'  => 'nullable|date_format:Y-m-d',
+            'start' => ['nullable', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
+            'until' => ['nullable', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
+        ]);
+
+        $tz    = (string) config('app.timezone', 'America/Bogota');
+        $dia   = $datos['date'] ?? now($tz)->toDateString();
+        $desde = \Carbon\CarbonImmutable::parse("{$dia} " . ($datos['start'] ?? '04:00'), $tz);
+        $hasta = \Carbon\CarbonImmutable::parse("{$dia} " . ($datos['until'] ?? '10:00'), $tz);
+
+        $res = $this->graph->schedule();
+        if (! $res['ok']) {
+            return response()->json([
+                'success' => false,
+                'message' => $res['message'] ?? 'No se pudo consultar Graph-Fabric.',
+            ], $res['code'] ?? 502);
+        }
+
+        $graph = [];
+        foreach (($res['data']['views'] ?? []) as $v) {
+            $graph[strtolower(($v['schema'] ?? '') . '.' . ($v['view'] ?? ''))] = $v;
+        }
+
+        $buckets = ['ok' => 0, 'error' => 0, 'despues' => 0, 'pendiente' => 0];
+        $filas = [];
+        $inicio = null;
+        $fin = null;
+        $segundos = 0.0;
+
+        foreach ($sync->eligibleConfigs() as $c) {
+            $g    = $graph[strtolower("{$c->schema_name}.{$c->view_name}")] ?? null;
+            $at   = $g['last_generated'] ?? null;
+            $gen  = $at ? \Carbon\CarbonImmutable::parse($at)->setTimezone($tz) : null;
+            $dur  = isset($g['last_gen_s']) ? (float) $g['last_gen_s'] : null;
+            $err  = ($g['status'] ?? null) === 'error' ? ($g['last_error'] ?? 'Error sin detalle') : null;
+
+            $estado = match (true) {
+                $err !== null                              => 'error',
+                $gen !== null && $gen->betweenIncluded($desde, $hasta) => 'ok',
+                $gen !== null && $gen->greaterThan($hasta) => 'despues',
+                default                                    => 'pendiente',
+            };
+            $buckets[$estado]++;
+
+            if ($estado === 'ok') {
+                $segundos += $dur ?? 0;
+                $empezo = $dur !== null ? $gen->subSeconds((int) round($dur)) : $gen;
+                $inicio = $inicio === null || $empezo->lessThan($inicio) ? $empezo : $inicio;
+                $fin    = $fin === null || $gen->greaterThan($fin) ? $gen : $fin;
+            }
+
+            $filas[] = [
+                'schema'       => $c->schema_name,
+                'view'         => $c->view_name,
+                'priority'     => $c->priority,
+                'estado'       => $estado,
+                'generated_at' => $gen?->toIso8601String(),
+                'duration_s'   => $dur,
+                'rows'         => isset($g['row_count']) ? (int) $g['row_count'] : null,
+                'error'        => $err,
+                'en_graph'     => $g !== null,
+            ];
+        }
+
+        // Orden: primero lo que hay que atender, luego las mas lentas
+        $peso = ['error' => 0, 'pendiente' => 1, 'despues' => 2, 'ok' => 3];
+        usort($filas, fn (array $a, array $b): int => [$peso[$a['estado']], -($a['duration_s'] ?? 0)]
+            <=> [$peso[$b['estado']], -($b['duration_s'] ?? 0)]);
+
+        return response()->json([
+            'success' => true,
+            'date'    => $dia,
+            'window'  => ['start' => $desde->toIso8601String(), 'until' => $hasta->toIso8601String()],
+            'summary' => $buckets + [
+                'total'            => count($filas),
+                'first_start'      => $inicio?->toIso8601String(),
+                'last_end'         => $fin?->toIso8601String(),
+                'elapsed_min'      => $inicio && $fin ? round($inicio->diffInSeconds($fin) / 60, 1) : null,
+                'generation_min'   => round($segundos / 60, 1),
+            ],
+            'views'   => $filas,
+        ]);
     }
 
     /**

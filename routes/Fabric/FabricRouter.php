@@ -164,6 +164,8 @@ Route::middleware(['auth:api'])->group(function () {
             Route::post('/refresh-failure', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'reportRefreshFailure']);
             // A3. Fallos y demoras recientes, con su motivo, para el monitor
             Route::get('/incidents', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'incidents']);
+            // A4. Trazabilidad del barrido de las 04:00 (que se ejecuto, que fallo, que falta)
+            Route::get('/nightly', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'nightly']);
 
             // B. Monitoreo
             Route::get('/schedule', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'schedule']);
