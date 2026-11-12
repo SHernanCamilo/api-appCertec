@@ -6,8 +6,11 @@ namespace App\Http\Controllers\Fabric;
 
 use App\Http\Controllers\Controller;
 use App\Models\BiParquetIncident;
+use App\Services\Fabric\BiVistasSyncService;
+use App\Services\Fabric\GraphFabricGatewayService;
 use App\Services\Fabric\GraphFabricService;
 use App\Services\Fabric\ParquetIncidentNotifier;
+use App\Services\PermissionCacheService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -28,7 +31,58 @@ use Illuminate\Http\Request;
  */
 class ParquetMonitorController extends Controller
 {
-    public function __construct(private readonly GraphFabricService $graph) {}
+    public function __construct(
+        private readonly GraphFabricService $graph,
+        private readonly GraphFabricGatewayService $gateway,
+        private readonly BiVistasSyncService $vistas,
+        private readonly PermissionCacheService $permisos,
+    ) {}
+
+    /**
+     * El boton "Actualizar" del visor usa force() y forceStatus(), asi que ya no
+     * son solo del monitor: los llama cualquier usuario. Esto evita que alguien
+     * dispare la generacion de una vista que no puede ver.
+     *
+     * - Siempre: la vista debe estar ACTIVA en la plataforma.
+     * - Quien administra el monitor (permiso del modulo BI-CRON-PARQUET o admin)
+     *   puede forzar cualquier vista activa.
+     * - El resto, solo vistas de esquemas y sedes a las que tiene acceso.
+     *
+     * @return JsonResponse|null  respuesta de rechazo, o null si puede continuar
+     */
+    private function rechazarSiNoPuede(Request $request, string $schema, string $view): ?JsonResponse
+    {
+        $estado = $this->vistas->checkVistaEstado($schema, $view);
+        if (! $estado['activa']) {
+            return response()->json([
+                'success' => false,
+                'estado'  => $estado['estado'],
+                'message' => $estado['mensaje'] ?? 'La vista no esta disponible.',
+            ], $estado['estado'] === 'mantenimiento' ? 503 : 403);
+        }
+
+        $user = $request->user();
+        if ($user === null) {
+            return response()->json(['success' => false, 'message' => 'No autenticado.'], 401);
+        }
+
+        $esMonitor = false;
+        foreach (['BI-CRON-PARQUET-leer', 'BI-CRON-PARQUET-editar', 'BI-CRON-PARQUET'] as $codigo) {
+            if ($this->permisos->hasPermission($user, $codigo)) {
+                $esMonitor = true;
+                break;
+            }
+        }
+
+        if (! $esMonitor && (
+            ! $this->gateway->tieneAccesoEsquema($user, $schema)
+            || ! $this->gateway->tieneAccesoVistaPorSede($user, $view, $schema)
+        )) {
+            return response()->json(['success' => false, 'message' => "Sin acceso a la vista '{$view}'."], 403);
+        }
+
+        return null;
+    }
 
     /** Reglas comunes de schema/vista. */
     private const REGLAS_VISTA = [
@@ -49,6 +103,10 @@ class ParquetMonitorController extends Controller
     public function force(Request $request): JsonResponse
     {
         $datos = $request->validate(self::REGLAS_VISTA);
+
+        if ($rechazo = $this->rechazarSiNoPuede($request, strtolower($datos['schema_name']), $datos['view'])) {
+            return $rechazo;
+        }
 
         $res = $this->graph->warmView(
             strtolower($datos['schema_name']),
@@ -84,6 +142,10 @@ class ParquetMonitorController extends Controller
             'schema' => 'required|string|max:20|alpha_dash',
             'view'   => 'required|string|max:150|regex:/^[A-Za-z0-9_]+$/',
         ]);
+
+        if ($rechazo = $this->rechazarSiNoPuede($request, strtolower($datos['schema']), $datos['view'])) {
+            return $rechazo;
+        }
 
         $res = $this->graph->warmStatus(strtolower($datos['schema']), $datos['view']);
 

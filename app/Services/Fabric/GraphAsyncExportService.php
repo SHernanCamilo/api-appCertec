@@ -339,9 +339,9 @@ final class GraphAsyncExportService
             'columns'     => empty($columns) ? null : $columns,
             'sort_col'    => (string) ($options['sort_col'] ?? ''),
             'sort_dir'    => strtoupper((string) ($options['sort_dir'] ?? 'ASC')),
-            // force_refresh: si viene true, Graph-Fabric invalida el parquet y lo
-            // regenera antes de servir (boton del rayo). Por defecto false: usa el
-            // parquet existente si esta fresco.
+            // OJO: el export de Graph-Fabric (ExportRequest) NO tiene campo force_refresh;
+            // lo ignora. Para regenerar el parquet se usa POST /api/r2/warm (force=true),
+            // ver ParquetMonitorController::force(). Se deja el campo por compatibilidad.
             'force_refresh' => (bool) ($options['force_refresh'] ?? false),
             // OBLIGATORIOS
             'grupos'      => $grupos,
