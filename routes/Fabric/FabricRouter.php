@@ -160,6 +160,11 @@ Route::middleware(['auth:api'])->group(function () {
             Route::post('/force', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'force']);
             Route::get('/force/status', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'forceStatus']);
 
+            // A2. El visor avisa que "Actualizar" fallo o supero los 5 min (guarda el motivo + notifica)
+            Route::post('/refresh-failure', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'reportRefreshFailure']);
+            // A3. Fallos y demoras recientes, con su motivo, para el monitor
+            Route::get('/incidents', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'incidents']);
+
             // B. Monitoreo
             Route::get('/schedule', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'schedule']);
             Route::get('/live', [\App\Http\Controllers\Fabric\ParquetMonitorController::class, 'live']);

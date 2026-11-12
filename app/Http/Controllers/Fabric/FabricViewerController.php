@@ -378,6 +378,18 @@ class FabricViewerController extends Controller
             ], 403);
         }
 
+        // Una vista inactiva o en mantenimiento no debe exportarse ni generar parquet.
+        // Este es el camino del boton Actualizar y el que dispara la generacion en
+        // Graph-Fabric; antes solo validaba el estado la consulta de datos, asi que
+        // una vista inactiva podia regenerarse llamando directo a esta ruta.
+        $estadoVista = app(\App\Services\Fabric\BiVistasSyncService::class)->checkVistaEstado($schema, $viewName);
+        if (!$estadoVista['activa']) {
+            return response()->json([
+                'success' => false,
+                'estado'  => $estadoVista['estado'],
+                'message' => $estadoVista['mensaje'] ?? 'La vista no esta disponible.',
+            ], $estadoVista['estado'] === \App\Models\BiVista::ESTADO_MANTENIMIENTO ? 503 : 403);
+        }
         // ─── EXPORT ASÍNCRONO (único camino) ────────────────────────────────────
         // /api/data/export/start resuelve el parquet internamente:
         //   1. Parquet fresco  → DuckDB lo lee en ~1s   ← la mayoría
@@ -907,10 +919,24 @@ class FabricViewerController extends Controller
         }
 
         $result = $this->tryR2Status($schema, $view);
-        $generatedAt = is_array($result)
-            ? ($result['generated_at'] ?? $result['last_generated'] ?? $result['last_modified'] ?? null)
-            : null;
-        $generatedAt = $generatedAt ?: $this->localParquetGeneratedAt($schema, $view);
+
+        // Hora en que Graph-Fabric TERMINO de generar el parquet: la del scheduler,
+        // que se escribe al finalizar. /api/r2/warm no trae ninguna fecha, asi que
+        // antes esto dependia de leer el .meta.json del disco (solo funciona si
+        // Graph-Fabric esta junto a Laravel). Ese archivo queda como respaldo.
+        // Se toma la MAS RECIENTE de las fuentes disponibles: si algun camino de
+        // generacion actualizara solo una de ellas, igual se muestra la ultima real.
+        $candidatas = array_filter([
+            app(\App\Services\Fabric\GraphFabricService::class)
+                ->lastGeneratedAt($schema, $view, $request->boolean('fresh')),
+            is_array($result)
+                ? ($result['generated_at'] ?? $result['last_generated'] ?? $result['last_modified'] ?? null)
+                : null,
+            $this->localParquetGeneratedAt($schema, $view),
+        ], fn ($t): bool => is_string($t) && $t !== '');
+
+        usort($candidatas, fn (string $a, string $b): int => (strtotime($b) ?: 0) <=> (strtotime($a) ?: 0));
+        $generatedAt = $candidatas[0] ?? null;
 
         if ($result === null) {
             return response()->json([

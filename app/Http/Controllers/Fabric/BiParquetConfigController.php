@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\BiGrupo;
 use App\Models\BiParquetConfig;
 use App\Models\BiVista;
+use App\Services\Fabric\GraphFabricService;
+use App\Services\Fabric\ParquetScheduleSyncService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -104,6 +106,26 @@ class BiParquetConfigController extends Controller
             'enabled'              => 'sometimes|boolean',
         ]);
 
+        // El schema siempre en minusculas (evita duplicados tipo CO / co en Graph)
+        $request->merge(['schema_name' => strtolower((string) $request->input('schema_name'))]);
+
+        // Solo se programan vistas ACTIVAS en la plataforma. Antes se podia dar de
+        // alta cualquier nombre: asi entraron dos con "lnventory" (L minuscula) en
+        // vez de "Inventory", que no existen y nunca se generan.
+        if ($request->boolean('enabled', true)) {
+            $schemaIn = (string) $request->input('schema_name');
+            $viewIn   = (string) $request->input('view_name');
+            $estado   = app(ParquetScheduleSyncService::class)->estadoDe($schemaIn, $viewIn);
+
+            if ($estado !== BiVista::ESTADO_ACTIVO) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $estado === null
+                        ? "La vista {$schemaIn}.{$viewIn} no existe en la plataforma. Revise el nombre."
+                        : "La vista {$schemaIn}.{$viewIn} esta en estado '{$estado}'; solo se programan vistas activas.",
+                ], 422);
+            }
+        }
         $config = BiParquetConfig::updateOrCreate(
             [
                 'schema_name' => $request->input('schema_name'),
@@ -133,11 +155,22 @@ class BiParquetConfigController extends Controller
      */
     public function destroy(int $id): JsonResponse
     {
-        $deleted = BiParquetConfig::where('id', $id)->delete();
+        $config = BiParquetConfig::find($id);
+
+        if (!$config) {
+            return response()->json(['success' => false, 'message' => 'No encontrada.']);
+        }
+
+        // Baja inmediata en Graph-Fabric: antes solo se borraba la fila y la vista
+        // seguía en el scheduler hasta el siguiente sync. Si Graph no responde,
+        // el sync masivo (cada 30 min) la reconcilia igual.
+        app(GraphFabricService::class)->scheduleDelete(strtolower($config->schema_name), $config->view_name);
+
+        $config->delete();
 
         return response()->json([
-            'success' => $deleted > 0,
-            'message' => $deleted > 0 ? 'Configuracion eliminada.' : 'No encontrada.',
+            'success' => true,
+            'message' => 'Configuracion eliminada y retirada del scheduler.',
         ]);
     }
 
@@ -147,59 +180,21 @@ class BiParquetConfigController extends Controller
      * Util para: despues de restaurar backup, primer deploy, o si Graph-Fabric
      * se reinicio y perdio su schedule.db.
      */
-    public function syncAll(Request $request): JsonResponse
+    public function syncAll(Request $request, ParquetScheduleSyncService $sync): JsonResponse
     {
-        // Limite por batch para no exceder timeout HTTP (max 100 por request)
-        $limit = min((int) $request->input('limit', 100), 200);
-
-        // Priorizar las que nunca se sincronizaron
-        $configs = BiParquetConfig::enabled()
-            ->orderByRaw('last_synced_at IS NOT NULL, last_synced_at ASC')
-            ->limit($limit)
-            ->get();
-
-        $synced  = 0;
-        $failed  = 0;
-        $errors  = [];
-
-        foreach ($configs as $config) {
-            if ($this->syncSingle($config)) {
-                $synced++;
-            } else {
-                $failed++;
-                if ($failed <= 5) {
-                    $errors[] = $config->qualifiedName();
-                }
-            }
-        }
-
-        $totalPending = BiParquetConfig::enabled()->whereNull('last_synced_at')->count();
-
-        $message = "Sincronizadas {$synced}/{$configs->count()} configuraciones.";
-        if ($failed > 0) {
-            $message .= " Fallaron {$failed}.";
-        }
-        if ($totalPending > 0) {
-            $message .= " Quedan {$totalPending} pendientes (click de nuevo para continuar).";
-        }
-
-        Log::info('[ParquetConfig] syncAll resultado', [
-            'synced' => $synced,
-            'failed' => $failed,
-            'total'  => $configs->count(),
-            'pending' => $totalPending,
-            'sample_errors' => $errors,
-        ]);
+        // Un solo envío con la lista completa: Graph-Fabric queda IGUAL a la tabla
+        // y desactiva lo que no esté configurado. Ya no hay lotes ni "pendientes".
+        $res = $sync->syncAll();
 
         return response()->json([
-            'success' => $failed === 0,
-            'synced'  => $synced,
-            'failed'  => $failed,
-            'total'   => $configs->count(),
-            'pending' => $totalPending,
-            'errors'  => $errors,
-            'message' => $message,
-        ]);
+            'success' => $res['ok'],
+            'synced'  => $res['activated'],
+            'failed'  => $res['errors'],
+            'total'   => $res['sent'],
+            'pending' => 0,
+            'errors'  => [],
+            'message' => $res['message'],
+        ], $res['ok'] ? 200 : 502);
     }
 
     /**
@@ -237,10 +232,21 @@ class BiParquetConfigController extends Controller
             }
 
             // Enriquecer con la config de Laravel (para saber si un parquet esta stale segun SU intervalo)
-            $configs = BiParquetConfig::enabled()->get()->keyBy(fn($c) => "{$c->schema_name}.{$c->view_name}");
+            $configs = BiParquetConfig::enabled()->get()
+                ->keyBy(fn ($c) => strtolower("{$c->schema_name}.{$c->view_name}"));
+
+            // Solo se muestran las vistas CONFIGURADAS. Lo demás que exista en
+            // R2 o en el schedule de Graph (huérfanas, deshabilitadas) no cuenta
+            // en el monitor: antes inflaba las "desactualizadas" a 633.
+            $totalGraph = count($views);
+            $views = array_values(array_filter(
+                $views,
+                fn ($v) => $configs->has(strtolower(($v['schema'] ?? '') . '.' . ($v['view'] ?? '')))
+            ));
+            $excluded = $totalGraph - count($views);
 
             foreach ($views as &$view) {
-                $key = ($view['schema'] ?? '') . '.' . ($view['view'] ?? '');
+                $key = strtolower(($view['schema'] ?? '') . '.' . ($view['view'] ?? ''));
                 $cfg = $configs->get($key);
 
                 // Graph-Fabric envía age_hours, convertir a minutos para isStale()
@@ -265,9 +271,11 @@ class BiParquetConfigController extends Controller
             }
 
             return response()->json([
-                'success' => true,
-                'data'    => $data,
-                'views'   => $views,
+                'success'        => true,
+                'data'           => $data,
+                'views'          => $views,
+                // Cuántas vistas de Graph se dejaron fuera por no estar configuradas
+                'excluded_count' => $excluded,
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -278,87 +286,16 @@ class BiParquetConfigController extends Controller
     }
 
     /**
-     * Importar todas las vistas desde Graph-Fabric /api/r2/status hacia bi_parquet_config.
-     *
-     * Asigna intervalos por defecto segun el schema:
-     *   hg (hospitalizacion/censos) → 10 min, priority high
-     *   dc (censos)                 → 5 min, priority realtime
-     *   aa (agendas)                → 30 min, priority medium
-     *   ca (cartera)                → 60 min, priority medium
-     *   co (contabilidad)           → 120 min, priority low
-     *   default                     → 60 min, priority medium
+     * DESACTIVADO. La importacion masiva traia TODAS las vistas de Graph-Fabric y las
+     * dejaba habilitadas, que es lo que inflaba el scheduler a 976 vistas. Ahora solo
+     * se programan las vistas que se configuran a mano ("Nueva").
      */
     public function importFromGraph(Request $request): JsonResponse
     {
-        $baseUrl = config('fabric.url', 'http://127.0.0.1:8001');
-        $token   = config('fabric.token_admin', '');
-
-        try {
-            $response = Http::timeout(30)->get("{$baseUrl}/api/r2/status", [
-                'token' => $token,
-            ]);
-
-            if (!$response->successful()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No se pudo conectar con Graph-Fabric: status ' . $response->status(),
-                ], 502);
-            }
-
-            $data  = $response->json();
-            $views = $data['views'] ?? [];
-
-            if (empty($views)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Graph-Fabric no reporto vistas.',
-                ], 404);
-            }
-
-            $imported = 0;
-            $skipped  = 0;
-            $overwrite = $request->boolean('overwrite', false);
-
-            foreach ($views as $view) {
-                $schema = $view['schema'] ?? '';
-                $viewName = $view['view'] ?? '';
-
-                if (!$schema || !$viewName) continue;
-
-                // Si ya existe y no queremos sobreescribir, saltar
-                if (!$overwrite && BiParquetConfig::forView($schema, $viewName)->exists()) {
-                    $skipped++;
-                    continue;
-                }
-
-                // Determinar intervalo y prioridad por patron de schema
-                $defaults = $this->getDefaultsForSchema($schema, $viewName);
-
-                BiParquetConfig::updateOrCreate(
-                    ['schema_name' => $schema, 'view_name' => $viewName],
-                    [
-                        'refresh_interval_min' => $defaults['interval'],
-                        'priority'             => $defaults['priority'],
-                        'group_name'           => $defaults['group'],
-                        'enabled'              => true,
-                    ]
-                );
-                $imported++;
-            }
-
-            return response()->json([
-                'success'  => true,
-                'imported' => $imported,
-                'skipped'  => $skipped,
-                'total'    => count($views),
-                'message'  => "Importadas {$imported} vistas, {$skipped} ya existian (de " . count($views) . " totales en Graph-Fabric).",
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al importar: ' . $e->getMessage(),
-            ], 503);
-        }
+        return response()->json([
+            'success' => false,
+            'message' => 'La importacion masiva esta desactivada: solo se programan las vistas configuradas manualmente.',
+        ], 410);
     }
 
     // =========================================================================
@@ -399,6 +336,16 @@ class BiParquetConfigController extends Controller
             ];
             if (isset($sv['avg_gen_s'])) {
                 $patch['avg_generation_s'] = $sv['avg_gen_s'];
+            }
+
+            // Motivo del ultimo fallo, tal como lo guarda Graph-Fabric. Solo se
+            // envia si la vista esta en error AHORA: Graph borra last_error cuando
+            // vuelve a generar bien, pero asi no se marca como fallida una vista
+            // que ya se recupero.
+            if (($sv['status'] ?? '') === 'error' && !empty($sv['last_error'])) {
+                $patch['status']        = 'error';
+                $patch['error_message'] = (string) $sv['last_error'];
+                $patch['error_count']   = (int) ($sv['error_count'] ?? 0);
             }
 
             $key = strtolower($schema . '.' . $name);
@@ -444,49 +391,6 @@ class BiParquetConfigController extends Controller
     }
 
     /**
-     * Determina intervalos por defecto segun el schema y nombre de vista.
-     * Default global: 30 min para todo lo que no tenga regla especifica.
-     */
-    private function getDefaultsForSchema(string $schema, string $viewName): array
-    {
-        // HojaQx / Censo → alta prioridad, 10 min
-        if (str_contains($viewName, 'HojaQx') || str_contains($viewName, 'Censo')) {
-            return ['interval' => 10, 'priority' => 'high', 'group' => 'censos'];
-        }
-
-        // Treasury (Tesorería) → 15 min
-        if (str_contains($viewName, 'Treasury') || str_contains($viewName, 'Recibo') || str_contains($viewName, 'EgresoTesoreria')) {
-            return ['interval' => 15, 'priority' => 'high', 'group' => 'financiero'];
-        }
-
-        // Cartera/Portfolio → 30 min
-        if (str_contains($viewName, 'Portfolio') || str_contains($viewName, 'Cartera') || str_contains($viewName, 'Recaudo')) {
-            return ['interval' => 30, 'priority' => 'medium', 'group' => 'financiero'];
-        }
-
-        // Ledger (contabilidad) → 60 min
-        if (str_contains($viewName, 'Ledger') || str_contains($viewName, 'Balance') || str_contains($viewName, 'Comprobante')) {
-            return ['interval' => 60, 'priority' => 'medium', 'group' => 'financiero'];
-        }
-
-        // Billing → 30 min
-        if (str_contains($viewName, 'Billing') || str_contains($viewName, 'Factur')) {
-            return ['interval' => 30, 'priority' => 'medium', 'group' => 'financiero'];
-        }
-
-        return match ($schema) {
-            'dc'    => ['interval' => 5,   'priority' => 'realtime', 'group' => 'censos'],
-            'hg'    => ['interval' => 15,  'priority' => 'high',     'group' => 'operativo'],
-            'pt'    => ['interval' => 15,  'priority' => 'high',     'group' => 'financiero'],
-            'ca'    => ['interval' => 30,  'priority' => 'medium',   'group' => 'financiero'],
-            'co'    => ['interval' => 60,  'priority' => 'medium',   'group' => 'financiero'],
-            'fr'    => ['interval' => 30,  'priority' => 'medium',   'group' => 'financiero'],
-            'if'    => ['interval' => 60,  'priority' => 'low',      'group' => 'financiero'],
-            default => ['interval' => 30,  'priority' => 'medium',   'group' => 'general'],
-        };
-    }
-
-    /**
      * Sincroniza UNA config con Graph-Fabric.
      * - Si enabled: POST /api/r2/schedule (registrar/actualizar)
      * - Si disabled: DELETE /api/r2/schedule (remover del cron)
@@ -498,23 +402,34 @@ class BiParquetConfigController extends Controller
 
         try {
             if (!$config->enabled) {
-                // Desactivada → remover del schedule de Graph-Fabric
-                $response = Http::timeout(10)->delete("{$baseUrl}/api/r2/schedule", [
-                    'token'       => $token,
-                    'schema_name' => $config->schema_name,
-                    'view'        => $config->view_name,
+                // Desactivada → baja en Graph-Fabric. schema y view van en la QUERY
+                // STRING; mandarlos en el body (como se hacía) devuelve 422 y la
+                // vista seguía ejecutándose.
+                $res = app(GraphFabricService::class)
+                    ->scheduleDelete(strtolower($config->schema_name), $config->view_name);
+
+                if ($res['ok']) {
+                    $config->update(['last_synced_at' => now()]);
+
+                    return true;
+                }
+
+                Log::warning('[ParquetConfig] No se pudo dar de baja en Graph: ' . $config->qualifiedName(), [
+                    'message' => $res['message'] ?? null,
                 ]);
-            } else {
-                // Activa → registrar/actualizar en el schedule
-                $response = Http::timeout(10)->post("{$baseUrl}/api/r2/schedule", [
-                    'token'                => $token,
-                    'schema_name'          => $config->schema_name,
-                    'view'                 => $config->view_name,
-                    'refresh_interval_min' => $config->refresh_interval_min,
-                    'priority'             => $this->mapPriorityForGraph($config->priority),
-                    'group_name'           => $config->group_name,
-                ]);
+
+                return false;
             }
+
+            // Activa → registrar/actualizar en el schedule
+            $response = Http::timeout(10)->post("{$baseUrl}/api/r2/schedule", [
+                'token'                => $token,
+                'schema_name'          => strtolower($config->schema_name),
+                'view'                 => $config->view_name,
+                'refresh_interval_min' => $config->refresh_interval_min,
+                'priority'             => $this->mapPriorityForGraph($config->priority),
+                'group_name'           => $config->group_name,
+            ]);
 
             if ($response->successful()) {
                 $config->update(['last_synced_at' => now()]);
@@ -556,15 +471,39 @@ class BiParquetConfigController extends Controller
                 ], 502);
             }
 
-            $data  = $response->json();
-            $views = $data['views'] ?? [];
+            $data     = $response->json();
+            $allViews = $data['views'] ?? [];
+
+            // Solo las vistas CONFIGURADAS (habilitadas en bi_parquet_config). El
+            // schedule de Graph puede traer cientos de filas inactivas que no
+            // deben contar en KPIs, carriles ni atrasos.
+            $configured = BiParquetConfig::enabled()->get()
+                ->mapWithKeys(fn ($c) => [strtolower("{$c->schema_name}.{$c->view_name}") => true]);
+
+            $views = array_values(array_filter(
+                $allViews,
+                fn ($v) => $configured->has(strtolower(($v['schema'] ?? '') . '.' . ($v['view'] ?? '')))
+            ));
+
+            $byStatus = [];
+            foreach ($views as $v) {
+                $st = (string) ($v['status'] ?? 'unknown');
+                $byStatus[$st] = ($byStatus[$st] ?? 0) + 1;
+            }
+
+            // Los totales se recalculan sobre las configuradas; el resto de los
+            // campos de Graph (eficiencia, prioridades) se conserva.
+            $stats = array_merge($data['stats'] ?? [], [
+                'total_active' => count($views),
+                'by_status'    => $byStatus,
+            ]);
 
             // Agrupar por carril
             $lanes = ['sprint' => 0, 'standard' => 0, 'heavy' => 0, 'marathon' => 0, 'nueva' => 0];
             $laneStale = ['sprint' => 0, 'standard' => 0, 'heavy' => 0, 'marathon' => 0, 'nueva' => 0];
 
             foreach ($views as $v) {
-                $avg  = $v['avg_generation_s'] ?? null;
+                $avg  = $v['avg_gen_s'] ?? $v['avg_generation_s'] ?? null;
                 $lane = $this->laneFromAvg($avg);
                 $lanes[$lane] = ($lanes[$lane] ?? 0) + 1;
 
@@ -583,7 +522,8 @@ class BiParquetConfigController extends Controller
 
             return response()->json([
                 'success'    => true,
-                'stats'      => $data['stats'] ?? [],
+                'stats'      => $stats,
+                'excluded_count' => count($allViews) - count($views),
                 'due_count'  => $data['due_count'] ?? 0,
                 'lanes'      => $lanes,
                 'lane_stale' => $laneStale,

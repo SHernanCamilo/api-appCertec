@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Fabric;
 
 use App\Http\Controllers\Controller;
+use App\Models\BiParquetIncident;
 use App\Services\Fabric\GraphFabricService;
+use App\Services\Fabric\ParquetIncidentNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -104,6 +106,87 @@ class ParquetMonitorController extends Controller
             'poll_interval_s' => $res['poll_interval_s'],
             'message'         => $this->mensajeSegunEstado($res['status'], $res['message'] ?? null),
         ]);
+    }
+
+    /**
+     * El visor reporta que "Actualizar" no se pudo completar: superó el tope de
+     * espera (5 min) o la generación FALLÓ. Guarda el motivo y avisa a TI.
+     *
+     * - reason = timeout: la generación NO se cancela, sigue en Graph-Fabric.
+     * - reason = error:   `detail` lleva el motivo que devolvió el servidor
+     *                     (por ejemplo el error de la consulta a Fabric).
+     *
+     * Se reutiliza el incidente de la misma vista y motivo para no inundar de
+     * correos si el usuario reintenta varias veces.
+     *
+     * POST /parquet-monitor/refresh-failure
+     */
+    public function reportRefreshFailure(Request $request, ParquetIncidentNotifier $notifier): JsonResponse
+    {
+        $datos = $request->validate(self::REGLAS_VISTA + [
+            'elapsed_s' => 'required|integer|min:0|max:86400',
+            'reason'    => 'required|in:timeout,error',
+            'detail'    => 'nullable|string|max:2000',
+        ]);
+
+        $schema = strtolower($datos['schema_name']);
+        $reason = $datos['reason'];
+        $detail = isset($datos['detail']) ? mb_substr(trim($datos['detail']), 0, 500) : null;
+        $user   = $request->user();
+
+        $existente = BiParquetIncident::forView($schema, $datos['view'])
+            ->where('reason', $reason)
+            ->where(function ($q) use ($reason) {
+                // timeout: mientras siga abierto. error: el mismo fallo en los ultimos 10 min.
+                $reason === BiParquetIncident::REASON_TIMEOUT
+                    ? $q->where('status', BiParquetIncident::STATUS_OPEN)
+                    : $q->where('created_at', '>=', now()->subMinutes(10));
+            })
+            ->first();
+
+        if ($existente) {
+            $existente->update([
+                'elapsed_s' => max($existente->elapsed_s, (int) $datos['elapsed_s']),
+                'detail'    => $detail ?: $existente->detail,
+            ]);
+
+            return response()->json(['success' => true, 'incident_id' => $existente->id, 'notified' => false]);
+        }
+
+        $incidente = BiParquetIncident::create([
+            'schema_name' => $schema,
+            'view_name'   => $datos['view'],
+            'source'      => BiParquetIncident::SOURCE_USER,
+            'reason'      => $reason,
+            'user_id'     => $user?->id,
+            'user_name'   => $user->name ?? null,
+            'elapsed_s'   => (int) $datos['elapsed_s'],
+            'status'      => BiParquetIncident::STATUS_OPEN,
+            'detail'      => $detail ?? ($reason === BiParquetIncident::REASON_TIMEOUT
+                ? 'El usuario pidio actualizar y la generacion supero el tope de espera.'
+                : 'La generacion fallo (sin detalle del servidor).'),
+        ]);
+
+        $notifier->notify($incidente);
+
+        return response()->json(['success' => true, 'incident_id' => $incidente->id, 'notified' => true]);
+    }
+
+    /**
+     * Incidentes recientes (demoras y fallos de "Actualizar") para el monitor.
+     *
+     * GET /parquet-monitor/incidents?hours=24
+     */
+    public function incidents(Request $request): JsonResponse
+    {
+        $horas = max(1, min(168, (int) $request->query('hours', 24)));
+
+        $lista = BiParquetIncident::where('created_at', '>=', now()->subHours($horas))
+            ->orderByDesc('created_at')
+            ->limit(100)
+            ->get(['id', 'schema_name', 'view_name', 'source', 'reason', 'user_name', 'elapsed_s', 'stage', 'status', 'detail', 'created_at']);
+
+        return response()->json(['success' => true, 'hours' => $horas, 'data' => $lista]);
     }
 
     // =========================================================================

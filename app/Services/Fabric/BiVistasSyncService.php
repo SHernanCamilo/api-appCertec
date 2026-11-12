@@ -181,8 +181,14 @@ class BiVistasSyncService
      *
      * @return array<string, string>
      */
-    private function getEstadoIndex(): array
+    public function getEstadoIndex(bool $fresh = false): array
     {
+        // fresh: los UPDATE masivos (SyncBiVistas) no disparan los eventos del modelo
+        // que limpian esta cache, asi que el sync del cron la salta.
+        if ($fresh) {
+            Cache::forget('bi_vistas_estado_index');
+        }
+
         return Cache::remember('bi_vistas_estado_index', 300, function () {
             $index = [];
 

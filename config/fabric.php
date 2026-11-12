@@ -79,6 +79,15 @@ return [
     // repetidas. 0 = desactivar caché. Default 30 min.
     'activos_busqueda_ttl' => (int) env('FABRIC_ACTIVOS_BUSQUEDA_TTL', 1800),
 
+    // Una generacion de parquet que supera este tiempo (segundos) se considera
+    // lenta: el vigilante abre un incidente y notifica. Debe coincidir con el
+    // MANUAL_MAX_WAIT_S de Graph-Fabric (300 s).
+    'slow_threshold_s' => (int) env('FABRIC_SLOW_THRESHOLD_S', 300),
+
+    // Correo al que se avisa de parquets lentos. Vacio = solo queda en el log
+    // ([ParquetLento]) y en la tabla bi_parquet_incidents.
+    'alert_email' => env('FABRIC_ALERT_EMAIL'),
+
     // Email del sistema para requests internos (notificaciones, sync)
     'admin_email' => env('NOTIF_ADMIN_EMAIL', 'sistema@medilaser.com.co'),
 

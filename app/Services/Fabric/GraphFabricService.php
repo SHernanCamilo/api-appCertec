@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Fabric;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -211,6 +212,68 @@ class GraphFabricService
             [], // sin body: los params van en la query string
             self::TIMEOUT_ESTADO
         );
+    }
+
+    /**
+     * Sincronización masiva: Laravel envía la lista COMPLETA de vistas que deben
+     * estar activas y Graph-Fabric reconcilia. Con `deactivateUnlisted = true`
+     * desactiva (is_active=0) todo lo que no venga en la lista.
+     *
+     * Es la forma correcta de que `bi_parquet_config` sea la fuente de verdad:
+     * evita depender de DELETE individuales.
+     *
+     * @param  array<int, array{schema_name:string, view:string, refresh_interval_min:int, priority:string, group_name?:string}>  $views
+     * @return array{ok:bool, data?:array, message?:string, code?:int}
+     */
+    public function scheduleSync(array $views, bool $deactivateUnlisted = true): array
+    {
+        return $this->request(
+            'post',
+            '/api/r2/schedule/sync',
+            [
+                'token'               => $this->token,
+                'views'               => array_values($views),
+                'deactivate_unlisted' => $deactivateUnlisted,
+            ],
+            self::TIMEOUT_EN_VIVO
+        );
+    }
+
+    /**
+     * Hora (ISO, UTC) en que Graph-Fabric TERMINÓ de generar el parquet de la
+     * vista, según su scheduler (`last_generated`). Es la fuente confiable: se
+     * escribe al finalizar la generación. null si Graph no la conoce.
+     *
+     * El schedule completo es grande, así que se indexa una vez y se cachea unos
+     * segundos; cada consulta del visor reutiliza ese índice.
+     */
+    public function lastGeneratedAt(string $schema, string $view, bool $fresh = false): ?string
+    {
+        // fresh: justo despues de generar no debe servirse el indice de hace segundos.
+        if ($fresh) {
+            Cache::forget('graph_fabric:last_generated_index');
+        }
+
+        $index = Cache::remember('graph_fabric:last_generated_index', 15, function (): array {
+            $res = $this->schedule();
+            if (!$res['ok']) {
+                return [];
+            }
+
+            $out = [];
+            foreach (($res['data']['views'] ?? []) as $v) {
+                $s = strtolower((string) ($v['schema'] ?? ''));
+                $n = strtolower((string) ($v['view'] ?? ''));
+                $at = $v['last_generated'] ?? null;
+                if ($s !== '' && $n !== '' && is_string($at) && $at !== '') {
+                    $out["{$s}.{$n}"] = $at;
+                }
+            }
+
+            return $out;
+        });
+
+        return $index[strtolower($schema) . '.' . strtolower($view)] ?? null;
     }
 
     /**

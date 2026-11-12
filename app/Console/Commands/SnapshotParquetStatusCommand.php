@@ -75,7 +75,10 @@ class SnapshotParquetStatusCommand extends Command
 
                 $key       = "{$schema}.{$viewName}";
                 $sched     = $scheduleViews[$key] ?? [];
-                $avgGen    = $sched['avg_generation_s'] ?? ($view['avg_generation_s'] ?? null);
+                // Graph-Fabric reporta el promedio como `avg_gen_s` en /api/r2/schedule;
+                // se aceptan ambos nombres para no perder carril ni tiempos.
+                $avgGen    = $sched['avg_gen_s'] ?? $sched['avg_generation_s']
+                    ?? ($view['avg_gen_s'] ?? ($view['avg_generation_s'] ?? null));
                 $ageHours  = $view['age_hours'] ?? null;
 
                 // Calcular si esta stale segun config de Laravel

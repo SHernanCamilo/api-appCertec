@@ -101,15 +101,31 @@ class Kernel extends ConsoleKernel
             ->runInBackground()
             ->appendOutputTo(storage_path('logs/parquet-snapshot.log'));
 
+        // ── Parquet: vigilante de generaciones lentas (> 5 min) ──────────
+        // Cada minuto lee lo que Graph-Fabric esta generando y avisa UNA vez por
+        // vista que supere el umbral (FABRIC_SLOW_THRESHOLD_S, 300 s por defecto).
+        $schedule->command('fabric:alert-slow-parquets')
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->runInBackground()
+            ->appendOutputTo(storage_path('logs/parquet-slow.log'));
+
         // ── Parquet: rebalanceo automático del scheduler ─────────────────
         // Semanal (domingo 03:00): reajusta intervalos según el tamaño real de
         // cada vista y desactiva las pequeñas del scheduler (se exportan al vuelo).
         // Los tamaños de vista cambian lento, por eso semanal es suficiente.
-        $schedule->command('fabric:rebalance-scheduler --sync')
-            ->weeklyOn(0, '03:00')
-            ->withoutOverlapping()
-            ->runInBackground()
-            ->appendOutputTo(storage_path('logs/parquet-rebalance.log'));
+        //
+        // DESACTIVADO: ahora bi_parquet_config contiene SOLO las vistas que se
+        // configuraron a proposito (intervalos incluidos). El rebalanceo semanal
+        // reescribe intervalos y apaga vistas segun su tamano, asi que pisaria esa
+        // curaduria cada domingo. Se puede lanzar a mano si hace falta:
+        //   php artisan fabric:rebalance-scheduler --dry-run
+        //
+        // $schedule->command('fabric:rebalance-scheduler --sync')
+        //     ->weeklyOn(0, '03:00')
+        //     ->withoutOverlapping()
+        //     ->runInBackground()
+        //     ->appendOutputTo(storage_path('logs/parquet-rebalance.log'));
     }
 
     /**
