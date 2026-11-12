@@ -130,6 +130,14 @@ class GraphFabricService
             'estimated_s'     => (int) ($d['estimated_s'] ?? 0),
             'message'         => $d['message'] ?? null,
             'poll_interval_s' => (int) ($d['poll_interval_s'] ?? 5),
+            // Campos que Graph-Fabric agrega para el boton Actualizar (si aun no los
+            // envia, llegan null y el visor se apoya en la hora del parquet):
+            //   generated_at   hora en que termino la ultima generacion
+            //   last_result    ok | unchanged | skipped | error de la ultima generacion a demanda
+            //   last_error     motivo cuando last_result = error/skipped
+            'generated_at'    => $d['generated_at'] ?? null,
+            'last_result'     => $d['last_result'] ?? null,
+            'last_error'      => $d['last_error'] ?? ($d['last_reason'] ?? null),
         ];
     }
 

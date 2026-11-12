@@ -166,6 +166,9 @@ class ParquetMonitorController extends Controller
             'generating'      => $res['generating'],
             'estimated_s'     => $res['estimated_s'],
             'poll_interval_s' => $res['poll_interval_s'],
+            'generated_at'    => $res['generated_at'] ?? null,
+            'last_result'     => $res['last_result'] ?? null,
+            'last_error'      => $res['last_error'] ?? null,
             'message'         => $this->mensajeSegunEstado($res['status'], $res['message'] ?? null),
         ]);
     }
