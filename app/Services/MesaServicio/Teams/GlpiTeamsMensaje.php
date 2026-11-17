@@ -22,7 +22,6 @@ class GlpiTeamsMensaje
      */
     public function construir(array $tablero, array $config): array
     {
-        $modo = ($config['modo'] ?? 'resumen') === 'detalle' ? 'detalle' : 'resumen';
         $filtros = $this->filtros($config['grupos'] ?? []);
         $tickets = $this->filtrar($tablero['tickets'] ?? [], $filtros);
         $nombre = trim((string) ($config['nombre'] ?? ''));
@@ -33,10 +32,6 @@ class GlpiTeamsMensaje
         $origen = trim((string) ($tablero['grupo']['nombre'] ?? 'Tablero TIC'));
         if ($origen === '') {
             $origen = 'Tablero TIC';
-        }
-
-        if ($modo === 'detalle') {
-            return $this->detalle($nombre, $origen, $cuando, $tickets, $filtros);
         }
 
         return $this->resumen($nombre, $origen, $cuando, $tickets);

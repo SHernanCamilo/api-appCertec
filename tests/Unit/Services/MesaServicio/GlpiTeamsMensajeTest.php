@@ -45,10 +45,11 @@ class GlpiTeamsMensajeTest extends TestCase
         ]);
 
         $this->assertSame(2, $mensaje['casos']);
-        $this->assertStringContainsString('#1 Error facturas', $mensaje['texto']);
-        $this->assertStringContainsString('#3 Cambio de documento', $mensaje['texto']);
-        $this->assertStringNotContainsString('#2 Usuario nuevo', $mensaje['texto']);
-        $this->assertStringContainsString('Sin asignar', $mensaje['texto']);
+        $this->assertStringContainsString('Tablero TIC — 3 desarrollo', $mensaje['titulo']);
+        $this->assertStringContainsString('N3 · 3 Desarrollo | 0 | 1 | 1 | 2', $mensaje['texto']);
+        $this->assertStringNotContainsString('N1 · Nivel 1 Nacional', $mensaje['texto']);
+        $this->assertStringNotContainsString('#1 Error facturas', $mensaje['texto']);
+        $this->assertStringContainsString('>VER TABLERO</a>', $mensaje['html']);
     }
 
     public function test_el_excel_trae_una_hoja_por_grupo_con_sus_casos(): void
