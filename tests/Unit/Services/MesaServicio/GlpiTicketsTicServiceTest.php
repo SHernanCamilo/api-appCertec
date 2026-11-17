@@ -21,15 +21,28 @@ class GlpiTicketsTicServiceTest extends TestCase
         $glpi = Mockery::mock(GLPIService::class);
         $glpi->shouldReceive('get')
             ->once()
+            ->with('/search/Ticket_User', Mockery::type('array'))
             ->andReturn([
                 'totalcount' => 4,
                 'data' => [
-                    ['2' => 10, '3' => 492357, '4' => 7, '5' => 2],
-                    ['2' => 25, '3' => 492357, '4' => 9, '5' => 2],
-                    ['2' => 18, '3' => '492430 - Fallo en índigo', '4' => 7, '5' => 'Asignado'],
-                    ['2' => 30, '3' => 492357, '4' => 3, '5' => 1],
+                    ['2' => 10, '3' => 492357, '4' => 7],
+                    ['2' => 25, '3' => 492357, '4' => 9],
+                    ['2' => 18, '3' => '492430 - Fallo en índigo', '4' => 7],
+                    ['2' => 30, '3' => 492357, '4' => 3],
                 ],
             ]);
+        $glpi->shouldReceive('get')
+            ->once()
+            ->with('/getMultipleItems', Mockery::type('array'))
+            ->andReturn([
+                ['id' => 10, 'users_id' => 7, 'type' => 2],
+                ['id' => 25, 'users_id' => 9, 'type' => 2],
+                ['id' => 18, 'users_id' => 7, 'type' => 2],
+                ['id' => 30, 'users_id' => 3, 'type' => 1],
+            ]);
+        $glpi->shouldReceive('normalizeCollection')
+            ->once()
+            ->andReturnUsing(fn (mixed $batch): array => is_array($batch) ? array_values($batch) : []);
 
         $resultado = $this->invocar(new GlpiTicketsTicService($glpi), 'consultarUltimoTecnico', [[492357, 492430]]);
 
@@ -48,8 +61,8 @@ class GlpiTicketsTicServiceTest extends TestCase
             ->andReturn([
                 'totalcount' => 2,
                 'data' => [
-                    ['2' => 10, '3' => 100, '4' => 'edwin', '5' => 2],
-                    ['2' => 40, '3' => 100, '4' => 'camila', '5' => 2],
+                    ['2' => 10, '3' => 100, '4' => 'edwin'],
+                    ['2' => 40, '3' => 100, '4' => 'camila'],
                 ],
             ]);
         $glpi->shouldReceive('get')

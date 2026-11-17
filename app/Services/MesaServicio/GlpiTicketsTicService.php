@@ -58,7 +58,7 @@ class GlpiTicketsTicService
         $grupoId = max(1, (int) config('glpi.tic_tablero.grupo_id', 29));
         $alertaHoras = max(1, (int) config('glpi.tic_tablero.alerta_horas', 2));
         $ttl = max(15, (int) config('glpi.tic_tablero.cache_segundos', 60));
-        $cacheKey = "mesa_glpi_tablero_tic_v6_{$grupoId}_{$alertaHoras}";
+        $cacheKey = "mesa_glpi_tablero_tic_v7_{$grupoId}_{$alertaHoras}";
 
         if ($forzar) {
             Cache::forget($cacheKey);
@@ -573,6 +573,11 @@ class GlpiTicketsTicService
     /**
      * Último técnico que sigue asignado: la fila más reciente de glpi_tickets_users (mayor id, type = 2).
      *
+     * La búsqueda de Ticket_User en este GLPI solo expone id, ticket y usuario.
+     * Pedir el tipo (campo 5) hace fallar toda la consulta, así que el tipo se lee
+     * después en cada vínculo. Sin ese dato, el tablero tomaba el último id de la
+     * lista del ticket y mostraba a quien hizo el cambio, no al último asignado.
+     *
      * @param  list<int>  $ticketIds
      * @return array<int, int> ticketId => userId
      */
@@ -585,49 +590,41 @@ class GlpiTicketsTicService
 
         try {
             $permitidos = array_fill_keys($ticketIds, true);
-            $mejor = [];
+            $ticketPorRelacion = [];
 
             foreach (array_chunk($ticketIds, 40) as $chunk) {
-                foreach ($this->buscarActoresAsignados($chunk) as $fila) {
-                    if (! $this->esTipoAsignado($fila['type'] ?? null)) {
-                        continue;
-                    }
+                foreach ($this->buscarActoresDelTicket($chunk) as $fila) {
                     $ticketId = $this->idConocido($fila['ticket_id'] ?? null, $permitidos);
                     $relId = (int) ($fila['id'] ?? 0);
                     if ($ticketId < 1 || $relId < 1) {
                         continue;
                     }
-                    $userId = $this->idPlano($fila['user'] ?? null);
-                    if (! isset($mejor[$ticketId]) || $relId > $mejor[$ticketId]['rel']) {
-                        $mejor[$ticketId] = ['rel' => $relId, 'user' => $userId];
-                    }
+                    $ticketPorRelacion[$relId] = $ticketId;
                 }
             }
 
-            $faltan = [];
-            foreach ($mejor as $ticketId => $item) {
-                if ($item['user'] < 1) {
-                    $faltan[$item['rel']] = $ticketId;
-                }
+            if ($ticketPorRelacion === []) {
+                return [];
             }
-            if ($faltan !== []) {
-                try {
-                    foreach ($this->resolverUsuariosDeActores(array_keys($faltan)) as $relId => $userId) {
-                        $ticketId = $faltan[$relId] ?? 0;
-                        if ($ticketId > 0 && isset($mejor[$ticketId])) {
-                            $mejor[$ticketId]['user'] = $userId;
-                        }
-                    }
-                } catch (Throwable $e) {
-                    Log::warning('Tablero TIC: no se pudo resolver el usuario de la última asignación: '.$e->getMessage());
+
+            $mejor = [];
+            foreach ($this->leerActoresPorRelacion(array_keys($ticketPorRelacion)) as $relId => $actor) {
+                if (! $this->esTecnicoAsignado($actor['type'])) {
+                    continue;
+                }
+                $ticketId = $ticketPorRelacion[$relId] ?? 0;
+                $userId = (int) $actor['user'];
+                if ($ticketId < 1 || $userId < 1) {
+                    continue;
+                }
+                if (! isset($mejor[$ticketId]) || $relId > $mejor[$ticketId]['rel']) {
+                    $mejor[$ticketId] = ['rel' => $relId, 'user' => $userId];
                 }
             }
 
             $resultado = [];
             foreach ($mejor as $ticketId => $item) {
-                if ($item['user'] > 0) {
-                    $resultado[$ticketId] = $item['user'];
-                }
+                $resultado[$ticketId] = $item['user'];
             }
 
             return $resultado;
@@ -642,21 +639,16 @@ class GlpiTicketsTicService
      * @param  list<int>  $ticketIds
      * @return list<array<string, mixed>>
      */
-    private function buscarActoresAsignados(array $ticketIds): array
+    private function buscarActoresDelTicket(array $ticketIds): array
     {
         $params = [
             'forcedisplay[0]' => 2,
             'forcedisplay[1]' => 3,
             'forcedisplay[2]' => 4,
-            'forcedisplay[3]' => 5,
-            'criteria[0][field]' => 5,
-            'criteria[0][searchtype]' => 'equals',
-            'criteria[0][value]' => self::TIPO_TECNICO_ASIGNADO,
-            'criteria[1][link]' => 'AND',
         ];
 
         foreach (array_values($ticketIds) as $i => $ticketId) {
-            $base = 'criteria[1][criteria]['.$i.']';
+            $base = 'criteria['.$i.']';
             if ($i > 0) {
                 $params[$base.'[link]'] = 'OR';
             }
@@ -669,7 +661,6 @@ class GlpiTicketsTicService
             2 => 'id',
             3 => 'ticket_id',
             4 => 'user',
-            5 => 'type',
         ];
         $all = [];
         $start = 0;
@@ -720,16 +711,16 @@ class GlpiTicketsTicService
 
     /**
      * @param  list<int>  $relacionIds
-     * @return array<int, int> relacionId => userId
+     * @return array<int, array{user: int, type: mixed}> relacionId => actor
      */
-    private function resolverUsuariosDeActores(array $relacionIds): array
+    private function leerActoresPorRelacion(array $relacionIds): array
     {
         $relacionIds = array_values(array_unique(array_filter(array_map('intval', $relacionIds))));
         if ($relacionIds === []) {
             return [];
         }
 
-        $usuarios = [];
+        $actores = [];
         foreach (array_chunk($relacionIds, 50) as $chunk) {
             $params = ['get_hateoas' => false, 'expand_dropdowns' => false];
             foreach (array_values($chunk) as $i => $id) {
@@ -740,14 +731,16 @@ class GlpiTicketsTicService
             foreach ($items as $item) {
                 $id = (int) ($item['id'] ?? 0);
                 $userId = $this->idPlano($item['users_id'] ?? null);
-                $tipo = $item['type'] ?? null;
-                if ($id > 0 && $userId > 0 && ($tipo === null || $tipo === '' || $this->esTipoAsignado($tipo))) {
-                    $usuarios[$id] = $userId;
+                if ($id > 0 && $userId > 0) {
+                    $actores[$id] = [
+                        'user' => $userId,
+                        'type' => $item['type'] ?? null,
+                    ];
                 }
             }
         }
 
-        return $usuarios;
+        return $actores;
     }
 
     /**
@@ -837,6 +830,15 @@ class GlpiTicketsTicService
         }
 
         return 0;
+    }
+
+    private function esTecnicoAsignado(mixed $tipo): bool
+    {
+        if ($tipo === null || $tipo === '' || $tipo === false) {
+            return false;
+        }
+
+        return $this->esTipoAsignado($tipo);
     }
 
     private function esTipoAsignado(mixed $tipo): bool

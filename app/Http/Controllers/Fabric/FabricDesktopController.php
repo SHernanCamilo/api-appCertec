@@ -30,7 +30,7 @@ class FabricDesktopController extends Controller
      * auto-update) quedan bloqueadas y forzadas a descargar la nueva.
      * Se puede sobreescribir con config('jadeone.min_desktop_version').
      */
-    private const MIN_DESKTOP_VERSION = '1.4.0';
+    private const MIN_DESKTOP_VERSION = '1.14.0';
 
     public function __construct(
         private GraphFabricGatewayService $gateway

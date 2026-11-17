@@ -33,7 +33,9 @@ class SyncActivosJob extends BaseScheduledJob
 
         // El comando no filtra por empresa: cada activo toma empresa, sucursal y sede de su agente.
         // Sincronización completa recorre todo GLPI y actualiza los que ya existen.
-        $options = [];
+        $options = [
+            '--no-interaction' => true,
+        ];
         if ($forceFullSync) {
             $options['--full-sync'] = true;
             $options['--force'] = true;

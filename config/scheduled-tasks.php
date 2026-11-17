@@ -55,6 +55,17 @@ return [
                 'recipients' => 'array|required',
             ],
         ],
+        'notificar_tablero_tic' => [
+            'name' => 'Notificación Tablero TIC',
+            'description' => 'Publica en Teams el resumen o los casos de un destino del tablero TIC',
+            'job_class' => \App\Jobs\NotificarTableroTicJob::class,
+            'queue' => 'scheduled-tasks',
+            'max_attempts' => 1,
+            'timeout' => 180,
+            'parameters' => [
+                'destino_id' => 'integer|required',
+            ],
+        ],
     ],
 
     /*

@@ -21,7 +21,7 @@ class SincronizarActivosGlpi extends Command
     protected $signature = 'glpi:sync-activos 
                            {--batch=50 : Número de activos a procesar por lote}
                            {--offset=0 : Desde qué registro comenzar}
-                           {--limit=2500 : Límite total de registros a procesar}
+                           {--limit=5000 : Límite total de registros a procesar}
                            {--force : Forzar actualización de registros existentes}
                            {--check-deleted : Verificar activos eliminados en GLPI}
                            {--sync-days=7 : Días para considerar si un activo necesita sincronización}
@@ -166,6 +166,8 @@ class SincronizarActivosGlpi extends Command
             'updated' => 0,
             'skipped' => 0,
             'errors' => 0,
+            'calculated' => 0,
+            'calc_errors' => 0,
             'agents_found' => 0,      // TAGs encontrados en matzobs_agentes
             'agents_not_found' => 0   // TAGs no encontrados (valores por defecto)
         ];
@@ -250,10 +252,14 @@ class SincronizarActivosGlpi extends Command
                 ]);
                 
                 $totalStats['errors']++;
-                
-                if (!$this->confirm('¿Continuar con el siguiente lote?')) {
+
+                // La tarea automática corre sin teclado. Preguntar aquí la deja
+                // esperando y el cálculo del resto nunca arranca.
+                if ($this->input->isInteractive() && !$this->confirm('¿Continuar con el siguiente lote?')) {
                     break;
                 }
+
+                $this->warn('Se continúa con el siguiente lote.');
             }
 
             // Actualizar offset para el siguiente lote
@@ -275,34 +281,8 @@ class SincronizarActivosGlpi extends Command
             }
         }
 
-        // Ejecutar cálculos finales si no se omitieron
-        if (!$skipCalculations && ($totalStats['created'] > 0 || $totalStats['updated'] > 0)) {
-            $this->info("\n🧮 Ejecutando cálculos automáticos para activos sincronizados...");
-            
-            try {
-                // Obtener IDs de activos que fueron creados o actualizados
-                $recentlyUpdated = MatzobsActivosC::where('date_u_sincronizacion', '>=', $startTime)
-                    ->pluck('id')
-                    ->toArray();
-                
-                if (!empty($recentlyUpdated)) {
-                    $calculationResult = $this->calculatorService->calcularValoresLote($recentlyUpdated, $batchSize);
-                    
-                    $this->info("✅ Cálculos completados:");
-                    $this->info("   - Activos calculados: {$calculationResult['exitosos']}");
-                    if ($calculationResult['errores'] > 0) {
-                        $this->warn("   - Errores en cálculos: {$calculationResult['errores']}");
-                    }
-                    
-                    $totalStats['calculations'] = $calculationResult;
-                }
-            } catch (\Exception $e) {
-                $this->warn("⚠️  Error ejecutando cálculos automáticos: " . $e->getMessage());
-                Log::channel('glpi_sync')->warning("Error en cálculos automáticos", [
-                    'error' => $e->getMessage()
-                ]);
-            }
-        }
+        // El puntaje se calcula al cerrar cada lote. Así la tarea automática
+        // no depende de un paso final que el riel puede cortar antes de llegar.
 
         if ($checkDeleted || $fullSync) {
             $this->info("\n🔍 Verificando activos en papelera o inexistentes en GLPI...");
@@ -327,6 +307,10 @@ class SincronizarActivosGlpi extends Command
         }
         if ($totalStats['errors'] > 0) {
             $this->warn("   - Errores: {$totalStats['errors']}");
+        }
+        $this->info("   - Puntajes calculados: {$totalStats['calculated']}");
+        if ($totalStats['calc_errors'] > 0) {
+            $this->warn("   - Errores de cálculo: {$totalStats['calc_errors']}");
         }
         $this->info("\n📋 Asignación de Agentes:");
         $this->info("   - TAGs encontrados en BD: {$totalStats['agents_found']}");
@@ -807,9 +791,12 @@ class SincronizarActivosGlpi extends Command
             'updated' => 0,
             'skipped' => 0,
             'errors' => 0,
+            'calculated' => 0,
+            'calc_errors' => 0,
             'agents_found' => 0,
             'agents_not_found' => 0
         ];
+        $idsParaCalcular = [];
 
         // Si computers no es array, convertirlo
         if (!is_array($computers)) {
@@ -826,7 +813,7 @@ class SincronizarActivosGlpi extends Command
                     });
                 }
                 
-                $result = $this->syncComputer($computer, $force, $syncDays, $stats);
+                $result = $this->syncComputer($computer, $force, $syncDays, $stats, $idsParaCalcular);
                 $stats[$result]++;
                 $stats['processed']++;
 
@@ -847,6 +834,23 @@ class SincronizarActivosGlpi extends Command
                 ]);
                 
                 $progressBar->advance();
+            }
+        }
+
+        if (!$skipCalculations && $idsParaCalcular !== []) {
+            try {
+                $calculationResult = $this->calculatorService->calcularValoresLote($idsParaCalcular, max(1, count($idsParaCalcular)));
+                $stats['calculated'] = $calculationResult['exitosos'];
+                $stats['calc_errors'] = $calculationResult['errores'];
+                $this->info("🧮 Lote calculado: {$calculationResult['exitosos']} puntajes" . ($calculationResult['errores'] > 0 ? ", {$calculationResult['errores']} con error" : ''));
+            } catch (\Exception $e) {
+                $stats['calc_errors'] = count($idsParaCalcular);
+                $this->warn('⚠️  El lote se sincronizó, pero no se pudo calcular: ' . $e->getMessage());
+                Log::channel('glpi_sync')->warning('Error en cálculos del lote', [
+                    'offset' => $offset,
+                    'ids' => $idsParaCalcular,
+                    'error' => $e->getMessage()
+                ]);
             }
         }
 
@@ -945,7 +949,7 @@ class SincronizarActivosGlpi extends Command
         }
     }
 
-    private function syncComputer($computer, $force, $syncDays = 7, &$stats = null)
+    private function syncComputer($computer, $force, $syncDays = 7, &$stats = null, &$idsParaCalcular = null)
     {
         DB::beginTransaction();
 
@@ -1044,18 +1048,23 @@ class SincronizarActivosGlpi extends Command
                 // Si existe, verificar si necesita actualización
                 $needsUpdate = $force; // Si force=true, siempre actualizar
                 
+                $existingD = MatzobsActivosD::where('activo_c_id', $existingC->id)->first();
+
                 if (!$needsUpdate) {
-                    // Verificar si los datos han cambiado comparando campos clave
+                    // La ubicación la edita Jade ONE. Un cambio solo en GLPI no
+                    // debe volver a traer el activo ni pisar ese campo.
+                    $diasDesdeSync = $existingC->date_u_sincronizacion
+                        ? abs($existingC->date_u_sincronizacion->diffInDays(now()))
+                        : null;
                     $needsUpdate = (
                         $existingC->nombre_equipo !== $activoC['nombre_equipo'] ||
                         $existingC->agente !== $activoC['agente'] ||
                         $existingC->serial !== $activoC['serial'] ||
-                        $existingC->ubicacion !== $activoC['ubicacion'] ||
                         $existingC->usuario_glpi !== $activoC['usuario_glpi'] ||
-                        $existingC->id_activo_glpi != $activoC['id_activo_glpi'] || // Verificar cambio de ID GLPI
-                        // Verificar si han pasado más días de los configurados desde la última sincronización
-                        !$existingC->date_u_sincronizacion || 
-                        $existingC->date_u_sincronizacion->diffInDays(now()) >= $syncDays
+                        $existingC->id_activo_glpi != $activoC['id_activo_glpi'] ||
+                        $diasDesdeSync === null ||
+                        $diasDesdeSync >= $syncDays ||
+                        $this->detallesCambiaron($existingD, $activoD)
                     );
                 }
                 
@@ -1084,15 +1093,12 @@ class SincronizarActivosGlpi extends Command
                         'agente' => $activoC['agente'],
                         'placa' => $activoC['placa'],
                         'serial' => $activoC['serial'],
-                        'ubicacion' => $activoC['ubicacion'],
-                        'puntaje' => $activoC['puntaje'],
+                        // ubicacion y puntaje se conservan: la ubicación es de Jade ONE
+                        // y el puntaje lo vuelve a escribir el cálculo de este mismo lote.
                         'usuario_modificacion' => $activoC['usuario_modificacion'],
                         'date_u_sincronizacion' => $activoC['date_u_sincronizacion'],
                         'updated_at' => now()
                     ]);
-                
-                // Actualizar o crear ActivoD
-                $existingD = MatzobsActivosD::where('activo_c_id', $existingC->id)->first();
                 
                 if ($existingD) {
                     DB::table('matzobs_activos_d')
@@ -1123,6 +1129,7 @@ class SincronizarActivosGlpi extends Command
                 ]);
                 
                 DB::commit();
+                $this->marcarParaCalcular($idsParaCalcular, $existingC->id);
                 return 'updated';
             } else {
                 // ANTES DE CREAR: Verificación final de duplicados por nombre
@@ -1150,7 +1157,7 @@ class SincronizarActivosGlpi extends Command
                     'agente' => $activoC['agente'],
                     'placa' => $activoC['placa'],
                     'serial' => $activoC['serial'],
-                    'ubicacion' => $activoC['ubicacion'],
+                    // La ubicación se asigna en Jade ONE, desde la matriz.
                     'usuario_glpi' => $activoC['usuario_glpi'],
                     'puntaje' => $activoC['puntaje'],
                     'usuario_modificacion' => $activoC['usuario_modificacion'],
@@ -1183,6 +1190,7 @@ class SincronizarActivosGlpi extends Command
                 ]);
                 
                 DB::commit();
+                $this->marcarParaCalcular($idsParaCalcular, $activoCId);
                 return 'created';
             }
 
@@ -1190,6 +1198,55 @@ class SincronizarActivosGlpi extends Command
             DB::rollback();
             throw $e;
         }
+    }
+
+    private function marcarParaCalcular(&$idsParaCalcular, $activoId): void
+    {
+        if (is_array($idsParaCalcular)) {
+            $idsParaCalcular[] = $activoId;
+        }
+    }
+
+    /**
+     * La sincronización automática, sin --force, solo reescribía cabecera.
+     * Un cambio de RAM, disco o procesador no disparaba la actualización y
+     * por eso el puntaje se quedaba con el cálculo anterior.
+     */
+    private function detallesCambiaron($existingD, array $activoD): bool
+    {
+        if (!$existingD) {
+            return true;
+        }
+
+        $campos = [
+            'sistema_operativo', 'marca', 'tipo', 'referencia',
+            'tamano_ram', 'generacion_ram', 'procesador', 'numero_procesador',
+            'tipo_disco', 'tamano_disco', 'interfaz_conexion',
+        ];
+
+        foreach ($campos as $campo) {
+            if (!$this->mismoValor($existingD->{$campo} ?? null, $activoD[$campo] ?? null)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function mismoValor($actual, $nuevo): bool
+    {
+        $actualVacio = $actual === null || $actual === '';
+        $nuevoVacio = $nuevo === null || $nuevo === '';
+
+        if ($actualVacio || $nuevoVacio) {
+            return $actualVacio && $nuevoVacio;
+        }
+
+        if (is_numeric($actual) && is_numeric($nuevo)) {
+            return (float) $actual === (float) $nuevo;
+        }
+
+        return trim((string) $actual) === trim((string) $nuevo);
     }
 
     private function mapActivoC($computer, &$stats = null)

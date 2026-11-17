@@ -151,12 +151,25 @@ class MesaServicioGlpiModulosSeeder extends Seeder
             'Permite consultar los tickets abiertos de Nivel 1 Nacional',
             array_values(array_filter(
                 $permisoIds,
-                fn ($item) => str_starts_with($item['codigo'], 'mesa-glpi-tablero')
+                fn ($item) => (str_starts_with($item['codigo'], 'mesa-glpi-tablero')
+                    && $item['codigo'] !== 'mesa-glpi-tablero-notificar')
                     || $item['codigo'] === 'mesa-visible'
             )),
         );
 
+        $perfilNotificaciones = $this->asegurarPerfil(
+            $tablero,
+            'MESA-GLPI-TIC-NOTIF',
+            'Notificaciones Teams',
+            'Permite configurar y enviar los avisos del Tablero TIC a Teams',
+            array_values(array_filter(
+                $permisoIds,
+                fn ($item) => $item['codigo'] === 'mesa-glpi-tablero-notificar'
+            )),
+        );
+
         $this->asignarPerfilesARoles([$perfilPlantillas->id, $perfilValidador->id, $perfilTablero->id]);
+        $this->asignarPerfilNotificaciones($perfilNotificaciones->id);
 
         app(SidebarService::class)->invalidateAllSidebarCache();
 
@@ -265,6 +278,14 @@ class MesaServicioGlpiModulosSeeder extends Seeder
                 'tipo' => 'accion',
                 'orden' => 1,
             ],
+            [
+                'id_modulo' => $tablero->id,
+                'nombre' => 'Notificaciones Teams',
+                'codigo' => 'mesa-glpi-tablero-notificar',
+                'descripcion' => 'Permite abrir y configurar las notificaciones de Teams del Tablero TIC',
+                'tipo' => 'boton',
+                'orden' => 2,
+            ],
         ];
 
         $items = [];
@@ -357,6 +378,22 @@ class MesaServicioGlpiModulosSeeder extends Seeder
         foreach ($roles as $rol) {
             $rol->perfiles()->syncWithoutDetaching($perfilIds);
             $this->command?->info("  Perfiles asignados al rol: {$rol->nombre}");
+        }
+    }
+
+    private function asignarPerfilNotificaciones(int $perfilId): void
+    {
+        $roles = Rol::query()
+            ->where('estado', 1)
+            ->where(function ($query): void {
+                $query->whereIn('codigo', ['super-admin', 'admin-sedes', 'administrador'])
+                    ->orWhereIn('nombre', ['Super Administrador', 'Administrador']);
+            })
+            ->get();
+
+        foreach ($roles as $rol) {
+            $rol->perfiles()->syncWithoutDetaching([$perfilId]);
+            $this->command?->info("  Notificaciones Teams asignadas al rol: {$rol->nombre}");
         }
     }
 }

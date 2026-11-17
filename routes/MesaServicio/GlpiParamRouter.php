@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\MesaServicio\GlpiPlantillaController;
+use App\Http\Controllers\MesaServicio\GlpiTeamsDestinoController;
 use App\Http\Controllers\MesaServicio\GlpiTicketsTicController;
 use App\Http\Controllers\MesaServicio\GlpiValidadorController;
 use Illuminate\Support\Facades\Route;
@@ -24,6 +25,20 @@ Route::post('/plantillas/{id}/duplicar', [GlpiPlantillaController::class, 'dupli
 
 Route::get('/tablero-tic', [GlpiTicketsTicController::class, 'index'])
     ->middleware('check.permission:mesa-glpi-tablero-ver');
+
+Route::middleware('check.permission:mesa-glpi-tablero-notificar')->group(function () {
+    Route::get('/teams-destinos', [GlpiTeamsDestinoController::class, 'index']);
+    Route::post('/teams-destinos', [GlpiTeamsDestinoController::class, 'store']);
+    Route::post('/teams-destinos/vista-previa', [GlpiTeamsDestinoController::class, 'vistaPrevia']);
+    Route::get('/teams-destinos/grupos', [GlpiTeamsDestinoController::class, 'grupos']);
+    Route::get('/teams-destinos/chats', [GlpiTeamsDestinoController::class, 'chats']);
+    Route::get('/teams-destinos/equipos', [GlpiTeamsDestinoController::class, 'equipos']);
+    Route::get('/teams-destinos/equipos/{teamId}/canales', [GlpiTeamsDestinoController::class, 'canales'])
+        ->whereUuid('teamId');
+    Route::put('/teams-destinos/{id}', [GlpiTeamsDestinoController::class, 'update'])->whereNumber('id');
+    Route::delete('/teams-destinos/{id}', [GlpiTeamsDestinoController::class, 'destroy'])->whereNumber('id');
+    Route::post('/teams-destinos/{id}/enviar', [GlpiTeamsDestinoController::class, 'enviar'])->whereNumber('id');
+});
 
 Route::get('/validador/entidades', [GlpiValidadorController::class, 'entidades']);
 Route::post('/validador/comparar', [GlpiValidadorController::class, 'comparar']);

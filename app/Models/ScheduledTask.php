@@ -395,7 +395,10 @@ class ScheduledTask extends Model
             case self::RECURRENCE_DAILY:
                 $time = $this->recurrence_value['time'] ?? '00:00';
                 [$hour, $minute] = explode(':', $time);
-                $nextRun = $now->copy()->addDay()->setTime((int)$hour, (int)$minute, 0);
+                $nextRun = $now->copy()->setTime((int) $hour, (int) $minute, 0);
+                if ($nextRun->lessThanOrEqualTo($now)) {
+                    $nextRun->addDay();
+                }
                 break;
 
             case self::RECURRENCE_WEEKLY:
