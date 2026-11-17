@@ -20,6 +20,7 @@ class BiVistaController extends Controller
         ['codigo' => 'NVA', 'nombre' => 'Neiva (NVA)'],
         ['codigo' => 'DTA', 'nombre' => 'Duitama (DTA)'],
         ['codigo' => 'NAL', 'nombre' => 'Nacional (NAL)'],
+        ['codigo' => 'LTM', 'nombre' => 'La Toma (LTM)'],
     ];
 
     public function catalogoDepartamentos(): JsonResponse

@@ -688,7 +688,7 @@ class GraphFabricGatewayService
      */
     private function knownSiteCodesLower(): array
     {
-        return ['cmi', 'eal', 'fla', 'kta', 'tja', 'nva', 'dta', 'pto', 'nal'];
+        return ['cmi', 'eal', 'fla', 'kta', 'tja', 'nva', 'dta', 'pto', 'nal', 'ltm'];
     }
 
     /**
