@@ -807,6 +807,14 @@ class GraphFabricGatewayService
         $siteContext      = $this->resolveSiteContext($user);
         $siteCodes        = $siteContext['site_codes'];
         $isNational       = $siteContext['is_national'];
+
+        // Usuario nacional/admin: el filtro de departamento de bi_vistas no aplica.
+        // Ese campo restringe vistas a sedes concretas para usuarios normales; un
+        // admin nacional debe ver todas las vistas sin importar su departamento.
+        if ($isNational) {
+            return $response;
+        }
+
         $configIndex      = $this->getBiVistasConfigBySchema();
         $delegadasUsuario = $this->getUserDelegatedViewNamesSet($user);
 
