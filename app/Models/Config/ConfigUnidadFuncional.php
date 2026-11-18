@@ -4,11 +4,13 @@ namespace App\Models\Config;
 
 use App\Models\Empresa;
 use App\Models\Empleado;
+use App\Models\Inventory\Ropa\RopaUnidadCupo;
 use App\Models\Sede;
 use App\Models\Sucursal;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class ConfigUnidadFuncional extends Model
 {
@@ -43,6 +45,11 @@ class ConfigUnidadFuncional extends Model
     public function sede()
     {
         return $this->belongsTo(Sede::class, 'id_sede');
+    }
+
+    public function cupoRopa(): HasOne
+    {
+        return $this->hasOne(RopaUnidadCupo::class, 'id_unidad_funcional');
     }
 
     public function usuarios()
@@ -90,7 +97,9 @@ class ConfigUnidadFuncional extends Model
         $user->loadMissing('empresas');
 
         if ($user->empresas->isEmpty()) {
-            return $query;
+            return $user->veTodasLasEmpresas()
+                ? $query
+                : $query->whereRaw('0 = 1');
         }
 
         return $query->where(function (Builder $q) use ($user) {

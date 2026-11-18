@@ -104,6 +104,23 @@ class User extends Authenticatable implements JWTSubject
     }
 
     /**
+     * Super administrador o rol marcado como administrador.
+     * Sin empresas asignadas, solo estas cuentas ven toda la organización.
+     */
+    public function veTodasLasEmpresas(): bool
+    {
+        $this->loadMissing('rolesCustom');
+
+        return $this->rolesCustom->contains(function ($rol) {
+            if (!(bool) $rol->estado) {
+                return false;
+            }
+
+            return $rol->codigo === 'admin-sedes' || (bool) $rol->es_admin;
+        });
+    }
+
+    /**
      * Relación con sucursal
      */
     public function sucursal()

@@ -21,7 +21,7 @@ class SincronizarActivosGlpi extends Command
     protected $signature = 'glpi:sync-activos 
                            {--batch=50 : Número de activos a procesar por lote}
                            {--offset=0 : Desde qué registro comenzar}
-                           {--limit=5000 : Límite total de registros a procesar}
+                           {--limit=6000 : Límite total de registros a procesar}
                            {--force : Forzar actualización de registros existentes}
                            {--check-deleted : Verificar activos eliminados en GLPI}
                            {--sync-days=7 : Días para considerar si un activo necesita sincronización}
@@ -185,8 +185,11 @@ class SincronizarActivosGlpi extends Command
                 ? $this->bulkService->contar($modifiedSince)
                 : $this->getTotalAssetsCount();
             if ($totalAssets > 0) {
-                $limit = $totalAssets;
-                $this->info("� Total de activos en GLPI: {$totalAssets}");
+                $this->info("📦 Total de activos en GLPI: {$totalAssets}");
+                if ($totalAssets > $limit) {
+                    $limit = $totalAssets;
+                    $this->info("   - Límite total ajustado a {$limit} para incluir todos los equipos");
+                }
             }
         }
 

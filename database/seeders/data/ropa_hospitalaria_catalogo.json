@@ -1,0 +1,5144 @@
+{
+  "prendas": [
+    {
+      "codigo": "Al01",
+      "nombre": "Almohadaa",
+      "estado": 0,
+      "regla": "cama"
+    },
+    {
+      "codigo": "BA011",
+      "nombre": "Bata",
+      "estado": 0,
+      "regla": "cama"
+    },
+    {
+      "codigo": "BT01",
+      "nombre": "BOTAS",
+      "estado": 0,
+      "regla": "cama"
+    },
+    {
+      "codigo": "rew",
+      "nombre": "nueva",
+      "estado": 0,
+      "regla": "cama"
+    },
+    {
+      "codigo": "NVS",
+      "nombre": "CAMISETA",
+      "estado": 0,
+      "regla": "cama"
+    },
+    {
+      "codigo": "BT AISL",
+      "nombre": "Bata de aislamiento",
+      "estado": 0,
+      "regla": "cama"
+    },
+    {
+      "codigo": "01",
+      "nombre": "GDSFS",
+      "estado": 0,
+      "regla": "cama"
+    },
+    {
+      "codigo": "1",
+      "nombre": "ALMOHADAS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "2",
+      "nombre": "COBERTOR INCUBADORA DOBLE FAZ",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "3",
+      "nombre": "COBERTOR NEONATOS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "4",
+      "nombre": "COBIJAS PACIENTE",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "5",
+      "nombre": "COBIJAS ESTAR MEDICO",
+      "estado": 1,
+      "regla": "estar_medico"
+    },
+    {
+      "codigo": "6",
+      "nombre": "FUNDAS ESTAR MEDICO",
+      "estado": 1,
+      "regla": "estar_medico"
+    },
+    {
+      "codigo": "7",
+      "nombre": "FUNDAS ALMOHADA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "8",
+      "nombre": "FORRO DE MEDIA LUNA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "9",
+      "nombre": "PROTECTOR O FORRO NIDO",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "10",
+      "nombre": "SABANAS PACIENTE O DE CAMA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "11",
+      "nombre": "SABANAS 01",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "12",
+      "nombre": "SÁBANAS FAJAS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "13",
+      "nombre": "SABANAS ESTAR MEDICO",
+      "estado": 1,
+      "regla": "estar_medico"
+    },
+    {
+      "codigo": "14",
+      "nombre": "SABANAS NEONATAL O PEDIATRICA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "15",
+      "nombre": "SABANAS NEONATAL CON RESORTE",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "16",
+      "nombre": "CAMILLERAS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "17",
+      "nombre": "BATAS PACIENTE",
+      "estado": 1,
+      "regla": "personal"
+    },
+    {
+      "codigo": "18",
+      "nombre": "BATA RENAL",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "19",
+      "nombre": "BATA AISLAMIENTO COVID-BLANCA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "20",
+      "nombre": "BATAS DE AISLAMIENTO",
+      "estado": 1,
+      "regla": "personal"
+    },
+    {
+      "codigo": "21",
+      "nombre": "BATA PEDIATRICAS O NEONATAL",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "22",
+      "nombre": "CAMISA - UNIFORME",
+      "estado": 1,
+      "regla": "personal"
+    },
+    {
+      "codigo": "23",
+      "nombre": "PANTALON - UNIFORME",
+      "estado": 1,
+      "regla": "personal"
+    },
+    {
+      "codigo": "24",
+      "nombre": "SABANAS RENAL",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "25",
+      "nombre": "ENVOLVEDERAS DE EQUIPO",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "26",
+      "nombre": "COBERTOR DE TAC",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "27",
+      "nombre": "ESCAFANDRAS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "28",
+      "nombre": "ROLLOS CAMBIO DE POSICION",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "29",
+      "nombre": "TULAS DE MEDICAMENTOS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "30",
+      "nombre": "PROTECTORES CUBRE BARANDA (CUNA)",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "31",
+      "nombre": "FORRO ALMOHADA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "32",
+      "nombre": "FORRO DE ROLLO PARA CAMBIO DE POSICION",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "33",
+      "nombre": "TOLDILLOS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "34",
+      "nombre": "BOLSA MATERIAL ESTERIL",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "35",
+      "nombre": "CAUCHOS AZUL PARA CIRUGIA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "36",
+      "nombre": "CORTINAS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "37",
+      "nombre": "CAMPO PIEL",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "38",
+      "nombre": "SABANA QUIRURGICA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "39",
+      "nombre": "CAMPO GENERAL",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "40",
+      "nombre": "FUNDA MAYO",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "41",
+      "nombre": "CAMPO PERY O VALVULA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "42",
+      "nombre": "FUNDA DE ARCO EN C",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "43",
+      "nombre": "ENVOLVEDERA PEQUENA SENCILLA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "44",
+      "nombre": "ENVOLVEDERA MEDIANA SENCILLA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "45",
+      "nombre": "ENVOLVEDERA GRANDE SENCILLA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "46",
+      "nombre": "ENVOLVEDERA BACTEREMIA PEQUENA DOBLE",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "47",
+      "nombre": "ENVOLVEDERA DOBLE",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "48",
+      "nombre": "CAMPO RUANA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "49",
+      "nombre": "CAMPO GENERAL CIRUGIA BARIATRICA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "50",
+      "nombre": "CAMPO GENERAL BACTEREMIA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "51",
+      "nombre": "CAMPO OJO",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "52",
+      "nombre": "BATA QUIRURGICA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "53",
+      "nombre": "BOLSILLO QUIRURGICO",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "54",
+      "nombre": "CHALECO DE CIRUGIA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "55",
+      "nombre": "CAMPO PARA RAQUIDEA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "56",
+      "nombre": "CAMPO OJO NEONATAL",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "57",
+      "nombre": "CAMPO NEONATAL",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "58",
+      "nombre": "POLAINAS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "59",
+      "nombre": "COBIJA PEDIATRICA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "60",
+      "nombre": "SABANAS FAJAS",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "61",
+      "nombre": "SABANA ESCAPULA",
+      "estado": 1,
+      "regla": "cama"
+    },
+    {
+      "codigo": "62",
+      "nombre": "OVEROL",
+      "estado": 1,
+      "regla": "cama"
+    }
+  ],
+  "unidades": [
+    {
+      "codigo": "N01",
+      "nombre": "URGENCIAS-NVA",
+      "camas": 80,
+      "camas_medico": 1,
+      "personal": 30,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N0304",
+      "nombre": "HOSPITALIZACION NEIVA 4TO PISO TP-NVA",
+      "camas": 35,
+      "camas_medico": 0,
+      "personal": 15,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N03G",
+      "nombre": "HOSPITALIZACION GOLD-NVA",
+      "camas": 40,
+      "camas_medico": 0,
+      "personal": 12,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N03P",
+      "nombre": "HOSPITALIZACION PREMIUM-NVA",
+      "camas": 15,
+      "camas_medico": 0,
+      "personal": 12,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N03R",
+      "nombre": "HOSPITALIZACION RUBI-NVA",
+      "camas": 20,
+      "camas_medico": 0,
+      "personal": 27,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N03T",
+      "nombre": "SALA TRANSICIONAL-NVA",
+      "camas": 25,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "N04",
+      "nombre": "UCI ADULTOS GENERAL-NVA",
+      "camas": 30,
+      "camas_medico": 1,
+      "personal": 24,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N05",
+      "nombre": "UCI ADULTOS CARDIOVASCULAR-NVA",
+      "camas": 18,
+      "camas_medico": 0,
+      "personal": 24,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N07",
+      "nombre": "UCI PEDIATRICA-NVA",
+      "camas": 15,
+      "camas_medico": 2,
+      "personal": 24,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N08",
+      "nombre": "HOSPITALIZACION VIP-NVA",
+      "camas": 32,
+      "camas_medico": 0,
+      "personal": 18,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N11",
+      "nombre": "CIRUGIA CARDIOVASCULAR-NVA",
+      "camas": 12,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F01",
+      "nombre": "URGENCIAS-FLA",
+      "camas": 110,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F02",
+      "nombre": "CONSULTA EXTERNA-FLA",
+      "camas": 6,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F03",
+      "nombre": "HOSPITALIZACION GENERAL-FLA",
+      "camas": 41,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F04",
+      "nombre": "UCI ADULTOS GENERAL-FLA",
+      "camas": 12,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F05",
+      "nombre": "UCI ADULTOS CARDIOVASCULAR-FLA",
+      "camas": 10,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F06",
+      "nombre": "UCI NEONATAL-FLA",
+      "camas": 21,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F08",
+      "nombre": "HOSPITALIZACION VIP-FLA",
+      "camas": 19,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F10",
+      "nombre": "QUIROFANO-FLA",
+      "camas": 30,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F12",
+      "nombre": "GINECO OBSTETRICIA-FLA",
+      "camas": 20,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F13",
+      "nombre": "ENDOSCOPIAS-FLA",
+      "camas": 3,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F24",
+      "nombre": "HEMODINAMIA-FLA",
+      "camas": 16,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F25",
+      "nombre": "ELECTROFISIOLOGIA-FLA",
+      "camas": 5,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F3501",
+      "nombre": "UNIDAD DE ATENCION RESPIRATORIA-FLA",
+      "camas": 0,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F0701",
+      "nombre": "UCI PEDIATRICA INTERMEDIOS-FLA",
+      "camas": 5,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "E01",
+      "nombre": "URGENCIAS-EAL",
+      "camas": 49,
+      "camas_medico": 2,
+      "personal": 50,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "E0301",
+      "nombre": "HOSPITALIZACION 5TO PISO-EAL",
+      "camas": 43,
+      "camas_medico": 2,
+      "personal": 27,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "E0302",
+      "nombre": "HOSPITALIZACION 6TO PISO-EAL",
+      "camas": 44,
+      "camas_medico": 0,
+      "personal": 27,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "E0303",
+      "nombre": "HOSPITALIZACION 3ER PISO-EAL",
+      "camas": 25,
+      "camas_medico": 0,
+      "personal": 18,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "E0304",
+      "nombre": "HOSPITALIZACION 4TO PISO-EAL",
+      "camas": 43,
+      "camas_medico": 2,
+      "personal": 27,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "E06",
+      "nombre": "UCI NEONATAL-EAL",
+      "camas": 23,
+      "camas_medico": 2,
+      "personal": 30,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "E10",
+      "nombre": "QUIROFANO-EAL",
+      "camas": 25,
+      "camas_medico": 0,
+      "personal": 90,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "E12",
+      "nombre": "GINECO OBSTETRICIA-EAL",
+      "camas": 21,
+      "camas_medico": 0,
+      "personal": 20,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "E15",
+      "nombre": "RAYOS X Y MAMOGRAFIA-EAL",
+      "camas": 1,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "E16",
+      "nombre": "ESCANOGRAFIA-EAL",
+      "camas": 1,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "E18",
+      "nombre": "ECOGRAFIA Y DOPPLER-EAL",
+      "camas": 2,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "EA130",
+      "nombre": "ESTERILIZACION-EAL",
+      "camas": 15,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "N40",
+      "nombre": "URGENCIAS PEDIATRICA-NVA",
+      "camas": 30,
+      "camas_medico": 1,
+      "personal": 11,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N09",
+      "nombre": "HOSPITALIZACION EN CASA-NVA",
+      "camas": 10,
+      "camas_medico": 0,
+      "personal": 3,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N14",
+      "nombre": "RESONANCIA MAGNETICA-NVA",
+      "camas": 8,
+      "camas_medico": 0,
+      "personal": 6,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N15",
+      "nombre": "RAYOS X Y MAMOGRAFIA-NVA",
+      "camas": 4,
+      "camas_medico": 0,
+      "personal": 6,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N18",
+      "nombre": "ECOGRAFIA Y DOPPLER-NVA",
+      "camas": 4,
+      "camas_medico": 0,
+      "personal": 10,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N21",
+      "nombre": "UCI QUIRURGICA-NVA",
+      "camas": 10,
+      "camas_medico": 3,
+      "personal": 21,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N22",
+      "nombre": "UCI ADULTOS INTERMEDIOS-NVA",
+      "camas": 10,
+      "camas_medico": 2,
+      "personal": 12,
+      "aplica_estar_medico": true,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N23",
+      "nombre": "HOSPITALIZACION ZAFIRO-NVA",
+      "camas": 22,
+      "camas_medico": 5,
+      "personal": 15,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N24",
+      "nombre": "HEMODINAMIA-NVA",
+      "camas": 9,
+      "camas_medico": 0,
+      "personal": 54,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N29",
+      "nombre": "ELECTROENCEFALOGRAMA-NVA",
+      "camas": 4,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "N37",
+      "nombre": "CARDIOLOGIA NO INVASIVA-NVA",
+      "camas": 4,
+      "camas_medico": 0,
+      "personal": 18,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "NA130",
+      "nombre": "ESTERILIZACION-NVA",
+      "camas": 10,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "N1001",
+      "nombre": "QUIROFANO 6 PISO-NVA",
+      "camas": 22,
+      "camas_medico": 0,
+      "personal": 60,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "N02",
+      "nombre": "CONSULTA EXTERNA-NVA",
+      "camas": 25,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F03-1",
+      "nombre": "HOSPITALIZACION PEDIATRICA-FLA",
+      "camas": 9,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "N16",
+      "nombre": "ESCANOGRAFIA-NVA",
+      "camas": 4,
+      "camas_medico": 0,
+      "personal": 5,
+      "aplica_estar_medico": false,
+      "aplica_personal": true
+    },
+    {
+      "codigo": "T01",
+      "nombre": "URGENCIAS-TJA",
+      "camas": 76,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T0302",
+      "nombre": "HOSPITALIZACION PREMIUM-TJA",
+      "camas": 18,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T0303",
+      "nombre": "HOSPITALIZACION 3ER PISO-TJA",
+      "camas": 20,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T0304",
+      "nombre": "HOSPITALIZACION MATERNO INFANTIL-TJA",
+      "camas": 14,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T0305",
+      "nombre": "HOSPITALIZACION SUR 5TO PISO-TJA",
+      "camas": 18,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T0305M",
+      "nombre": "HOSPITALIZACION NORTE 5TO PISO-TJA",
+      "camas": 17,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T0305P",
+      "nombre": "HOSPITALIZACION PEDIATRIA-TJA",
+      "camas": 5,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T04",
+      "nombre": "UCI ADULTOS GENERAL-TJA",
+      "camas": 12,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T05",
+      "nombre": "UCI ADULTOS CARDIOVASCULAR-TJA",
+      "camas": 11,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T06",
+      "nombre": "UCI NEONATAL-TJA",
+      "camas": 16,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T06B",
+      "nombre": "UCI NEONATAL BASICA-TJA",
+      "camas": 11,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T10",
+      "nombre": "QUIROFANO-TJA",
+      "camas": 16,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T11",
+      "nombre": "CIRUGIA CARDIOVASCULAR-TJA",
+      "camas": 1,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T12",
+      "nombre": "GINECO OBSTETRICIA-TJA",
+      "camas": 6,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T15",
+      "nombre": "RAYOS X Y MAMOGRAFIA-TJA",
+      "camas": 2,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T16",
+      "nombre": "ESCANOGRAFIA-TJA",
+      "camas": 4,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T18",
+      "nombre": "ECOGRAFIA Y DOPPLER-TJA",
+      "camas": 3,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T24",
+      "nombre": "HEMODINAMIA-TJA",
+      "camas": 20,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T02",
+      "nombre": "CONSULTA EXTERNA-TJA",
+      "camas": 12,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T80",
+      "nombre": "UAE ONCOLOGIA -TJA",
+      "camas": 12,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "T55",
+      "nombre": "SALAS DE CX AMBULATORIAS -TJA",
+      "camas": 10,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "F15",
+      "nombre": "RAYOS X Y MAMOGRAFIA-FLA",
+      "camas": 3,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    },
+    {
+      "codigo": "37T",
+      "nombre": "CARDIOLOGIA NO INVASIVA - TJA",
+      "camas": 5,
+      "camas_medico": 0,
+      "personal": 0,
+      "aplica_estar_medico": false,
+      "aplica_personal": false
+    }
+  ],
+  "constantes": [
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F04",
+      "constante": "2.00",
+      "origen_id": 3
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F05",
+      "constante": "2.00",
+      "origen_id": 4
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F05",
+      "constante": "2.50",
+      "origen_id": 5
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F04",
+      "constante": "2.50",
+      "origen_id": 6
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F04",
+      "constante": "3.50",
+      "origen_id": 11
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "F05",
+      "constante": "7.00",
+      "origen_id": 13
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "F04",
+      "constante": "7.00",
+      "origen_id": 14
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "F05",
+      "constante": "1.00",
+      "origen_id": 17
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "F04",
+      "constante": "1.00",
+      "origen_id": 18
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F05",
+      "constante": "5.00",
+      "origen_id": 21
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F04",
+      "constante": "5.00",
+      "origen_id": 22
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "F05",
+      "constante": "10.00",
+      "origen_id": 26
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "F04",
+      "constante": "12.00",
+      "origen_id": 27
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E01",
+      "constante": "1.00",
+      "origen_id": 28
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E0301",
+      "constante": "1.50",
+      "origen_id": 29
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E0302",
+      "constante": "1.50",
+      "origen_id": 30
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E0303",
+      "constante": "1.50",
+      "origen_id": 31
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E0304",
+      "constante": "1.50",
+      "origen_id": 32
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E06",
+      "constante": "1.00",
+      "origen_id": 33
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E10",
+      "constante": "1.00",
+      "origen_id": 34
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E12",
+      "constante": "1.00",
+      "origen_id": 35
+    },
+    {
+      "prenda_codigo": "2",
+      "unidad_codigo": "E06",
+      "constante": "1.50",
+      "origen_id": 37
+    },
+    {
+      "prenda_codigo": "3",
+      "unidad_codigo": "E06",
+      "constante": "2.00",
+      "origen_id": 38
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E01",
+      "constante": "1.50",
+      "origen_id": 39
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E0301",
+      "constante": "2.00",
+      "origen_id": 40
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E0302",
+      "constante": "2.00",
+      "origen_id": 41
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E0303",
+      "constante": "2.00",
+      "origen_id": 42
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E0304",
+      "constante": "2.00",
+      "origen_id": 43
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E10",
+      "constante": "1.25",
+      "origen_id": 44
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E12",
+      "constante": "1.25",
+      "origen_id": 45
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E15",
+      "constante": "0.20",
+      "origen_id": 46
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E16",
+      "constante": "0.20",
+      "origen_id": 47
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "E18",
+      "constante": "0.20",
+      "origen_id": 48
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "E01",
+      "constante": "3.50",
+      "origen_id": 49
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "E0301",
+      "constante": "3.50",
+      "origen_id": 50
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "E0302",
+      "constante": "3.50",
+      "origen_id": 51
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "E0303",
+      "constante": "3.50",
+      "origen_id": 52
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "E0304",
+      "constante": "3.50",
+      "origen_id": 53
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "E10",
+      "constante": "1.50",
+      "origen_id": 54
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "E12",
+      "constante": "2.50",
+      "origen_id": 55
+    },
+    {
+      "prenda_codigo": "8",
+      "unidad_codigo": "E06",
+      "constante": "2.00",
+      "origen_id": 56
+    },
+    {
+      "prenda_codigo": "9",
+      "unidad_codigo": "E06",
+      "constante": "1.50",
+      "origen_id": 57
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E01",
+      "constante": "7.00",
+      "origen_id": 58
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E0301",
+      "constante": "6.00",
+      "origen_id": 59
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E0302",
+      "constante": "6.00",
+      "origen_id": 60
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E0303",
+      "constante": "6.00",
+      "origen_id": 61
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E0304",
+      "constante": "6.00",
+      "origen_id": 62
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E10",
+      "constante": "7.00",
+      "origen_id": 63
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E12",
+      "constante": "7.00",
+      "origen_id": 64
+    },
+    {
+      "prenda_codigo": "11",
+      "unidad_codigo": "E0301",
+      "constante": "0.50",
+      "origen_id": 65
+    },
+    {
+      "prenda_codigo": "11",
+      "unidad_codigo": "E0302",
+      "constante": "0.50",
+      "origen_id": 66
+    },
+    {
+      "prenda_codigo": "11",
+      "unidad_codigo": "E0303",
+      "constante": "0.50",
+      "origen_id": 67
+    },
+    {
+      "prenda_codigo": "11",
+      "unidad_codigo": "E0304",
+      "constante": "0.50",
+      "origen_id": 68
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "E01",
+      "constante": "0.20",
+      "origen_id": 69
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "E0301",
+      "constante": "0.50",
+      "origen_id": 70
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "E0302",
+      "constante": "0.50",
+      "origen_id": 71
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "E0303",
+      "constante": "0.50",
+      "origen_id": 72
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "E0304",
+      "constante": "0.50",
+      "origen_id": 73
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "E10",
+      "constante": "1.00",
+      "origen_id": 74
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "F12",
+      "constante": "0.50",
+      "origen_id": 75
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "E06",
+      "constante": "3.70",
+      "origen_id": 76
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "E12",
+      "constante": "0.50",
+      "origen_id": 77
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "E12",
+      "constante": "3.70",
+      "origen_id": 78
+    },
+    {
+      "prenda_codigo": "15",
+      "unidad_codigo": "E06",
+      "constante": "1.50",
+      "origen_id": 79
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E01",
+      "constante": "3.50",
+      "origen_id": 80
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E0301",
+      "constante": "2.00",
+      "origen_id": 81
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E0302",
+      "constante": "2.00",
+      "origen_id": 82
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E0303",
+      "constante": "2.00",
+      "origen_id": 83
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E0304",
+      "constante": "2.00",
+      "origen_id": 84
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E10",
+      "constante": "3.50",
+      "origen_id": 85
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E12",
+      "constante": "3.50",
+      "origen_id": 86
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E16",
+      "constante": "0.20",
+      "origen_id": 88
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E01",
+      "constante": "0.30",
+      "origen_id": 90
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E0301",
+      "constante": "2.50",
+      "origen_id": 91
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E0302",
+      "constante": "2.50",
+      "origen_id": 92
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E0303",
+      "constante": "2.50",
+      "origen_id": 93
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E0304",
+      "constante": "2.50",
+      "origen_id": 94
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E06",
+      "constante": "5.00",
+      "origen_id": 95
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E10",
+      "constante": "1.50",
+      "origen_id": 96
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E12",
+      "constante": "2.00",
+      "origen_id": 97
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E16",
+      "constante": "0.20",
+      "origen_id": 99
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E18",
+      "constante": "0.20",
+      "origen_id": 100
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E0301",
+      "constante": "1.20",
+      "origen_id": 102
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E0302",
+      "constante": "1.20",
+      "origen_id": 103
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E0303",
+      "constante": "1.20",
+      "origen_id": 104
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E0304",
+      "constante": "1.20",
+      "origen_id": 105
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E06",
+      "constante": "2.00",
+      "origen_id": 106
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E10",
+      "constante": "0.80",
+      "origen_id": 107
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E12",
+      "constante": "0.40",
+      "origen_id": 108
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "E10",
+      "constante": "0.30",
+      "origen_id": 109
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "E10",
+      "constante": "1.20",
+      "origen_id": 110
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "EA130",
+      "constante": "1.20",
+      "origen_id": 111
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "E10",
+      "constante": "1.20",
+      "origen_id": 112
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "EA130",
+      "constante": "1.20",
+      "origen_id": 113
+    },
+    {
+      "prenda_codigo": "28",
+      "unidad_codigo": "E0301",
+      "constante": "0.20",
+      "origen_id": 114
+    },
+    {
+      "prenda_codigo": "28",
+      "unidad_codigo": "E0302",
+      "constante": "0.20",
+      "origen_id": 115
+    },
+    {
+      "prenda_codigo": "28",
+      "unidad_codigo": "E0303",
+      "constante": "0.20",
+      "origen_id": 116
+    },
+    {
+      "prenda_codigo": "28",
+      "unidad_codigo": "E0304",
+      "constante": "0.20",
+      "origen_id": 117
+    },
+    {
+      "prenda_codigo": "28",
+      "unidad_codigo": "E10",
+      "constante": "0.50",
+      "origen_id": 118
+    },
+    {
+      "prenda_codigo": "32",
+      "unidad_codigo": "E0301",
+      "constante": "0.20",
+      "origen_id": 119
+    },
+    {
+      "prenda_codigo": "32",
+      "unidad_codigo": "E0302",
+      "constante": "0.20",
+      "origen_id": 120
+    },
+    {
+      "prenda_codigo": "32",
+      "unidad_codigo": "E0303",
+      "constante": "0.20",
+      "origen_id": 121
+    },
+    {
+      "prenda_codigo": "32",
+      "unidad_codigo": "E0304",
+      "constante": "0.20",
+      "origen_id": 122
+    },
+    {
+      "prenda_codigo": "32",
+      "unidad_codigo": "E10",
+      "constante": "0.50",
+      "origen_id": 123
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N23",
+      "constante": "1.00",
+      "origen_id": 124
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N23",
+      "constante": "0.20",
+      "origen_id": 125
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N23",
+      "constante": "1.50",
+      "origen_id": 126
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N23",
+      "constante": "3.00",
+      "origen_id": 127
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N23",
+      "constante": "3.00",
+      "origen_id": 128
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N23",
+      "constante": "3.50",
+      "origen_id": 129
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N23",
+      "constante": "6.00",
+      "origen_id": 130
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N23",
+      "constante": "3.00",
+      "origen_id": 131
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N23",
+      "constante": "2.50",
+      "origen_id": 132
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N23",
+      "constante": "1.20",
+      "origen_id": 133
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N03R",
+      "constante": "1.00",
+      "origen_id": 134
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N03R",
+      "constante": "0.20",
+      "origen_id": 135
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N03R",
+      "constante": "1.50",
+      "origen_id": 136
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N03R",
+      "constante": "3.00",
+      "origen_id": 137
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N03R",
+      "constante": "3.00",
+      "origen_id": 138
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N03R",
+      "constante": "3.50",
+      "origen_id": 139
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N03R",
+      "constante": "6.00",
+      "origen_id": 140
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N03R",
+      "constante": "3.00",
+      "origen_id": 141
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N03R",
+      "constante": "2.50",
+      "origen_id": 142
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N03R",
+      "constante": "1.20",
+      "origen_id": 143
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N08",
+      "constante": "1.00",
+      "origen_id": 144
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N08",
+      "constante": "0.20",
+      "origen_id": 145
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N08",
+      "constante": "1.50",
+      "origen_id": 146
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N08",
+      "constante": "3.00",
+      "origen_id": 147
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N08",
+      "constante": "3.00",
+      "origen_id": 148
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N08",
+      "constante": "3.50",
+      "origen_id": 149
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N08",
+      "constante": "6.00",
+      "origen_id": 150
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N08",
+      "constante": "3.00",
+      "origen_id": 151
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N08",
+      "constante": "2.50",
+      "origen_id": 152
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N08",
+      "constante": "1.20",
+      "origen_id": 153
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N03P",
+      "constante": "1.00",
+      "origen_id": 154
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N03P",
+      "constante": "0.20",
+      "origen_id": 155
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N03P",
+      "constante": "1.50",
+      "origen_id": 156
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N03P",
+      "constante": "3.00",
+      "origen_id": 157
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N03P",
+      "constante": "3.00",
+      "origen_id": 158
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N03P",
+      "constante": "3.50",
+      "origen_id": 159
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N03P",
+      "constante": "6.00",
+      "origen_id": 160
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N03P",
+      "constante": "3.00",
+      "origen_id": 161
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N03P",
+      "constante": "2.50",
+      "origen_id": 162
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N03P",
+      "constante": "1.20",
+      "origen_id": 163
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N03G",
+      "constante": "1.00",
+      "origen_id": 164
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N03G",
+      "constante": "0.20",
+      "origen_id": 165
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N03G",
+      "constante": "1.50",
+      "origen_id": 166
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N03G",
+      "constante": "3.00",
+      "origen_id": 167
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N03G",
+      "constante": "3.00",
+      "origen_id": 168
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N03G",
+      "constante": "3.50",
+      "origen_id": 169
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N03G",
+      "constante": "6.00",
+      "origen_id": 170
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N03G",
+      "constante": "3.00",
+      "origen_id": 171
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N03G",
+      "constante": "2.50",
+      "origen_id": 172
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N03G",
+      "constante": "1.20",
+      "origen_id": 173
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N0304",
+      "constante": "1.00",
+      "origen_id": 174
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N0304",
+      "constante": "1.50",
+      "origen_id": 175
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N0304",
+      "constante": "3.00",
+      "origen_id": 177
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N0304",
+      "constante": "3.50",
+      "origen_id": 178
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N0304",
+      "constante": "6.00",
+      "origen_id": 179
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N0304",
+      "constante": "2.50",
+      "origen_id": 180
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N0304",
+      "constante": "1.20",
+      "origen_id": 181
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N04",
+      "constante": "1.00",
+      "origen_id": 182
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N04",
+      "constante": "0.20",
+      "origen_id": 183
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N04",
+      "constante": "1.50",
+      "origen_id": 184
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N04",
+      "constante": "3.00",
+      "origen_id": 185
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N04",
+      "constante": "3.00",
+      "origen_id": 186
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N04",
+      "constante": "3.50",
+      "origen_id": 187
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N04",
+      "constante": "7.00",
+      "origen_id": 188
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N04",
+      "constante": "3.00",
+      "origen_id": 189
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N04",
+      "constante": "5.00",
+      "origen_id": 190
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N04",
+      "constante": "2.00",
+      "origen_id": 191
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "N04",
+      "constante": "1.20",
+      "origen_id": 192
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "N04",
+      "constante": "1.20",
+      "origen_id": 193
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N21",
+      "constante": "1.00",
+      "origen_id": 194
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N21",
+      "constante": "0.20",
+      "origen_id": 195
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N21",
+      "constante": "1.50",
+      "origen_id": 196
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N21",
+      "constante": "3.00",
+      "origen_id": 197
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N21",
+      "constante": "3.00",
+      "origen_id": 198
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N21",
+      "constante": "3.50",
+      "origen_id": 199
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N21",
+      "constante": "7.00",
+      "origen_id": 200
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N21",
+      "constante": "3.00",
+      "origen_id": 201
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N21",
+      "constante": "2.00",
+      "origen_id": 203
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N21",
+      "constante": "5.00",
+      "origen_id": 214
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "N21",
+      "constante": "1.20",
+      "origen_id": 216
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "N21",
+      "constante": "1.20",
+      "origen_id": 217
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N22",
+      "constante": "1.00",
+      "origen_id": 219
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N22",
+      "constante": "0.20",
+      "origen_id": 220
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N22",
+      "constante": "1.50",
+      "origen_id": 221
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N22",
+      "constante": "3.00",
+      "origen_id": 222
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N22",
+      "constante": "3.00",
+      "origen_id": 223
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N22",
+      "constante": "3.50",
+      "origen_id": 224
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N22",
+      "constante": "7.00",
+      "origen_id": 225
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N22",
+      "constante": "3.00",
+      "origen_id": 226
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N22",
+      "constante": "5.00",
+      "origen_id": 227
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N22",
+      "constante": "2.00",
+      "origen_id": 228
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "N22",
+      "constante": "1.20",
+      "origen_id": 229
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "N22",
+      "constante": "1.20",
+      "origen_id": 230
+    },
+    {
+      "prenda_codigo": "58",
+      "unidad_codigo": "N22",
+      "constante": "1.20",
+      "origen_id": 231
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N07",
+      "constante": "1.00",
+      "origen_id": 232
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N07",
+      "constante": "0.20",
+      "origen_id": 233
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N07",
+      "constante": "1.50",
+      "origen_id": 234
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N07",
+      "constante": "3.00",
+      "origen_id": 236
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N07",
+      "constante": "3.00",
+      "origen_id": 237
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N07",
+      "constante": "3.50",
+      "origen_id": 238
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N07",
+      "constante": "7.00",
+      "origen_id": 239
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N07",
+      "constante": "3.00",
+      "origen_id": 240
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N07",
+      "constante": "5.00",
+      "origen_id": 241
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N07",
+      "constante": "2.00",
+      "origen_id": 242
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "N07",
+      "constante": "1.00",
+      "origen_id": 243
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "N07",
+      "constante": "1.20",
+      "origen_id": 244
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "N07",
+      "constante": "1.20",
+      "origen_id": 245
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N05",
+      "constante": "1.00",
+      "origen_id": 246
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N05",
+      "constante": "0.20",
+      "origen_id": 247
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N05",
+      "constante": "1.50",
+      "origen_id": 248
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N05",
+      "constante": "3.00",
+      "origen_id": 249
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N05",
+      "constante": "3.00",
+      "origen_id": 250
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N05",
+      "constante": "3.50",
+      "origen_id": 251
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N05",
+      "constante": "7.00",
+      "origen_id": 252
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N05",
+      "constante": "3.00",
+      "origen_id": 253
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N05",
+      "constante": "5.00",
+      "origen_id": 254
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N05",
+      "constante": "2.00",
+      "origen_id": 255
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "N05",
+      "constante": "1.20",
+      "origen_id": 256
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "N05",
+      "constante": "1.20",
+      "origen_id": 257
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N1001",
+      "constante": "3.50",
+      "origen_id": 259
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N1001",
+      "constante": "1.25",
+      "origen_id": 260
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N1001",
+      "constante": "3.00",
+      "origen_id": 261
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N1001",
+      "constante": "3.00",
+      "origen_id": 262
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N1001",
+      "constante": "1.50",
+      "origen_id": 264
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N1001",
+      "constante": "7.00",
+      "origen_id": 265
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N1001",
+      "constante": "1.50",
+      "origen_id": 266
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N1001",
+      "constante": "0.80",
+      "origen_id": 267
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "N1001",
+      "constante": "0.30",
+      "origen_id": 268
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "N1001",
+      "constante": "1.20",
+      "origen_id": 269
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "N1001",
+      "constante": "1.20",
+      "origen_id": 270
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N24",
+      "constante": "1.00",
+      "origen_id": 271
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N24",
+      "constante": "3.50",
+      "origen_id": 272
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N24",
+      "constante": "1.25",
+      "origen_id": 273
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N24",
+      "constante": "1.50",
+      "origen_id": 274
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N24",
+      "constante": "7.00",
+      "origen_id": 275
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N24",
+      "constante": "1.50",
+      "origen_id": 276
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N24",
+      "constante": "0.80",
+      "origen_id": 277
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "N24",
+      "constante": "0.30",
+      "origen_id": 278
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "N24",
+      "constante": "1.20",
+      "origen_id": 279
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "N24",
+      "constante": "1.20",
+      "origen_id": 280
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N37",
+      "constante": "0.20",
+      "origen_id": 281
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N37",
+      "constante": "0.20",
+      "origen_id": 282
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N37",
+      "constante": "0.20",
+      "origen_id": 283
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N29",
+      "constante": "0.20",
+      "origen_id": 284
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N29",
+      "constante": "0.20",
+      "origen_id": 285
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N29",
+      "constante": "0.20",
+      "origen_id": 286
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N18",
+      "constante": "0.20",
+      "origen_id": 287
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N18",
+      "constante": "0.20",
+      "origen_id": 288
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N18",
+      "constante": "0.20",
+      "origen_id": 289
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N14",
+      "constante": "0.20",
+      "origen_id": 290
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N14",
+      "constante": "0.20",
+      "origen_id": 291
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N14",
+      "constante": "0.20",
+      "origen_id": 292
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N15",
+      "constante": "0.20",
+      "origen_id": 293
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N15",
+      "constante": "0.20",
+      "origen_id": 294
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N15",
+      "constante": "0.20",
+      "origen_id": 295
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N40",
+      "constante": "1.00",
+      "origen_id": 296
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N40",
+      "constante": "8.00",
+      "origen_id": 297
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N40",
+      "constante": "1.50",
+      "origen_id": 298
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N40",
+      "constante": "3.00",
+      "origen_id": 299
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N40",
+      "constante": "3.00",
+      "origen_id": 300
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N40",
+      "constante": "3.50",
+      "origen_id": 301
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N40",
+      "constante": "7.00",
+      "origen_id": 302
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N40",
+      "constante": "3.00",
+      "origen_id": 303
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N40",
+      "constante": "0.30",
+      "origen_id": 304
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N40",
+      "constante": "1.00",
+      "origen_id": 305
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "N40",
+      "constante": "1.00",
+      "origen_id": 306
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N01",
+      "constante": "1.00",
+      "origen_id": 307
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N01",
+      "constante": "3.50",
+      "origen_id": 308
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N01",
+      "constante": "1.50",
+      "origen_id": 309
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N01",
+      "constante": "3.00",
+      "origen_id": 310
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "N01",
+      "constante": "3.00",
+      "origen_id": 311
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N01",
+      "constante": "3.50",
+      "origen_id": 312
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N01",
+      "constante": "7.00",
+      "origen_id": 313
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "N01",
+      "constante": "3.00",
+      "origen_id": 314
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N01",
+      "constante": "0.30",
+      "origen_id": 315
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N01",
+      "constante": "1.00",
+      "origen_id": 316
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N02",
+      "constante": "1.00",
+      "origen_id": 317
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N02",
+      "constante": "4.00",
+      "origen_id": 318
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N02",
+      "constante": "2.00",
+      "origen_id": 319
+    },
+    {
+      "prenda_codigo": "18",
+      "unidad_codigo": "N02",
+      "constante": "1.50",
+      "origen_id": 320
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N02",
+      "constante": "0.40",
+      "origen_id": 322
+    },
+    {
+      "prenda_codigo": "24",
+      "unidad_codigo": "N02",
+      "constante": "1.20",
+      "origen_id": 323
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N09",
+      "constante": "0.20",
+      "origen_id": 324
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N09",
+      "constante": "0.20",
+      "origen_id": 325
+    },
+    {
+      "prenda_codigo": "18",
+      "unidad_codigo": "N09",
+      "constante": "1.50",
+      "origen_id": 327
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N09",
+      "constante": "0.40",
+      "origen_id": 328
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N14",
+      "constante": "0.20",
+      "origen_id": 329
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N15",
+      "constante": "0.20",
+      "origen_id": 330
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "N24",
+      "constante": "0.20",
+      "origen_id": 331
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N14",
+      "constante": "0.20",
+      "origen_id": 332
+    },
+    {
+      "prenda_codigo": "40",
+      "unidad_codigo": "N08",
+      "constante": "3.00",
+      "origen_id": 333
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N03T",
+      "constante": "6.00",
+      "origen_id": 334
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "N0304",
+      "constante": "1.20",
+      "origen_id": 335
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N03R",
+      "constante": "1.20",
+      "origen_id": 336
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N1001",
+      "constante": "1.20",
+      "origen_id": 338
+    },
+    {
+      "prenda_codigo": "52",
+      "unidad_codigo": "N09",
+      "constante": "2.00",
+      "origen_id": 339
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N09",
+      "constante": "2.00",
+      "origen_id": 340
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N37",
+      "constante": "0.20",
+      "origen_id": 341
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N03G",
+      "constante": "1.20",
+      "origen_id": 342
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N03P",
+      "constante": "1.20",
+      "origen_id": 343
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N37",
+      "constante": "1.00",
+      "origen_id": 344
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N1001",
+      "constante": "1.00",
+      "origen_id": 345
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N18",
+      "constante": "0.20",
+      "origen_id": 346
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "E0301",
+      "constante": "3.00",
+      "origen_id": 348
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F01",
+      "constante": "1.00",
+      "origen_id": 349
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "E0302",
+      "constante": "3.00",
+      "origen_id": 350
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "E0303",
+      "constante": "3.00",
+      "origen_id": 351
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "E0304",
+      "constante": "3.00",
+      "origen_id": 352
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "E10",
+      "constante": "3.00",
+      "origen_id": 353
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "E06",
+      "constante": "3.00",
+      "origen_id": 354
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "E01",
+      "constante": "3.00",
+      "origen_id": 355
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "E0301",
+      "constante": "3.00",
+      "origen_id": 356
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "E0302",
+      "constante": "3.00",
+      "origen_id": 357
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "E0303",
+      "constante": "3.00",
+      "origen_id": 358
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "E0304",
+      "constante": "3.00",
+      "origen_id": 359
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "E06",
+      "constante": "3.00",
+      "origen_id": 360
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "E01",
+      "constante": "3.00",
+      "origen_id": 361
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "E12",
+      "constante": "3.00",
+      "origen_id": 363
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "E0301",
+      "constante": "1.20",
+      "origen_id": 364
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "E0302",
+      "constante": "1.20",
+      "origen_id": 365
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "E0303",
+      "constante": "1.20",
+      "origen_id": 366
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "E0304",
+      "constante": "1.20",
+      "origen_id": 367
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "E01",
+      "constante": "1.20",
+      "origen_id": 368
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "E10",
+      "constante": "1.20",
+      "origen_id": 369
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "E12",
+      "constante": "1.20",
+      "origen_id": 370
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "E01",
+      "constante": "3.00",
+      "origen_id": 372
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "E0301",
+      "constante": "3.00",
+      "origen_id": 373
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "E0302",
+      "constante": "3.00",
+      "origen_id": 374
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "E0303",
+      "constante": "3.00",
+      "origen_id": 375
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "E0304",
+      "constante": "3.00",
+      "origen_id": 376
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "E06",
+      "constante": "3.00",
+      "origen_id": 377
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "E01",
+      "constante": "0.10",
+      "origen_id": 379
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "E0301",
+      "constante": "0.10",
+      "origen_id": 380
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "E0302",
+      "constante": "0.10",
+      "origen_id": 381
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "E0303",
+      "constante": "0.10",
+      "origen_id": 382
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "E0304",
+      "constante": "0.10",
+      "origen_id": 383
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "E12",
+      "constante": "0.10",
+      "origen_id": 384
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F01",
+      "constante": "2.00",
+      "origen_id": 385
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F01",
+      "constante": "0.30",
+      "origen_id": 388
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "F01",
+      "constante": "0.40",
+      "origen_id": 390
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "F01",
+      "constante": "1.20",
+      "origen_id": 391
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N02",
+      "constante": "6.00",
+      "origen_id": 393
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "F02",
+      "constante": "5.00",
+      "origen_id": 398
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F02",
+      "constante": "5.00",
+      "origen_id": 399
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F02",
+      "constante": "3.50",
+      "origen_id": 400
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F03",
+      "constante": "1.00",
+      "origen_id": 401
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F03",
+      "constante": "3.50",
+      "origen_id": 406
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "F03",
+      "constante": "6.00",
+      "origen_id": 407
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F03",
+      "constante": "1.20",
+      "origen_id": 411
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "F03",
+      "constante": "1.20",
+      "origen_id": 413
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F03-1",
+      "constante": "1.00",
+      "origen_id": 414
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "F03-1",
+      "constante": "3.70",
+      "origen_id": 415
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F03-1",
+      "constante": "3.70",
+      "origen_id": 416
+    },
+    {
+      "prenda_codigo": "11",
+      "unidad_codigo": "F03",
+      "constante": "0.50",
+      "origen_id": 417
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F03",
+      "constante": "2.00",
+      "origen_id": 420
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "F03",
+      "constante": "0.40",
+      "origen_id": 421
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N40",
+      "constante": "1.20",
+      "origen_id": 422
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N16",
+      "constante": "1.50",
+      "origen_id": 423
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "N16",
+      "constante": "1.50",
+      "origen_id": 424
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "N16",
+      "constante": "1.50",
+      "origen_id": 425
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "N16",
+      "constante": "5.00",
+      "origen_id": 426
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N16",
+      "constante": "1.00",
+      "origen_id": 427
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N16",
+      "constante": "2.00",
+      "origen_id": 428
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "F01",
+      "constante": "2.00",
+      "origen_id": 429
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F01",
+      "constante": "2.00",
+      "origen_id": 430
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F01",
+      "constante": "0.40",
+      "origen_id": 431
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "F01",
+      "constante": "0.20",
+      "origen_id": 432
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "F03",
+      "constante": "0.30",
+      "origen_id": 433
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "F03",
+      "constante": "0.30",
+      "origen_id": 434
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "F03",
+      "constante": "0.30",
+      "origen_id": 435
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F03",
+      "constante": "1.20",
+      "origen_id": 437
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "F04",
+      "constante": "1.50",
+      "origen_id": 438
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "F04",
+      "constante": "1.50",
+      "origen_id": 439
+    },
+    {
+      "prenda_codigo": "11",
+      "unidad_codigo": "F04",
+      "constante": "0.00",
+      "origen_id": 440
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "F04",
+      "constante": "0.50",
+      "origen_id": 441
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F04",
+      "constante": "3.50",
+      "origen_id": 442
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "F05",
+      "constante": "0.60",
+      "origen_id": 443
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "F05",
+      "constante": "0.60",
+      "origen_id": 444
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F05",
+      "constante": "4.50",
+      "origen_id": 446
+    },
+    {
+      "prenda_codigo": "11",
+      "unidad_codigo": "F05",
+      "constante": "0.00",
+      "origen_id": 447
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "F05",
+      "constante": "1.00",
+      "origen_id": 448
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F05",
+      "constante": "4.50",
+      "origen_id": 452
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F0701",
+      "constante": "2.00",
+      "origen_id": 453
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F0701",
+      "constante": "3.00",
+      "origen_id": 454
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "F0701",
+      "constante": "1.50",
+      "origen_id": 455
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "F0701",
+      "constante": "1.50",
+      "origen_id": 456
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "F0701",
+      "constante": "5.00",
+      "origen_id": 457
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "F0701",
+      "constante": "1.50",
+      "origen_id": 458
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "F0701",
+      "constante": "3.70",
+      "origen_id": 460
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F0701",
+      "constante": "6.00",
+      "origen_id": 461
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F0701",
+      "constante": "2.00",
+      "origen_id": 462
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F0701",
+      "constante": "3.00",
+      "origen_id": 464
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F06",
+      "constante": "0.00",
+      "origen_id": 465
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T80",
+      "constante": "1.00",
+      "origen_id": 466
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T01",
+      "constante": "1.00",
+      "origen_id": 469
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T0302",
+      "constante": "1.00",
+      "origen_id": 470
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T0303",
+      "constante": "1.00",
+      "origen_id": 471
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T0304",
+      "constante": "1.00",
+      "origen_id": 472
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T0305",
+      "constante": "1.00",
+      "origen_id": 473
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T0305M",
+      "constante": "1.00",
+      "origen_id": 474
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T0305P",
+      "constante": "1.00",
+      "origen_id": 475
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T04",
+      "constante": "1.00",
+      "origen_id": 476
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T05",
+      "constante": "1.00",
+      "origen_id": 477
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "T12",
+      "constante": "1.00",
+      "origen_id": 478
+    },
+    {
+      "prenda_codigo": "3",
+      "unidad_codigo": "T06",
+      "constante": "2.00",
+      "origen_id": 479
+    },
+    {
+      "prenda_codigo": "3",
+      "unidad_codigo": "T06B",
+      "constante": "2.00",
+      "origen_id": 480
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T80",
+      "constante": "1.25",
+      "origen_id": 481
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T55",
+      "constante": "1.25",
+      "origen_id": 482
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T01",
+      "constante": "2.50",
+      "origen_id": 483
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T0302",
+      "constante": "3.50",
+      "origen_id": 484
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T0303",
+      "constante": "3.50",
+      "origen_id": 485
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T0304",
+      "constante": "3.50",
+      "origen_id": 486
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T0305",
+      "constante": "3.50",
+      "origen_id": 487
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T0305M",
+      "constante": "3.50",
+      "origen_id": 488
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T04",
+      "constante": "3.00",
+      "origen_id": 489
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T05",
+      "constante": "3.00",
+      "origen_id": 490
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T10",
+      "constante": "3.00",
+      "origen_id": 491
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T11",
+      "constante": "3.00",
+      "origen_id": 492
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T12",
+      "constante": "2.50",
+      "origen_id": 494
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "T0304",
+      "constante": "2.00",
+      "origen_id": 497
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "T04",
+      "constante": "2.00",
+      "origen_id": 498
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "T05",
+      "constante": "2.00",
+      "origen_id": 499
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "T05",
+      "constante": "2.00",
+      "origen_id": 500
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "T04",
+      "constante": "2.00",
+      "origen_id": 501
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "T0304",
+      "constante": "2.00",
+      "origen_id": 502
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T01",
+      "constante": "3.00",
+      "origen_id": 505
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T0303",
+      "constante": "3.00",
+      "origen_id": 507
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T0304",
+      "constante": "3.00",
+      "origen_id": 508
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T0305",
+      "constante": "3.00",
+      "origen_id": 509
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T0305M",
+      "constante": "3.00",
+      "origen_id": 510
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T0305P",
+      "constante": "2.00",
+      "origen_id": 511
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T04",
+      "constante": "3.50",
+      "origen_id": 512
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T05",
+      "constante": "3.50",
+      "origen_id": 513
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T12",
+      "constante": "2.00",
+      "origen_id": 514
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T01",
+      "constante": "3.20",
+      "origen_id": 517
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T0302",
+      "constante": "6.50",
+      "origen_id": 518
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T0303",
+      "constante": "6.50",
+      "origen_id": 519
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T0305",
+      "constante": "6.50",
+      "origen_id": 521
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T0305M",
+      "constante": "6.50",
+      "origen_id": 522
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T05",
+      "constante": "8.00",
+      "origen_id": 523
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T04",
+      "constante": "8.00",
+      "origen_id": 524
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T11",
+      "constante": "5.00",
+      "origen_id": 525
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T10",
+      "constante": "5.00",
+      "origen_id": 526
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "T01",
+      "constante": "3.00",
+      "origen_id": 528
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "T0304",
+      "constante": "2.00",
+      "origen_id": 529
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "T04",
+      "constante": "3.00",
+      "origen_id": 530
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "T05",
+      "constante": "3.00",
+      "origen_id": 531
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "T0305P",
+      "constante": "3.70",
+      "origen_id": 532
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "T06",
+      "constante": "3.70",
+      "origen_id": 533
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "T06B",
+      "constante": "3.70",
+      "origen_id": 534
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "T12",
+      "constante": "0.30",
+      "origen_id": 535
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T01",
+      "constante": "2.00",
+      "origen_id": 538
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T10",
+      "constante": "5.00",
+      "origen_id": 539
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T11",
+      "constante": "2.00",
+      "origen_id": 540
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T15",
+      "constante": "5.00",
+      "origen_id": 541
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T16",
+      "constante": "10.00",
+      "origen_id": 542
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T18",
+      "constante": "5.00",
+      "origen_id": 543
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T80",
+      "constante": "0.50",
+      "origen_id": 546
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T02",
+      "constante": "0.50",
+      "origen_id": 547
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T55",
+      "constante": "1.00",
+      "origen_id": 548
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T01",
+      "constante": "0.80",
+      "origen_id": 549
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T0302",
+      "constante": "2.00",
+      "origen_id": 550
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T0303",
+      "constante": "2.00",
+      "origen_id": 551
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T0304",
+      "constante": "2.00",
+      "origen_id": 552
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T0305",
+      "constante": "2.00",
+      "origen_id": 553
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T0305M",
+      "constante": "2.00",
+      "origen_id": 554
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T05",
+      "constante": "3.00",
+      "origen_id": 556
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T10",
+      "constante": "1.50",
+      "origen_id": 559
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T12",
+      "constante": "2.00",
+      "origen_id": 560
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T15",
+      "constante": "1.20",
+      "origen_id": 561
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T16",
+      "constante": "1.20",
+      "origen_id": 562
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T18",
+      "constante": "1.20",
+      "origen_id": 563
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T24",
+      "constante": "1.50",
+      "origen_id": 564
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T01",
+      "constante": "1.20",
+      "origen_id": 565
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T0302",
+      "constante": "1.20",
+      "origen_id": 566
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T0303",
+      "constante": "1.20",
+      "origen_id": 567
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T0304",
+      "constante": "1.20",
+      "origen_id": 568
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T0305",
+      "constante": "1.20",
+      "origen_id": 569
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T0305M",
+      "constante": "1.20",
+      "origen_id": 570
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T0305P",
+      "constante": "1.20",
+      "origen_id": 571
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T04",
+      "constante": "1.50",
+      "origen_id": 572
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T05",
+      "constante": "1.50",
+      "origen_id": 573
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "T06",
+      "constante": "1.50",
+      "origen_id": 574
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "T55",
+      "constante": "0.30",
+      "origen_id": 576
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "T01",
+      "constante": "1.00",
+      "origen_id": 577
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "T0305P",
+      "constante": "1.00",
+      "origen_id": 578
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "T10",
+      "constante": "0.50",
+      "origen_id": 579
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "T15",
+      "constante": "0.50",
+      "origen_id": 580
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "T16",
+      "constante": "0.50",
+      "origen_id": 581
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "T18",
+      "constante": "0.50",
+      "origen_id": 582
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "T24",
+      "constante": "0.50",
+      "origen_id": 583
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "T55",
+      "constante": "1.50",
+      "origen_id": 584
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "T10",
+      "constante": "1.50",
+      "origen_id": 585
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "T12",
+      "constante": "1.50",
+      "origen_id": 586
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "T16",
+      "constante": "1.50",
+      "origen_id": 587
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "T24",
+      "constante": "1.50",
+      "origen_id": 588
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "T24",
+      "constante": "1.50",
+      "origen_id": 589
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "T16",
+      "constante": "1.50",
+      "origen_id": 590
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "T12",
+      "constante": "1.50",
+      "origen_id": 591
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "T10",
+      "constante": "1.50",
+      "origen_id": 592
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "T55",
+      "constante": "1.50",
+      "origen_id": 593
+    },
+    {
+      "prenda_codigo": "35",
+      "unidad_codigo": "T10",
+      "constante": "3.00",
+      "origen_id": 594
+    },
+    {
+      "prenda_codigo": "35",
+      "unidad_codigo": "T12",
+      "constante": "3.00",
+      "origen_id": 595
+    },
+    {
+      "prenda_codigo": "59",
+      "unidad_codigo": "T0305P",
+      "constante": "2.00",
+      "origen_id": 596
+    },
+    {
+      "prenda_codigo": "59",
+      "unidad_codigo": "T01",
+      "constante": "1.00",
+      "origen_id": 597
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F06",
+      "constante": "5.00",
+      "origen_id": 598
+    },
+    {
+      "prenda_codigo": "8",
+      "unidad_codigo": "F06",
+      "constante": "2.50",
+      "origen_id": 599
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "F06",
+      "constante": "4.00",
+      "origen_id": 601
+    },
+    {
+      "prenda_codigo": "15",
+      "unidad_codigo": "F06",
+      "constante": "4.00",
+      "origen_id": 602
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F06",
+      "constante": "3.50",
+      "origen_id": 603
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F06",
+      "constante": "2.00",
+      "origen_id": 604
+    },
+    {
+      "prenda_codigo": "2",
+      "unidad_codigo": "F06",
+      "constante": "2.00",
+      "origen_id": 605
+    },
+    {
+      "prenda_codigo": "9",
+      "unidad_codigo": "F06",
+      "constante": "3.00",
+      "origen_id": 606
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F08",
+      "constante": "2.00",
+      "origen_id": 607
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F08",
+      "constante": "3.50",
+      "origen_id": 609
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "F08",
+      "constante": "6.00",
+      "origen_id": 610
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "F08",
+      "constante": "1.00",
+      "origen_id": 611
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F08",
+      "constante": "7.00",
+      "origen_id": 614
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F08",
+      "constante": "2.00",
+      "origen_id": 615
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F08",
+      "constante": "2.00",
+      "origen_id": 616
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F15",
+      "constante": "15.00",
+      "origen_id": 618
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F15",
+      "constante": "5.00",
+      "origen_id": 619
+    },
+    {
+      "prenda_codigo": "26",
+      "unidad_codigo": "F15",
+      "constante": "5.00",
+      "origen_id": 620
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "F13",
+      "constante": "9.00",
+      "origen_id": 621
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F13",
+      "constante": "6.00",
+      "origen_id": 622
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F13",
+      "constante": "5.00",
+      "origen_id": 623
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F10",
+      "constante": "1.00",
+      "origen_id": 624
+    },
+    {
+      "prenda_codigo": "2",
+      "unidad_codigo": "F10",
+      "constante": "0.30",
+      "origen_id": 625
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F10",
+      "constante": "2.00",
+      "origen_id": 626
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "F10",
+      "constante": "0.30",
+      "origen_id": 627
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "F10",
+      "constante": "0.30",
+      "origen_id": 628
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F10",
+      "constante": "2.50",
+      "origen_id": 631
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "F10",
+      "constante": "1.00",
+      "origen_id": 632
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "F10",
+      "constante": "0.30",
+      "origen_id": 633
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "F10",
+      "constante": "5.00",
+      "origen_id": 634
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "F10",
+      "constante": "1.00",
+      "origen_id": 638
+    },
+    {
+      "prenda_codigo": "24",
+      "unidad_codigo": "F03",
+      "constante": "0.50",
+      "origen_id": 639
+    },
+    {
+      "prenda_codigo": "39",
+      "unidad_codigo": "F10",
+      "constante": "3.00",
+      "origen_id": 640
+    },
+    {
+      "prenda_codigo": "52",
+      "unidad_codigo": "F10",
+      "constante": "7.00",
+      "origen_id": 641
+    },
+    {
+      "prenda_codigo": "37",
+      "unidad_codigo": "F10",
+      "constante": "14.00",
+      "origen_id": 642
+    },
+    {
+      "prenda_codigo": "40",
+      "unidad_codigo": "F10",
+      "constante": "3.60",
+      "origen_id": 643
+    },
+    {
+      "prenda_codigo": "41",
+      "unidad_codigo": "F10",
+      "constante": "1.00",
+      "origen_id": 644
+    },
+    {
+      "prenda_codigo": "42",
+      "unidad_codigo": "F10",
+      "constante": "1.50",
+      "origen_id": 645
+    },
+    {
+      "prenda_codigo": "25",
+      "unidad_codigo": "F10",
+      "constante": "2.00",
+      "origen_id": 646
+    },
+    {
+      "prenda_codigo": "51",
+      "unidad_codigo": "F10",
+      "constante": "2.00",
+      "origen_id": 647
+    },
+    {
+      "prenda_codigo": "56",
+      "unidad_codigo": "F10",
+      "constante": "2.00",
+      "origen_id": 648
+    },
+    {
+      "prenda_codigo": "57",
+      "unidad_codigo": "F10",
+      "constante": "2.50",
+      "origen_id": 649
+    },
+    {
+      "prenda_codigo": "35",
+      "unidad_codigo": "F10",
+      "constante": "3.00",
+      "origen_id": 650
+    },
+    {
+      "prenda_codigo": "44",
+      "unidad_codigo": "F10",
+      "constante": "5.00",
+      "origen_id": 651
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F10",
+      "constante": "3.00",
+      "origen_id": 653
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F10",
+      "constante": "1.70",
+      "origen_id": 654
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "F10",
+      "constante": "8.40",
+      "origen_id": 655
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "F10",
+      "constante": "8.40",
+      "origen_id": 656
+    },
+    {
+      "prenda_codigo": "43",
+      "unidad_codigo": "F10",
+      "constante": "5.00",
+      "origen_id": 657
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F12",
+      "constante": "1.00",
+      "origen_id": 658
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F12",
+      "constante": "2.50",
+      "origen_id": 659
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "F12",
+      "constante": "0.30",
+      "origen_id": 660
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "F12",
+      "constante": "0.30",
+      "origen_id": 661
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F12",
+      "constante": "2.50",
+      "origen_id": 662
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "F12",
+      "constante": "1.50",
+      "origen_id": 663
+    },
+    {
+      "prenda_codigo": "13",
+      "unidad_codigo": "F12",
+      "constante": "0.30",
+      "origen_id": 664
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "F12",
+      "constante": "3.50",
+      "origen_id": 665
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F12",
+      "constante": "2.30",
+      "origen_id": 666
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F12",
+      "constante": "0.60",
+      "origen_id": 667
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F15",
+      "constante": "10.00",
+      "origen_id": 669
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "F15",
+      "constante": "15.00",
+      "origen_id": 672
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "F24",
+      "constante": "1.00",
+      "origen_id": 674
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "F24",
+      "constante": "1.25",
+      "origen_id": 675
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "F24",
+      "constante": "1.50",
+      "origen_id": 676
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "F24",
+      "constante": "1.50",
+      "origen_id": 677
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F24",
+      "constante": "2.00",
+      "origen_id": 678
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F24",
+      "constante": "0.80",
+      "origen_id": 679
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "F24",
+      "constante": "1.50",
+      "origen_id": 682
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "F24",
+      "constante": "1.50",
+      "origen_id": 683
+    },
+    {
+      "prenda_codigo": "12",
+      "unidad_codigo": "F24",
+      "constante": "1.00",
+      "origen_id": 684
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "F24",
+      "constante": "2.50",
+      "origen_id": 685
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "F25",
+      "constante": "5.50",
+      "origen_id": 687
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "F25",
+      "constante": "5.00",
+      "origen_id": 688
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "F25",
+      "constante": "1.00",
+      "origen_id": 689
+    },
+    {
+      "prenda_codigo": "3",
+      "unidad_codigo": "F06",
+      "constante": "2.00",
+      "origen_id": 691
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N05",
+      "constante": "1.20",
+      "origen_id": 692
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N05",
+      "constante": "1.20",
+      "origen_id": 693
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N14",
+      "constante": "1.00",
+      "origen_id": 694
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N15",
+      "constante": "1.20",
+      "origen_id": 695
+    },
+    {
+      "prenda_codigo": "19",
+      "unidad_codigo": "N24",
+      "constante": "0.80",
+      "origen_id": 696
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N08",
+      "constante": "1.20",
+      "origen_id": 697
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N08",
+      "constante": "1.20",
+      "origen_id": 698
+    },
+    {
+      "prenda_codigo": "60",
+      "unidad_codigo": "N01",
+      "constante": "0.20",
+      "origen_id": 699
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N01",
+      "constante": "1.00",
+      "origen_id": 700
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N01",
+      "constante": "1.00",
+      "origen_id": 701
+    },
+    {
+      "prenda_codigo": "31",
+      "unidad_codigo": "N01",
+      "constante": "1.00",
+      "origen_id": 702
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N01",
+      "constante": "1.20",
+      "origen_id": 705
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N40",
+      "constante": "1.00",
+      "origen_id": 707
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N40",
+      "constante": "0.10",
+      "origen_id": 708
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N03G",
+      "constante": "1.20",
+      "origen_id": 709
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "N03G",
+      "constante": "1.20",
+      "origen_id": 710
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N03G",
+      "constante": "1.20",
+      "origen_id": 711
+    },
+    {
+      "prenda_codigo": "60",
+      "unidad_codigo": "N23",
+      "constante": "0.20",
+      "origen_id": 712
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N23",
+      "constante": "1.20",
+      "origen_id": 713
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N0304",
+      "constante": "0.10",
+      "origen_id": 714
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N23",
+      "constante": "1.20",
+      "origen_id": 715
+    },
+    {
+      "prenda_codigo": "30",
+      "unidad_codigo": "N0304",
+      "constante": "0.20",
+      "origen_id": 716
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N0304",
+      "constante": "1.20",
+      "origen_id": 717
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N03P",
+      "constante": "1.20",
+      "origen_id": 718
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "N37",
+      "constante": "2.00",
+      "origen_id": 719
+    },
+    {
+      "prenda_codigo": "22",
+      "unidad_codigo": "N37",
+      "constante": "1.20",
+      "origen_id": 720
+    },
+    {
+      "prenda_codigo": "23",
+      "unidad_codigo": "N37",
+      "constante": "1.20",
+      "origen_id": 721
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "N37",
+      "constante": "1.00",
+      "origen_id": 722
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N04",
+      "constante": "1.20",
+      "origen_id": 723
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N04",
+      "constante": "1.20",
+      "origen_id": 724
+    },
+    {
+      "prenda_codigo": "40",
+      "unidad_codigo": "N04",
+      "constante": "3.00",
+      "origen_id": 725
+    },
+    {
+      "prenda_codigo": "60",
+      "unidad_codigo": "N04",
+      "constante": "3.00",
+      "origen_id": 726
+    },
+    {
+      "prenda_codigo": "35",
+      "unidad_codigo": "N1001",
+      "constante": "3.00",
+      "origen_id": 727
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N07",
+      "constante": "5.00",
+      "origen_id": 728
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N07",
+      "constante": "5.00",
+      "origen_id": 729
+    },
+    {
+      "prenda_codigo": "29",
+      "unidad_codigo": "N07",
+      "constante": "1.20",
+      "origen_id": 730
+    },
+    {
+      "prenda_codigo": "14",
+      "unidad_codigo": "N07",
+      "constante": "7.00",
+      "origen_id": 731
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N22",
+      "constante": "1.20",
+      "origen_id": 732
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N22",
+      "constante": "1.20",
+      "origen_id": 733
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N18",
+      "constante": "0.20",
+      "origen_id": 734
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N18",
+      "constante": "0.20",
+      "origen_id": 735
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "N18",
+      "constante": "1.00",
+      "origen_id": 736
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "N03R",
+      "constante": "1.20",
+      "origen_id": 737
+    },
+    {
+      "prenda_codigo": "36",
+      "unidad_codigo": "N03R",
+      "constante": "1.20",
+      "origen_id": 738
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E01",
+      "constante": "2.00",
+      "origen_id": 739
+    },
+    {
+      "prenda_codigo": "19",
+      "unidad_codigo": "E01",
+      "constante": "2.00",
+      "origen_id": 740
+    },
+    {
+      "prenda_codigo": "19",
+      "unidad_codigo": "E0301",
+      "constante": "2.00",
+      "origen_id": 741
+    },
+    {
+      "prenda_codigo": "19",
+      "unidad_codigo": "E0302",
+      "constante": "2.00",
+      "origen_id": 742
+    },
+    {
+      "prenda_codigo": "19",
+      "unidad_codigo": "E0303",
+      "constante": "2.00",
+      "origen_id": 743
+    },
+    {
+      "prenda_codigo": "19",
+      "unidad_codigo": "E0304",
+      "constante": "2.00",
+      "origen_id": 744
+    },
+    {
+      "prenda_codigo": "28",
+      "unidad_codigo": "E01",
+      "constante": "0.50",
+      "origen_id": 745
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "N29",
+      "constante": "0.20",
+      "origen_id": 746
+    },
+    {
+      "prenda_codigo": "19",
+      "unidad_codigo": "E12",
+      "constante": "0.40",
+      "origen_id": 747
+    },
+    {
+      "prenda_codigo": "33",
+      "unidad_codigo": "E10",
+      "constante": "0.10",
+      "origen_id": 748
+    },
+    {
+      "prenda_codigo": "1",
+      "unidad_codigo": "E18",
+      "constante": "1.00",
+      "origen_id": 749
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E15",
+      "constante": "10.00",
+      "origen_id": 750
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E15",
+      "constante": "0.20",
+      "origen_id": 751
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "E15",
+      "constante": "2.00",
+      "origen_id": 752
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E18",
+      "constante": "3.50",
+      "origen_id": 754
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "E15",
+      "constante": "10.00",
+      "origen_id": 755
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "E18",
+      "constante": "1.00",
+      "origen_id": 756
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "E18",
+      "constante": "1.50",
+      "origen_id": 757
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E18",
+      "constante": "0.20",
+      "origen_id": 758
+    },
+    {
+      "prenda_codigo": "20",
+      "unidad_codigo": "E16",
+      "constante": "0.20",
+      "origen_id": 759
+    },
+    {
+      "prenda_codigo": "35",
+      "unidad_codigo": "E10",
+      "constante": "3.00",
+      "origen_id": 761
+    },
+    {
+      "prenda_codigo": "35",
+      "unidad_codigo": "E12",
+      "constante": "3.00",
+      "origen_id": 762
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "T24",
+      "constante": "1.25",
+      "origen_id": 763
+    },
+    {
+      "prenda_codigo": "5",
+      "unidad_codigo": "T01",
+      "constante": "3.00",
+      "origen_id": 764
+    },
+    {
+      "prenda_codigo": "6",
+      "unidad_codigo": "T01",
+      "constante": "3.00",
+      "origen_id": 765
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T0302",
+      "constante": "3.50",
+      "origen_id": 766
+    },
+    {
+      "prenda_codigo": "7",
+      "unidad_codigo": "T80",
+      "constante": "1.50",
+      "origen_id": 767
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T12",
+      "constante": "8.00",
+      "origen_id": 768
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T0304",
+      "constante": "8.00",
+      "origen_id": 769
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T80",
+      "constante": "5.00",
+      "origen_id": 770
+    },
+    {
+      "prenda_codigo": "10",
+      "unidad_codigo": "T55",
+      "constante": "5.00",
+      "origen_id": 771
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T55",
+      "constante": "7.00",
+      "origen_id": 772
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T02",
+      "constante": "4.00",
+      "origen_id": 773
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "T24",
+      "constante": "3.50",
+      "origen_id": 774
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T06",
+      "constante": "5.00",
+      "origen_id": 775
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T06B",
+      "constante": "5.00",
+      "origen_id": 776
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "T04",
+      "constante": "5.00",
+      "origen_id": 777
+    },
+    {
+      "prenda_codigo": "21",
+      "unidad_codigo": "37T",
+      "constante": "0.50",
+      "origen_id": 779
+    },
+    {
+      "prenda_codigo": "17",
+      "unidad_codigo": "37T",
+      "constante": "1.50",
+      "origen_id": 781
+    },
+    {
+      "prenda_codigo": "4",
+      "unidad_codigo": "37T",
+      "constante": "1.25",
+      "origen_id": 782
+    },
+    {
+      "prenda_codigo": "16",
+      "unidad_codigo": "37T",
+      "constante": "4.00",
+      "origen_id": 783
+    },
+    {
+      "prenda_codigo": "61",
+      "unidad_codigo": "T06",
+      "constante": "1.25",
+      "origen_id": 784
+    },
+    {
+      "prenda_codigo": "61",
+      "unidad_codigo": "T06B",
+      "constante": "1.25",
+      "origen_id": 785
+    },
+    {
+      "prenda_codigo": "62",
+      "unidad_codigo": "T15",
+      "constante": "0.25",
+      "origen_id": 786
+    },
+    {
+      "prenda_codigo": "62",
+      "unidad_codigo": "T24",
+      "constante": "0.25",
+      "origen_id": 787
+    }
+  ]
+}

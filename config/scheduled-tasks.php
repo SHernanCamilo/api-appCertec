@@ -17,7 +17,7 @@ return [
             'job_class' => \App\Jobs\SyncActivosJob::class,
             'queue' => 'scheduled-tasks-heavy',
             'max_attempts' => 3,
-            'timeout' => 3600, // 1 hora
+            'timeout' => 10800, // 3 horas, para recorrer más de 6000 equipos
             'parameters' => [
                 'force_full_sync' => 'boolean',
             ],

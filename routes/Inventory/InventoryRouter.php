@@ -102,6 +102,39 @@ Route::prefix('tipos-inventario')->group(function () {
 });
 
 // =========================================================================
+// ROPA HOSPITALARIA — Parámetros (prendas, cupos y constantes)
+// =========================================================================
+Route::prefix('ropa-hospitalaria')->group(function () {
+    $controller = App\Http\Controllers\Inventory\Ropa\RopaParametroController::class;
+    $lectura = 'check.permission:inv-ropa-param-ver,inv-ropa-param-visible,inv-ropa-toma-ver,inv-ropa-toma-visible,inv-ropa-rep-ver,inv-ropa-rep-visible';
+
+    Route::get('empresas', [$controller, 'empresas'])->middleware($lectura);
+    Route::get('prendas', [$controller, 'prendas'])->middleware($lectura);
+    Route::post('prendas', [$controller, 'crearPrenda'])->middleware('check.permission:inv-ropa-param-crear');
+    Route::put('prendas/{id}', [$controller, 'actualizarPrenda'])->middleware('check.permission:inv-ropa-param-editar')->whereNumber('id');
+    Route::delete('prendas/{id}', [$controller, 'eliminarPrenda'])->middleware('check.permission:inv-ropa-param-eliminar')->whereNumber('id');
+
+    Route::get('unidades', [$controller, 'unidades'])->middleware($lectura);
+    Route::put('unidades/{id}/cupo', [$controller, 'guardarCupo'])->middleware('check.permission:inv-ropa-param-editar')->whereNumber('id');
+
+    Route::get('constantes', [$controller, 'constantes'])->middleware('check.permission:inv-ropa-param-ver,inv-ropa-param-visible');
+    Route::post('constantes', [$controller, 'crearConstante'])->middleware('check.permission:inv-ropa-param-crear');
+    Route::put('constantes/{id}', [$controller, 'actualizarConstante'])->middleware('check.permission:inv-ropa-param-editar')->whereNumber('id');
+    Route::delete('constantes/{id}', [$controller, 'eliminarConstante'])->middleware('check.permission:inv-ropa-param-eliminar')->whereNumber('id');
+
+    $toma = App\Http\Controllers\Inventory\Ropa\RopaInventarioController::class;
+    Route::get('reporte-propio', [$toma, 'reportePropio'])->middleware('check.permission:inv-ropa-rep-ver,inv-ropa-rep-visible');
+    Route::get('inventarios', [$toma, 'index'])->middleware('check.permission:inv-ropa-toma-ver,inv-ropa-toma-visible,inv-ropa-rep-ver,inv-ropa-rep-visible');
+    Route::post('inventarios', [$toma, 'abrir'])->middleware('check.permission:inv-ropa-toma-crear');
+    Route::get('inventarios/apoyo', [$toma, 'apoyo'])->middleware('check.permission:inv-ropa-toma-ver,inv-ropa-toma-visible');
+    Route::get('inventarios/{id}', [$toma, 'ver'])->middleware('check.permission:inv-ropa-toma-ver,inv-ropa-toma-visible')->whereNumber('id');
+    Route::post('inventarios/{id}/lineas', [$toma, 'agregarLinea'])->middleware('check.permission:inv-ropa-toma-editar')->whereNumber('id');
+    Route::delete('inventarios/{id}/lineas', [$toma, 'vaciar'])->middleware('check.permission:inv-ropa-toma-editar')->whereNumber('id');
+    Route::delete('inventarios/{id}/lineas/{linea}', [$toma, 'quitarLinea'])->middleware('check.permission:inv-ropa-toma-editar')->whereNumber(['id', 'linea']);
+    Route::post('inventarios/{id}/cerrar', [$toma, 'cerrar'])->middleware('check.permission:inv-ropa-toma-editar')->whereNumber('id');
+});
+
+// =========================================================================
 // INVIMA (datos.gov.co)
 // =========================================================================
 Route::prefix('invima')->group(function () {

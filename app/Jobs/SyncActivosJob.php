@@ -9,9 +9,9 @@ use Illuminate\Support\Facades\Log;
 class SyncActivosJob extends BaseScheduledJob
 {
     /**
-     * Timeout en segundos (1 hora)
+     * Timeout en segundos (3 horas)
      */
-    public $timeout = 3600;
+    public $timeout = 10800;
 
     public function __construct($scheduledTaskId, array $parameters = [])
     {
@@ -33,8 +33,14 @@ class SyncActivosJob extends BaseScheduledJob
 
         // El comando no filtra por empresa: cada activo toma empresa, sucursal y sede de su agente.
         // Sincronización completa recorre todo GLPI y actualiza los que ya existen.
+        $limite = (int) ($this->parameters['limit'] ?? 6000);
+        if ($limite < 1) {
+            $limite = 6000;
+        }
+
         $options = [
             '--no-interaction' => true,
+            '--limit' => $limite,
         ];
         if ($forceFullSync) {
             $options['--full-sync'] = true;
