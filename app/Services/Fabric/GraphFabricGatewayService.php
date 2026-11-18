@@ -1746,10 +1746,7 @@ class GraphFabricGatewayService
 
         $userContext = $this->userContextPayload($user, $view);
         $payload = array_merge(
-            [
-                'token'        => $this->tokenAdmin,
-                'user_context' => $userContext,
-            ],
+            ['token' => $this->tokenAdmin],
             $userContext,
             [
                 'schema_name' => $schema,
@@ -2433,10 +2430,7 @@ class GraphFabricGatewayService
 
         $userContext = $this->userContextPayload($user, $view);
         $payload = array_merge(
-            [
-                'token'        => $this->tokenAdmin,
-                'user_context' => $userContext,
-            ],
+            ['token' => $this->tokenAdmin],
             $userContext,
             [
                 'schema_name' => $schema,
@@ -2550,10 +2544,7 @@ class GraphFabricGatewayService
 
         $userContext = $this->userContextPayload($user, $view);
         $payload = array_merge(
-            [
-                'token'        => $this->tokenAdmin,
-                'user_context' => $userContext,
-            ],
+            ['token' => $this->tokenAdmin],
             $userContext,
             [
                 'schema_name' => $schema,
